@@ -1,36 +1,19 @@
 package snowflake
 
 import (
-	"bytes"
-	"encoding/gob"
+	"crypto/rsa"
 	"fmt"
+	"os"
 	"time"
 
-	"github.com/conductorone/baton-sdk/pkg/uhttp"
-	"golang.org/x/oauth2/jwt"
+	"github.com/golang-jwt/jwt"
 )
 
 type JWTConfig struct {
 	AccountIdentifier    string
 	UserIdentifier       string
 	PublicKeyFingerPrint string
-	PrivateKeyValue      []byte
-}
-
-func (c *JWTConfig) ParseFromGOB(input []byte) error {
-	buf := bytes.NewBuffer(input)
-	dec := gob.NewDecoder(buf)
-	err := dec.Decode(c)
-
-	return err
-}
-
-func (c *JWTConfig) SerializeToGOB() ([]byte, error) {
-	buf := new(bytes.Buffer)
-	enc := gob.NewEncoder(buf)
-	err := enc.Encode(c)
-
-	return buf.Bytes(), err
+	PrivateKeyValue      *rsa.PrivateKey
 }
 
 func (c *JWTConfig) GetIssuer() string {
@@ -41,19 +24,36 @@ func (c *JWTConfig) GetSubject() string {
 	return fmt.Sprintf("%s.%s", c.AccountIdentifier, c.UserIdentifier)
 }
 
-func CreateJWTConfigFn() uhttp.CreateJWTConfig {
-	return func(creadentials []byte, scopes ...string) (*jwt.Config, error) {
-		cfg := &JWTConfig{}
-		err := cfg.ParseFromGOB(creadentials)
-		if err != nil {
-			return nil, err
-		}
-
-		return &jwt.Config{
-			Email:      cfg.GetIssuer(),
-			PrivateKey: cfg.PrivateKeyValue,
-			Subject:    cfg.GetSubject(),
-			Expires:    time.Hour,
-		}, nil
+func (c *JWTConfig) GenerateBearerToken() (string, error) {
+	issuedAt := time.Now()
+	expiresAt := issuedAt.Add(time.Minute * 60)
+	claims := jwt.MapClaims{
+		"iss": c.GetIssuer(),
+		"sub": c.GetSubject(),
+		"iat": issuedAt.Unix(),
+		"exp": expiresAt.Unix(),
 	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+
+	tokenString, err := token.SignedString(c.PrivateKeyValue)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign token: %v", err)
+	}
+
+	return tokenString, nil
+}
+
+func ReadPrivateKey(path string) (*rsa.PrivateKey, error) {
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return privateKey, nil
 }

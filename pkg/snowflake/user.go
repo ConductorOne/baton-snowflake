@@ -2,8 +2,8 @@ package snowflake
 
 import (
 	"context"
+	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
@@ -49,21 +49,10 @@ func (r *ListUsersRawResponse) GetUsers() []User {
 func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *http.Response, error) {
 	queries := []string{
 		"SHOW USERS;",
-		"SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID())) LIMIT ? OFFSET ?;",
+		fmt.Sprintf("SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID())) LIMIT %d OFFSET %d;", limit, offset),
 	}
 
-	parameters := []QueryParameter{
-		{
-			Type:  "FIXED",
-			Value: strconv.Itoa(limit),
-		},
-		{
-			Type:  "FIXED",
-			Value: strconv.Itoa(offset),
-		},
-	}
-
-	req, err := c.PostStatementRequest(ctx, queries, parameters)
+	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -74,7 +63,7 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 		return nil, resp, err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandlers[1]) // TODO: validate that the statementHandlers[1] is the correct one
+	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1]) // TODO: validate that the statementHandlers[1] is the correct one
 	if err != nil {
 		return nil, resp, err
 	}

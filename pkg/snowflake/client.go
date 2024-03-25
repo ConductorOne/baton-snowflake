@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -29,9 +28,9 @@ type (
 	}
 	StatementsApiResponseBase struct {
 		ResultSetMetadata ResultSetMetadata `json:"resultSetMetadata"`
-		Code              int               `json:"code"`
+		Code              string            `json:"code"`
 		StatementHandle   string            `json:"statementHandle"`
-		StatementHandlers []string          `json:"statementHandlers"`
+		StatementHandles  []string          `json:"statementHandles"`
 		Message           string            `json:"message"`
 	}
 	StatementsRequestParameters struct {
@@ -40,7 +39,6 @@ type (
 	StatementsApiRequestBody struct {
 		Statement  string                      `json:"statement"`
 		Parameters StatementsRequestParameters `json:"parameters"`
-		Bindings   map[string]QueryParameter   `json:"bindings"`
 	}
 	QueryParameter struct {
 		Type  string `json:"type"`
@@ -71,20 +69,12 @@ func New(accountUrl string, jwtConfig JWTConfig, httpClient *http.Client) (*Clie
 	}, nil
 }
 
-func (c *Client) PostStatementRequest(ctx context.Context, queries []string, parameters []QueryParameter) (*http.Request, error) {
+func (c *Client) PostStatementRequest(ctx context.Context, queries []string) (*http.Request, error) {
 	body := &StatementsApiRequestBody{
 		Statement: strings.Join(queries, ""),
 		Parameters: StatementsRequestParameters{
 			StatementsCount: len(queries),
 		},
-	}
-
-	if parameters != nil && len(parameters) > 0 {
-		body.Bindings = make(map[string]QueryParameter)
-
-		for i, parameter := range parameters {
-			body.Bindings[strconv.Itoa(i+1)] = parameter
-		}
 	}
 
 	return c.NewRequest(
@@ -98,7 +88,7 @@ func (c *Client) PostStatementRequest(ctx context.Context, queries []string, par
 }
 
 func (c *Client) GetStatementResponse(ctx context.Context, statementHandle string) (*http.Request, error) {
-	stringUrl, err := url.JoinPath(c.StatementsApiUrl.RawPath, statementHandle)
+	stringUrl, err := url.JoinPath(c.StatementsApiUrl.String(), statementHandle)
 	if err != nil {
 		return nil, err
 	}

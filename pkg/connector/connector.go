@@ -18,7 +18,7 @@ type Connector struct {
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	return []connectorbuilder.ResourceSyncer{
-		newUserBuilder(),
+		newUserBuilder(d.Client),
 	}
 }
 
@@ -39,25 +39,37 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 // Validate is called to ensure that the connector is properly configured. It should exercise any API credentials
 // to be sure that they are valid.
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
-	
+	_, _, err := d.Client.ListUsers(ctx, 0, 1)
+	if err != nil {
+		return nil, err
+	}
 
 	return nil, nil
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context) (*Connector, error) {
-	var jwtConfig = snowflake.JWTConfig{}
-	serializedJwtConfig, err := jwtConfig.SerializeToGOB()
+func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, publicKeyFingerPrint, privateKeyPath string) (*Connector, error) {
+	privateKeyValue, err := snowflake.ReadPrivateKey(privateKeyPath)
 	if err != nil {
 		return nil, err
 	}
 
-	httpClient, err := uhttp.NewOAuth2JWT(serializedJwtConfig, []string{}, snowflake.CreateJWTConfigFn()).GetClient(ctx)
+	var jwtConfig = snowflake.JWTConfig{
+		AccountIdentifier:    accountIdentifier,
+		UserIdentifier:       userIdentifier,
+		PublicKeyFingerPrint: publicKeyFingerPrint,
+		PrivateKeyValue:      privateKeyValue,
+	}
+	token, err := jwtConfig.GenerateBearerToken()
+	if err != nil {
+		return nil, err
+	}
+	httpClient, err := uhttp.NewBearerAuth(token).GetClient(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	client, err := snowflake.New("https://account.snowflake.com", jwtConfig, httpClient)
+	client, err := snowflake.New(accountUrl, jwtConfig, httpClient)
 	if err != nil {
 		return nil, err
 	}
