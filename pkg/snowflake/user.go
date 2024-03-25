@@ -2,7 +2,6 @@ package snowflake
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -49,7 +48,7 @@ func (r *ListUsersRawResponse) GetUsers() []User {
 func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *http.Response, error) {
 	queries := []string{
 		"SHOW USERS;",
-		fmt.Sprintf("SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID())) LIMIT %d OFFSET %d;", limit, offset),
+		c.paginateLastQuery(offset, limit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

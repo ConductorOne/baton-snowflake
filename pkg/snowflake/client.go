@@ -2,6 +2,7 @@ package snowflake
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -107,6 +108,11 @@ func (c *Client) GetStatementResponse(ctx context.Context, statementHandle strin
 	)
 }
 
+func (c *Client) paginateLastQuery(offset, limit int) string {
+	return fmt.Sprintf("SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID())) LIMIT %d OFFSET %d;", limit, offset)
+}
+
+// TODO: move to SDK
 func WithHeader(key, value string) uhttp.RequestOption {
 	return func() (io.ReadWriter, map[string]string, error) {
 		return nil, map[string]string{
