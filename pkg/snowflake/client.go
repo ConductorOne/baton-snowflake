@@ -71,11 +71,14 @@ func New(accountUrl string, jwtConfig JWTConfig, httpClient *http.Client) (*Clie
 }
 
 func (c *Client) PostStatementRequest(ctx context.Context, queries []string) (*http.Request, error) {
-	body := &StatementsApiRequestBody{
-		Statement: strings.Join(queries, ""),
-		Parameters: StatementsRequestParameters{
+	body := &StatementsApiRequestBody{}
+	if len(queries) == 1 {
+		body.Statement = queries[0]
+	} else {
+		body.Statement = strings.Join(queries, "")
+		body.Parameters = StatementsRequestParameters{
 			StatementsCount: len(queries),
-		},
+		}
 	}
 
 	return c.NewRequest(

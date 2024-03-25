@@ -78,7 +78,7 @@ func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]Acc
 	return response.GetAccountRoles(), resp, nil
 }
 
-func (c *Client) ListRoleGrantees(ctx context.Context, roleName string, offset, limit int) ([]AccountRoleGrantee, *http.Response, error) {
+func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, offset, limit int) ([]AccountRoleGrantee, *http.Response, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW GRANTS OF ROLE %s;", roleName),
 		c.paginateLastQuery(offset, limit),

@@ -2,6 +2,7 @@ package snowflake
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -25,6 +26,10 @@ type (
 		StatementsApiResponseBase
 		Data [][]string `json:"data"`
 	}
+	GetUserRawResponse struct {
+		StatementsApiResponseBase
+		Data [][]string `json:"data"`
+	}
 )
 
 func (r *ListUsersRawResponse) GetUsers() []User {
@@ -43,6 +48,20 @@ func (r *ListUsersRawResponse) GetUsers() []User {
 		})
 	}
 	return users
+}
+
+func (r *GetUserRawResponse) GetUser() User {
+	return User{
+		Username:        r.Data[0][1],
+		FirstName:       r.Data[4][1],
+		LastName:        r.Data[6][1],
+		Email:           r.Data[7][1],
+		Disabled:        r.Data[10][1] == "true",
+		Locked:          r.Data[11][1] == "true",
+		DefaultRole:     r.Data[17][1],
+		HasRSAPublicKey: r.Data[23][1] != "",
+		HasPassword:     r.Data[8][1] != "true",
+	}
 }
 
 func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *http.Response, error) {
@@ -72,4 +91,25 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 	}
 
 	return response.GetUsers(), resp, nil
+}
+
+func (c *Client) GetUser(ctx context.Context, username string) (*User, *http.Response, error) {
+	queries := []string{
+		fmt.Sprintf("DESCRIBE USER %s;", username),
+	}
+
+	req, err := c.PostStatementRequest(ctx, queries)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var response GetUserRawResponse
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	if err != nil {
+		return nil, resp, err
+	}
+
+	user := response.GetUser()
+
+	return &user, resp, nil
 }
