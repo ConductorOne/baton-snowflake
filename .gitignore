@@ -15,3 +15,11 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 dist/
+
+.env
+
+*.pub
+
+*.p8
+
+*.pem
