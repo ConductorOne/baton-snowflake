@@ -20,6 +20,7 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 	return []connectorbuilder.ResourceSyncer{
 		newUserBuilder(d.Client),
 		newAccountRoleBuilder(d.Client),
+		newDatabaseBuilder(d.Client),
 	}
 }
 

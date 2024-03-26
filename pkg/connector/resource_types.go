@@ -17,6 +17,11 @@ var (
 		DisplayName: "Account Role",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
 	}
+	databaseResourceType = &v2.ResourceType{
+		Id:          "database",
+		DisplayName: "Database",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+	}
 )
 
 func getSkipEntitlementsAnnotation() annotations.Annotations {
