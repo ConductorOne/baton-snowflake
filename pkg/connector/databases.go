@@ -2,10 +2,13 @@ package connector
 
 import (
 	"context"
+	"fmt"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
@@ -70,11 +73,55 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 }
 
 func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+	var rv []*v2.Entitlement
+
+	rv = append(rv, ent.NewAssignmentEntitlement(
+		resource,
+		ownerEntitlement,
+		ent.WithGrantableTo(userResourceType),
+		ent.WithDescription(fmt.Sprintf("Is owned by %s", resource.DisplayName)),
+		ent.WithDisplayName(fmt.Sprintf("Is owner of %s", resource.DisplayName)),
+	))
+
+	return rv, "", nil, nil
 }
 
 func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
+	if err != nil {
+		return nil, "", nil, wrapError(err, "failed to get database")
+	}
+
+	if database.Owner == "" {
+		return nil, "", nil, nil
+	}
+
+	owner, _, err := o.client.GetAccountRole(ctx, database.Owner)
+	if err != nil {
+		return nil, "", nil, wrapError(err, "failed to get owner account role")
+	}
+
+	roleResource, err := accountRoleResource(owner)
+	if err != nil {
+		return nil, "", nil, wrapError(err, "failed to create owner account role resource")
+	}
+
+	var grants []*v2.Grant = []*v2.Grant{
+		grant.NewGrant(
+			resource,
+			ownerEntitlement,
+			roleResource.Id,
+			grant.WithAnnotation(
+				&v2.GrantExpandable{
+					EntitlementIds:  []string{fmt.Sprintf("account_role:%s:%s", owner.Name, assignedEntitlement)},
+					Shallow:         true,
+					ResourceTypeIds: []string{accountRoleResourceType.Id, userResourceType.Id},
+				},
+			),
+		),
+	}
+
+	return grants, "", nil, nil
 }
 
 func newDatabaseBuilder(client *snowflake.Client) *databaseBuilder {

@@ -106,3 +106,29 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, o
 
 	return response.GetAccountRoleGrantees(), resp, nil
 }
+
+func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, *http.Response, error) {
+	queries := []string{
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", roleName),
+	}
+
+	req, err := c.PostStatementRequest(ctx, queries)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var response ListAccountRolesRawResponse
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	accountRoles := response.GetAccountRoles()
+	if len(accountRoles) == 0 {
+		return nil, resp, nil
+	} else if len(accountRoles) > 1 {
+		return nil, resp, fmt.Errorf("expected 1 account role with name %s, got %d", roleName, len(accountRoles))
+	}
+
+	return &accountRoles[0], resp, nil
+}
