@@ -8,6 +8,11 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
+var databaseStructFieldToColumnMap = map[string]string{
+	"Name":  "name",
+	"Owner": "owner",
+}
+
 type (
 	Database struct {
 		Name  string
@@ -15,19 +20,24 @@ type (
 	}
 	ListDatabasesRawResponse struct {
 		StatementsApiResponseBase
-		Data [][]string `json:"data"`
 	}
 )
 
-func (r *ListDatabasesRawResponse) GetDatabases() []Database {
+func (d *Database) GetColumnName(fieldName string) string {
+	return databaseStructFieldToColumnMap[fieldName]
+}
+
+func (r *ListDatabasesRawResponse) GetDatabases() ([]Database, error) {
 	var databases []Database
-	for _, database := range r.Data {
-		databases = append(databases, Database{
-			Name:  database[1],
-			Owner: database[5],
-		})
+	for _, row := range r.Data {
+		db := &Database{}
+		if err := r.ResultSetMetadata.ParseRow(db, row); err != nil {
+			return nil, err
+		}
+
+		databases = append(databases, *db)
 	}
-	return databases
+	return databases, nil
 }
 
 func (c *Client) ListDatabases(ctx context.Context, offset, limit int) ([]Database, *http.Response, error) {
@@ -56,7 +66,12 @@ func (c *Client) ListDatabases(ctx context.Context, offset, limit int) ([]Databa
 		return nil, resp, err
 	}
 
-	return response.GetDatabases(), resp, nil
+	dbs, err := response.GetDatabases()
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return dbs, resp, nil
 }
 
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http.Response, error) {
@@ -75,7 +90,10 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http
 		return nil, nil, err
 	}
 
-	databases := response.GetDatabases()
+	databases, err := response.GetDatabases()
+	if err != nil {
+		return nil, resp, err
+	}
 	if len(databases) == 0 {
 		return nil, resp, nil
 	} else if len(databases) > 1 {

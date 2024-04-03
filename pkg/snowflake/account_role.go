@@ -8,13 +8,16 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
+var accountRoleStructFieldToColumnMap = map[string]string{
+	"Name": "name",
+}
+
 type (
 	AccountRole struct {
 		Name string
 	}
 	ListAccountRolesRawResponse struct {
 		StatementsApiResponseBase
-		Data [][]string `json:"data"`
 	}
 	AccountRoleGrantee struct {
 		RoleName    string
@@ -27,14 +30,22 @@ type (
 	}
 )
 
-func (r *ListAccountRolesRawResponse) GetAccountRoles() []AccountRole {
+func (ar *AccountRole) GetColumnName(fieldName string) string {
+	return accountRoleStructFieldToColumnMap[fieldName]
+}
+
+func (r *ListAccountRolesRawResponse) GetAccountRoles() ([]AccountRole, error) {
 	var accountRoles []AccountRole
-	for _, accountRole := range r.Data {
-		accountRoles = append(accountRoles, AccountRole{
-			Name: accountRole[1],
-		})
+	for _, row := range r.Data {
+		accountRole := &AccountRole{}
+		if err := r.ResultSetMetadata.ParseRow(accountRole, row); err != nil {
+			return nil, err
+		}
+
+		accountRoles = append(accountRoles, *accountRole)
 	}
-	return accountRoles
+
+	return accountRoles, nil
 }
 
 func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() []AccountRoleGrantee {
@@ -75,7 +86,12 @@ func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]Acc
 		return nil, resp, err
 	}
 
-	return response.GetAccountRoles(), resp, nil
+	accountRoles, err := response.GetAccountRoles()
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return accountRoles, resp, nil
 }
 
 func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, offset, limit int) ([]AccountRoleGrantee, *http.Response, error) {
@@ -123,7 +139,11 @@ func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountR
 		return nil, nil, err
 	}
 
-	accountRoles := response.GetAccountRoles()
+	accountRoles, err := response.GetAccountRoles()
+	if err != nil {
+		return nil, resp, err
+	}
+
 	if len(accountRoles) == 0 {
 		return nil, resp, nil
 	} else if len(accountRoles) > 1 {
