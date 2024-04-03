@@ -8,7 +8,17 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
-const ()
+var userStructPropertyToColumnMap = map[string]string{
+	"Username":        "name",
+	"FirstName":       "first_name",
+	"LastName":        "last_name",
+	"Email":           "email",
+	"Disabled":        "disabled",
+	"Locked":          "snowflake_lock",
+	"DefaultRole":     "default_role",
+	"HasRSAPublicKey": "has_rsa_public_key",
+	"HasPassword":     "has_password",
+}
 
 type (
 	User struct {
@@ -32,22 +42,21 @@ type (
 	}
 )
 
-func (r *ListUsersRawResponse) GetUsers() []User {
+func (u *User) GetColumnName(fieldName string) string {
+	return userStructPropertyToColumnMap[fieldName]
+}
+
+func (r *ListUsersRawResponse) GetUsers() ([]User, error) {
 	var users []User
-	for _, user := range r.Data {
-		users = append(users, User{
-			Username:        user[0],
-			FirstName:       user[4],
-			LastName:        user[5],
-			Email:           user[6],
-			Disabled:        user[10] == "true",
-			Locked:          user[12] == "true",
-			DefaultRole:     user[15],
-			HasRSAPublicKey: user[25] == "true",
-			HasPassword:     user[24] == "true",
-		})
+	for _, row := range r.Data {
+		user := &User{}
+		if err := r.ResultSetMetadata.ParseRow(user, row); err != nil {
+			return nil, err
+		}
+
+		users = append(users, *user)
 	}
-	return users
+	return users, nil
 }
 
 func (r *GetUserRawResponse) GetUser() User {
@@ -90,7 +99,12 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 		return nil, resp, err
 	}
 
-	return response.GetUsers(), resp, nil
+	users, err := response.GetUsers()
+	if err != nil {
+		return nil, resp, err
+	}
+
+	return users, resp, nil
 }
 
 func (c *Client) GetUser(ctx context.Context, username string) (*User, *http.Response, error) {
