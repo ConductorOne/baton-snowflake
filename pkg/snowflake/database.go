@@ -57,7 +57,7 @@ func (c *Client) ListDatabases(ctx context.Context, offset, limit int) ([]Databa
 		return nil, nil, err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1]) // TODO: validate that the statementHandlers[1] is the correct one
+	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
 	if err != nil {
 		return nil, resp, err
 	}
