@@ -28,6 +28,9 @@ type (
 		StatementsApiResponseBase
 		Data [][]string `json:"data"`
 	}
+	GrantAccountRoleResponse struct {
+		StatementsApiResponseBase
+	}
 )
 
 func (ar *AccountRole) GetColumnName(fieldName string) string {
@@ -151,4 +154,30 @@ func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountR
 	}
 
 	return &accountRoles[0], resp, nil
+}
+
+func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
+	queries := []string{
+		fmt.Sprintf("GRANT ROLE %s TO USER %s;", roleName, userName),
+	}
+
+	req, err := c.PostStatementRequest(ctx, queries)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.Do(req)
+}
+
+func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
+	queries := []string{
+		fmt.Sprintf("REVOKE ROLE %s FROM USER %s;", roleName, userName),
+	}
+
+	req, err := c.PostStatementRequest(ctx, queries)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.Do(req)
 }

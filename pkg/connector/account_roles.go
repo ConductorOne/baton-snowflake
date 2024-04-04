@@ -11,6 +11,8 @@ import (
 	grant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type accountRoleBuilder struct {
@@ -154,6 +156,65 @@ func (o *accountRoleBuilder) GrantRole(ctx context.Context, resource *v2.Resourc
 	}
 
 	return grant.NewGrant(resource, assignedEntitlement, roleResource.Id), nil
+}
+
+func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	if principal.Id.ResourceType != userResourceType.Id {
+		err := fmt.Errorf("baton-snowflake: account roles can only be granted to users")
+
+		l.Warn(
+			err.Error(),
+			zap.String("principal_type", principal.Id.ResourceType),
+			zap.String("principal_id", principal.Id.Resource),
+		)
+
+		return nil, err
+	}
+
+	_, err := o.client.GrantAccountRole(ctx, entitlement.Resource.Id.Resource, principal.Id.Resource)
+	if err != nil {
+		err = wrapError(err, "failed to grant account role")
+
+		l.Error(
+			err.Error(),
+			zap.String("account_role", entitlement.Resource.Id.Resource),
+			zap.String("user", principal.Id.Resource),
+		)
+	}
+
+	return nil, nil
+}
+
+func (o *accountRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	if grant.Principal.Id.ResourceType != userResourceType.Id {
+		err := fmt.Errorf("baton-snowflake: only users can be revoked from account roles")
+
+		l.Warn(
+			err.Error(),
+			zap.String("principal_type", grant.Principal.Id.ResourceType),
+			zap.String("principal_id", grant.Principal.Id.Resource),
+		)
+
+		return nil, err
+	}
+
+	_, err := o.client.RevokeAccountRole(ctx, grant.Entitlement.Resource.Id.Resource, grant.Principal.Id.Resource)
+	if err != nil {
+		err = wrapError(err, "failed to revoke account role")
+
+		l.Error(
+			err.Error(),
+			zap.String("account_role", grant.Entitlement.Resource.Id.Resource),
+			zap.String("user", grant.Principal.Id.Resource),
+		)
+	}
+
+	return nil, nil
+
 }
 
 func newAccountRoleBuilder(client *snowflake.Client) *accountRoleBuilder {
