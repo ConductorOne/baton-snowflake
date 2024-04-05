@@ -3,7 +3,6 @@ package snowflake
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -169,7 +168,7 @@ func (c *Client) PostStatementRequest(ctx context.Context, queries []string) (*h
 		c.StatementsApiUrl,
 		uhttp.WithJSONBody(body),
 		uhttp.WithAcceptJSONHeader(),
-		WithHeader(AuthTypeHeaderKey, AuthTypeHeaderValue),
+		uhttp.WithHeader(AuthTypeHeaderKey, AuthTypeHeaderValue),
 	)
 }
 
@@ -189,7 +188,7 @@ func (c *Client) GetStatementResponse(ctx context.Context, statementHandle strin
 		http.MethodGet,
 		u,
 		uhttp.WithAcceptJSONHeader(),
-		WithHeader(AuthTypeHeaderKey, AuthTypeHeaderValue),
+		uhttp.WithHeader(AuthTypeHeaderKey, AuthTypeHeaderValue),
 	)
 }
 
@@ -204,13 +203,4 @@ func Contains[T comparable](ts []T, val T) bool {
 		}
 	}
 	return false
-}
-
-// TODO: move to SDK
-func WithHeader(key, value string) uhttp.RequestOption {
-	return func() (io.ReadWriter, map[string]string, error) {
-		return nil, map[string]string{
-			key: value,
-		}, nil
-	}
 }

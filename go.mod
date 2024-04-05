@@ -3,7 +3,7 @@ module github.com/conductorone/baton-snowflake
 go 1.22.1
 
 require (
-	github.com/conductorone/baton-sdk v0.1.29
+	github.com/conductorone/baton-sdk v0.1.33-0.20240404162656-b0dab8d5aa90 // TODO: remove commit dependency
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	go.uber.org/zap v1.27.0
 )
