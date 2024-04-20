@@ -38,7 +38,7 @@ func (c *JWTConfig) GenerateBearerToken() (string, error) {
 
 	tokenString, err := token.SignedString(c.PrivateKeyValue)
 	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %v", err)
+		return "", fmt.Errorf("failed to sign token: %w", err)
 	}
 
 	return tokenString, nil

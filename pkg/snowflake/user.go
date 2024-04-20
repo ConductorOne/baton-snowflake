@@ -22,7 +22,7 @@ var (
 		"HasRSAPublicKey": "has_rsa_public_key",
 		"HasPassword":     "has_password",
 	}
-	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER
+	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
 	ignoredUserStructFieldsForDescribeOperation = []string{
 		"HasRSAPublicKey",
 		"HasPassword",

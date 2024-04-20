@@ -109,16 +109,18 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 	for _, grantee := range accountRoleGrantees {
 		switch grantee.GranteeType {
 		case "USER":
-			g, err := o.GrantUser(ctx, resource, grantee.GranteeName)
+			rsId, err := rs.NewResourceID(userResourceType, grantee.GranteeName)
 			if err != nil {
-				return nil, "", nil, wrapError(err, "failed to grant user")
+				return nil, "", nil, wrapError(err, "unable to create user resource id")
 			}
+			g := grant.NewGrant(resource, assignedEntitlement, rsId)
 			grants = append(grants, g)
 		case "ROLE":
-			g, err := o.GrantRole(ctx, resource, grantee.GranteeName)
+			rsId, err := rs.NewResourceID(accountRoleResourceType, grantee.GranteeName)
 			if err != nil {
-				return nil, "", nil, wrapError(err, "failed to grant role")
+				return nil, "", nil, wrapError(err, "unable to create role resource id")
 			}
+			g := grant.NewGrant(resource, assignedEntitlement, rsId)
 			grants = append(grants, g)
 		}
 	}
@@ -135,29 +137,6 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 	return grants, nextPage, nil, nil
 }
 
-func (o *accountRoleBuilder) GrantUser(ctx context.Context, resource *v2.Resource, granteeName string) (*v2.Grant, error) {
-	user, _, err := o.client.GetUser(ctx, granteeName)
-	if err != nil {
-		return nil, wrapError(err, "failed to get user")
-	}
-
-	userResource, err := userResource(ctx, user)
-	if err != nil {
-		return nil, wrapError(err, "failed to create user resource")
-	}
-
-	return grant.NewGrant(resource, assignedEntitlement, userResource.Id), nil
-}
-
-func (o *accountRoleBuilder) GrantRole(ctx context.Context, resource *v2.Resource, granteeName string) (*v2.Grant, error) {
-	roleResource, err := accountRoleResource(&snowflake.AccountRole{Name: granteeName})
-	if err != nil {
-		return nil, wrapError(err, "failed to create role resource")
-	}
-
-	return grant.NewGrant(resource, assignedEntitlement, roleResource.Id), nil
-}
-
 func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
@@ -165,7 +144,8 @@ func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, 
 		err := fmt.Errorf("baton-snowflake: account roles can only be granted to users")
 
 		l.Warn(
-			err.Error(),
+			"failed to grant account role to principal",
+			zap.Error(err),
 			zap.String("principal_type", principal.Id.ResourceType),
 			zap.String("principal_id", principal.Id.Resource),
 		)
@@ -214,7 +194,6 @@ func (o *accountRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annot
 	}
 
 	return nil, nil
-
 }
 
 func newAccountRoleBuilder(client *snowflake.Client) *accountRoleBuilder {
