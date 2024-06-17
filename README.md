@@ -14,9 +14,9 @@ to access the Snowflake API. The process of generating the key pair and then ass
 [the key-pair authentication documentation](https://docs.snowflake.com/en/user-guide/key-pair-auth). 
 
 The connector receives the keys in the following ways:
-  - pass the path to the **UNENCRYPTED PRIVATE KEY in PEM format** using either the 
+  - By passing the path to the **UNENCRYPTED PRIVATE KEY in PEM format** using either the 
 `BATON_PRIVATE_KEY_PATH` environment variable or the `--private-key-path` CLI flag. 
-  - pass public key fingerprint using either the `BATON_PUBLIC_KEY_FINGERPRINT` environment variable or the 
+  - By passing the public key fingerprint using either the `BATON_PUBLIC_KEY_FINGERPRINT` environment variable or the 
 `--public-key-fingerprint` CLI flag.
 
 # Getting Started
