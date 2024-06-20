@@ -13,11 +13,15 @@ This connector uses
 to access the Snowflake API. The process of generating the key pair and then assigning those keys to a user is described in 
 [the key-pair authentication documentation](https://docs.snowflake.com/en/user-guide/key-pair-auth). 
 
-The connector receives the keys in the following ways:
-  - By passing the path to the **UNENCRYPTED PRIVATE KEY in PEM format** using either the 
-`BATON_PRIVATE_KEY_PATH` environment variable or the `--private-key-path` CLI flag. 
-  - By passing the public key fingerprint using either the `BATON_PUBLIC_KEY_FINGERPRINT` environment variable or the 
-`--public-key-fingerprint` CLI flag.
+The connector must be passed both the path to the **UNENCRYPTED PRIVATE KEY in 
+PEM format** and the public key fingerprint. They can be passed as either CLI 
+flags or as environment variables via the following variable names:
+
+| As Environment Variables       | As CLI flags               |
+|--------------------------------|----------------------------|
+| `BATON_PRIVATE_KEY_PATH`       | `--private-key-path`       |
+| `BATON_PUBLIC_KEY_FINGERPRINT` | `--public-key-fingerprint` |
+
 
 # Getting Started
 
