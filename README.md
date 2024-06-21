@@ -8,13 +8,26 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 
 # Prerequisites
 
-Connector uses [key-pair authentication](https://docs.snowflake.com/en/developer-guide/sql-api/authenticating#using-key-pair-authentication) to access Snowflake API. Generating of key-pair and assigning key-pair to the user is described in [this page](https://docs.snowflake.com/en/user-guide/key-pair-auth). 
+This connector uses 
+[key-pair authentication](https://docs.snowflake.com/en/developer-guide/sql-api/authenticating#using-key-pair-authentication) 
+to access the Snowflake API. The process of generating the key pair and then assigning those keys to a user is described in 
+[the key-pair authentication documentation](https://docs.snowflake.com/en/user-guide/key-pair-auth). 
 
-To the connector you should pass path to the **NOT ENCRYPTED PRIVATE KEY in PEM format** using either `BATON_PRIVATE_KEY_PATH` or `--private-key-path` flag. Along with private key you have to pass public key fingerprint using either `BATON_PUBLIC_KEY_FINGERPRINT` or `--public-key-fingerprint` flag.
+The connector must be passed both the path to the **UNENCRYPTED PRIVATE KEY in 
+PEM format** and the public key fingerprint. They can be passed as either CLI 
+flags or as environment variables via the following variable names:
+
+| As Environment Variables       | As CLI flags               |
+|--------------------------------|----------------------------|
+| `BATON_PRIVATE_KEY_PATH`       | `--private-key-path`       |
+| `BATON_PUBLIC_KEY_FINGERPRINT` | `--public-key-fingerprint` |
+
 
 # Getting Started
 
-Along with key-pair, you must specify Snowflake account URL, account identifier and user identigier using either env variable or CLI flags. How to get those value is described in [this page](https://docs.snowflake.com/en/user-guide/admin-account-identifier).
+Alongside the key pair, you must specify the Snowflake account URL, account identifier, and user identifier using 
+either environment variables or CLI flags. The process of obtaining the these values is described in 
+[the account identifiers documentation](https://docs.snowflake.com/en/user-guide/admin-account-identifier).
 
 ## brew
 
@@ -53,7 +66,9 @@ baton resources
 
 # Contributing, Support and Issues
 
-We started Baton because we were tired of taking screenshots and manually building spreadsheets. We welcome contributions, and ideas, no matter how small -- our goal is to make identity and permissions sprawl less painful for everyone. If you have questions, problems, or ideas: Please open a Github Issue!
+We started Baton because we were tired of taking screenshots and manually building spreadsheets. We welcome 
+contributions, and ideas, no matter how small -- our goal is to make identity and permissions sprawl less painful for 
+everyone. If you have questions, problems, or ideas: Please open a GitHub Issue!
 
 See [CONTRIBUTING.md](https://github.com/ConductorOne/baton/blob/main/CONTRIBUTING.md) for more details.
 
