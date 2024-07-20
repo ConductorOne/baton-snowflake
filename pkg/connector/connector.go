@@ -67,7 +67,7 @@ func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, pub
 		PublicKeyFingerPrint: publicKeyFingerPrint,
 		PrivateKeyValue:      privateKeyValue,
 	}
-	token, err := jwtConfig.GenerateBearerTokenRsaKey(privateKeyPath)
+	token, err := jwtConfig.GenerateBearerToken()
 	if err != nil {
 		return nil, err
 	}

@@ -20,11 +20,12 @@ type JWTConfig struct {
 }
 
 func (c *JWTConfig) GetIssuer() string {
-	return fmt.Sprintf("%s.%s.SHA256:%s", c.AccountIdentifier, c.UserIdentifier, c.PublicKeyFingerPrint)
+	// Set up Snowflake account and username in uppercase
+	return fmt.Sprintf("%s.%s.%s", strings.ToUpper(c.AccountIdentifier), strings.ToUpper(c.UserIdentifier), c.PublicKeyFingerPrint)
 }
 
 func (c *JWTConfig) GetSubject() string {
-	return fmt.Sprintf("%s.%s", c.AccountIdentifier, c.UserIdentifier)
+	return fmt.Sprintf("%s.%s", strings.ToUpper(c.AccountIdentifier), strings.ToUpper(c.UserIdentifier))
 }
 
 func (c *JWTConfig) GenerateBearerToken() (string, error) {
@@ -48,22 +49,14 @@ func (c *JWTConfig) GenerateBearerToken() (string, error) {
 }
 
 func (c *JWTConfig) GenerateBearerTokenRsaKey(keyPath string) (string, error) {
-	// Set up Snowflake account and username in uppercase
-	account := c.AccountIdentifier
-	user := c.UserIdentifier
-	qualifiedUsername := fmt.Sprintf("%s.%s", strings.ToUpper(account), strings.ToUpper(user))
-
-	// Use the fingerprint obtained from the 'DESCRIBE USER' command in Snowflake
-	fingerprintFromDescribeUser := c.PublicKeyFingerPrint
-
 	// Get current time in UTC and set JWT lifetime to 59 minutes
 	now := time.Now().UTC()
 	lifetime := time.Minute * 59
 
 	// Construct JWT payload with issuer, subject, issue time, and expiration time
 	payload := jwt.MapClaims{
-		"iss": fmt.Sprintf("%s.%s", qualifiedUsername, fingerprintFromDescribeUser),
-		"sub": qualifiedUsername,
+		"iss": c.GetIssuer(),
+		"sub": c.GetSubject(),
 		"iat": now.Unix(),
 		"exp": now.Add(lifetime).Unix(),
 	}
