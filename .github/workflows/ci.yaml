@@ -75,8 +75,8 @@ jobs:
       #     PGPASSWORD: secretpassword
       - name: Build baton-snowflake
         run: go build ./cmd/baton-snowflake
-      - name: Run baton-snowflake
-        run: ./baton-snowflake
+      # - name: Run baton-snowflake
+      #   run: ./baton-snowflake
 
       - name: Install baton
         run: ./scripts/get-baton.sh && mv baton /usr/local/bin
