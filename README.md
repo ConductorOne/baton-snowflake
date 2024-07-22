@@ -13,6 +13,38 @@ This connector uses
 to access the Snowflake API. The process of generating the key pair and then assigning those keys to a user is described in 
 [the key-pair authentication documentation](https://docs.snowflake.com/en/user-guide/key-pair-auth). 
 
+To generate an unencrypted version, use the following command:
+```
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
+```
+
+From the command line, generate the public key by referencing the private key. 
+The following command assumes the private key is encrypted and contained in the file named rsa_key.p8.
+```
+openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+```
+
+Execute an ALTER USER command to assign the public key to a Snowflake user.
+user must be ACCOUNTADMIN
+```
+ALTER USER <SNOWFLAKEUSER> SET RSA_PUBLIC_KEY='MIIBIj...';
+```
+
+Execute the following command to retrieve the user’s public key fingerprint:
+-- https://app.snowflake.com/xkfvljl/fub11635/w4MKi4MqQPDO#query
+```
+DESC USER <SNOWFLAKEUSER>;
+SELECT SUBSTR((SELECT "value" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+  WHERE "property" = 'RSA_PUBLIC_KEY_FP'), LEN('SHA256:') + 1);
+```
+
+Run the following command on the command line: writing RSA key
+```
+openssl rsa -pubin -in rsa_key.pub -outform DER | openssl dgst -sha256 -binary | openssl enc -base64
+```
+
+Compare both outputs. If both outputs match, the user correctly configured their public key.
+
 The connector must be passed both the path to the **UNENCRYPTED PRIVATE KEY in 
 PEM format** and the public key fingerprint. They can be passed as either CLI 
 flags or as environment variables via the following variable names:

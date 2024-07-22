@@ -2,8 +2,6 @@ package snowflake
 
 import (
 	"crypto/rsa"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"strings"
@@ -46,47 +44,6 @@ func (c *JWTConfig) GenerateBearerToken() (string, error) {
 	}
 
 	return tokenString, nil
-}
-
-func (c *JWTConfig) GenerateBearerTokenRsaKey(keyPath string) (string, error) {
-	// Get current time in UTC and set JWT lifetime to 59 minutes
-	now := time.Now().UTC()
-	lifetime := time.Minute * 59
-
-	// Construct JWT payload with issuer, subject, issue time, and expiration time
-	payload := jwt.MapClaims{
-		"iss": c.GetIssuer(),
-		"sub": c.GetSubject(),
-		"iat": now.Unix(),
-		"exp": now.Add(lifetime).Unix(),
-	}
-
-	// Specify the encoding algorithm for JWT
-	encodingAlgorithm := jwt.SigningMethodRS256
-
-	// Read private key from file and encode payload into JWT
-	pemData, err := os.ReadFile(keyPath)
-	if err != nil {
-		return "", err
-	}
-
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return "", fmt.Errorf("failed to parse PEM block containing the private key")
-	}
-
-	privateKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return "", err
-	}
-
-	token := jwt.NewWithClaims(encodingAlgorithm, payload)
-	signedToken, err := token.SignedString(privateKey)
-	if err != nil {
-		return "", err
-	}
-
-	return signedToken, nil
 }
 
 func ReadPrivateKey(path string) (*rsa.PrivateKey, error) {
