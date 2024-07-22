@@ -46,7 +46,6 @@ ALTER USER <SNOWFLAKEUSER> SET RSA_PUBLIC_KEY='MIIBIj...';
 ```
 
 Execute the following command to retrieve the user’s public key fingerprint:
--- https://app.snowflake.com/xkfvljl/fub11635/w4MKi4MqQPDO#query
 ```
 DESC USER <SNOWFLAKEUSER>;
 SELECT SUBSTR((SELECT "value" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
