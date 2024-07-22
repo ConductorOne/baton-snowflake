@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt"
@@ -17,11 +18,12 @@ type JWTConfig struct {
 }
 
 func (c *JWTConfig) GetIssuer() string {
-	return fmt.Sprintf("%s.%s.SHA256:%s", c.AccountIdentifier, c.UserIdentifier, c.PublicKeyFingerPrint)
+	// Set up Snowflake account and username in uppercase
+	return fmt.Sprintf("%s.%s.%s", strings.ToUpper(c.AccountIdentifier), strings.ToUpper(c.UserIdentifier), c.PublicKeyFingerPrint)
 }
 
 func (c *JWTConfig) GetSubject() string {
-	return fmt.Sprintf("%s.%s", c.AccountIdentifier, c.UserIdentifier)
+	return fmt.Sprintf("%s.%s", strings.ToUpper(c.AccountIdentifier), strings.ToUpper(c.UserIdentifier))
 }
 
 func (c *JWTConfig) GenerateBearerToken() (string, error) {

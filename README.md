@@ -22,12 +22,42 @@ flags or as environment variables via the following variable names:
 | `BATON_PRIVATE_KEY_PATH`       | `--private-key-path`       |
 | `BATON_PUBLIC_KEY_FINGERPRINT` | `--public-key-fingerprint` |
 
-
 # Getting Started
 
 Alongside the key pair, you must specify the Snowflake account URL, account identifier, and user identifier using 
 either environment variables or CLI flags. The process of obtaining the these values is described in 
 [the account identifiers documentation](https://docs.snowflake.com/en/user-guide/admin-account-identifier).
+
+To generate an unencrypted version, use the following command:
+```
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
+```
+
+From the command line, generate the public key by referencing the private key. 
+The following command assumes the private key is encrypted and contained in the file named rsa_key.p8.
+```
+openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+```
+
+Execute an ALTER USER command to assign the public key to a Snowflake user.
+user must be ACCOUNTADMIN
+```
+ALTER USER <SNOWFLAKEUSER> SET RSA_PUBLIC_KEY='MIIBIj...';
+```
+
+Execute the following command to retrieve the user’s public key fingerprint:
+```
+DESC USER <SNOWFLAKEUSER>;
+SELECT SUBSTR((SELECT "value" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+  WHERE "property" = 'RSA_PUBLIC_KEY_FP'), LEN('SHA256:') + 1);
+```
+
+Run the following command on the command line: writing RSA key
+```
+openssl rsa -pubin -in rsa_key.pub -outform DER | openssl dgst -sha256 -binary | openssl enc -base64
+```
+
+Compare both outputs. If both outputs match, the user correctly configured their public key.
 
 ## brew
 
