@@ -13,6 +13,21 @@ This connector uses
 to access the Snowflake API. The process of generating the key pair and then assigning those keys to a user is described in 
 [the key-pair authentication documentation](https://docs.snowflake.com/en/user-guide/key-pair-auth). 
 
+The connector must be passed both the path to the **UNENCRYPTED PRIVATE KEY in 
+PEM format** and the public key fingerprint. They can be passed as either CLI 
+flags or as environment variables via the following variable names:
+
+| As Environment Variables       | As CLI flags               |
+|--------------------------------|----------------------------|
+| `BATON_PRIVATE_KEY_PATH`       | `--private-key-path`       |
+| `BATON_PUBLIC_KEY_FINGERPRINT` | `--public-key-fingerprint` |
+
+# Getting Started
+
+Alongside the key pair, you must specify the Snowflake account URL, account identifier, and user identifier using 
+either environment variables or CLI flags. The process of obtaining the these values is described in 
+[the account identifiers documentation](https://docs.snowflake.com/en/user-guide/admin-account-identifier).
+
 To generate an unencrypted version, use the following command:
 ```
 openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
@@ -44,22 +59,6 @@ openssl rsa -pubin -in rsa_key.pub -outform DER | openssl dgst -sha256 -binary |
 ```
 
 Compare both outputs. If both outputs match, the user correctly configured their public key.
-
-The connector must be passed both the path to the **UNENCRYPTED PRIVATE KEY in 
-PEM format** and the public key fingerprint. They can be passed as either CLI 
-flags or as environment variables via the following variable names:
-
-| As Environment Variables       | As CLI flags               |
-|--------------------------------|----------------------------|
-| `BATON_PRIVATE_KEY_PATH`       | `--private-key-path`       |
-| `BATON_PUBLIC_KEY_FINGERPRINT` | `--public-key-fingerprint` |
-
-
-# Getting Started
-
-Alongside the key pair, you must specify the Snowflake account URL, account identifier, and user identifier using 
-either environment variables or CLI flags. The process of obtaining the these values is described in 
-[the account identifiers documentation](https://docs.snowflake.com/en/user-guide/admin-account-identifier).
 
 ## brew
 
