@@ -22,6 +22,11 @@ var (
 )
 
 func TestUserBuilderList(t *testing.T) {
+	if accountUrl == "" && accountIdentifier == "" &&
+		userIdentifier == "" && publicKeyFingerPrint == "" &&
+		privateKeyPath == "" {
+		t.Skip()
+	}
 	cli, err := getCientForTesting(ctx)
 	assert.Nil(t, err)
 
