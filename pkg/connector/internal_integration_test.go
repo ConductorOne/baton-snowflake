@@ -2,42 +2,36 @@ package connector
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/stretchr/testify/assert"
 )
 
 var (
-	// accountUrl = os.Getenv("BATON_ACCOUNT_URL")
-	// accountIdentifier = os.Getenv("BATON_ACCOUNT_IDENTIFIER")
-	// userIdentifier = os.Getenv("BATON_USER_IDENTIFIER")
-	// publicKeyFingerPrint = os.Getenv("BATON_PUBLIC_KEY_FINGERPRINT")
-	// privateKeyPath = os.Getenv("BATON_PRIVATE_KEY_PATH")
-	accountUrl           = "https://xkfvljl-fub11635.snowflakecomputing.com/"
-	accountIdentifier    = "xkfvljl-fub11635"
-	userIdentifier       = "MCHAVEZSNOWFLAKE"
-	publicKeyFingerPrint = "SHA256:5ZgN1lmlDpKkQmZJspZhxYs7keFJYIK0w0ipXXI8FIA="
-	privateKeyPath       = "../../rsakey.pem"
+	accountUrl           = os.Getenv("BATON_ACCOUNT_URL")
+	accountIdentifier    = os.Getenv("BATON_ACCOUNT_IDENTIFIER")
+	userIdentifier       = os.Getenv("BATON_USER_IDENTIFIER")
+	publicKeyFingerPrint = os.Getenv("BATON_PUBLIC_KEY_FINGERPRINT")
+	privateKeyPath       = os.Getenv("BATON_PRIVATE_KEY_PATH")
 	ctx                  = context.Background()
 )
 
 func TestUserBuilderList(t *testing.T) {
 	cli, err := getCientForTesting(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Nil(t, err)
 
-	o := &userBuilder{
+	u := &userBuilder{
 		resourceType: userResourceType,
 		client:       cli,
 	}
-	_, _, _, err = o.List(ctx, &v2.ResourceId{}, &pagination.Token{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	rv, _, _, err := u.List(ctx, &v2.ResourceId{}, &pagination.Token{})
+	assert.Nil(t, err)
+	assert.NotNil(t, rv)
 }
 
 func getCientForTesting(ctx context.Context) (*snowflake.Client, error) {
