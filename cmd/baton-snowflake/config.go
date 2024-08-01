@@ -17,6 +17,7 @@ type config struct {
 	UserIdentifier       string `mapstructure:"user-identifier"`
 	PublicKeyFingerPrint string `mapstructure:"public-key-fingerprint"`
 	PrivateKeyPath       string `mapstructure:"private-key-path"`
+	PrivateKey           string `mapstructure:"private-key"`
 }
 
 // validateConfig is run after the configuration is loaded, and should return an error if it isn't valid.
@@ -33,8 +34,11 @@ func validateConfig(ctx context.Context, cfg *config) error {
 	if cfg.PublicKeyFingerPrint == "" {
 		return fmt.Errorf("public-key-fingerprint is required")
 	}
-	if cfg.PrivateKeyPath == "" {
-		return fmt.Errorf("private-key-path is required")
+	if cfg.PrivateKeyPath == "" && cfg.PrivateKey == "" {
+		return fmt.Errorf("private-key or private-key-path is required")
+	}
+	if cfg.PrivateKeyPath != "" && cfg.PrivateKey != "" {
+		return fmt.Errorf("only one of private-key or private-key-path can be provided")
 	}
 
 	return nil
@@ -46,4 +50,5 @@ func cmdFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String("user-identifier", "", "User Identifier")
 	cmd.PersistentFlags().String("public-key-fingerprint", "", "Public Key Fingerprint")
 	cmd.PersistentFlags().String("private-key-path", "", "Private Key Path")
+	cmd.PersistentFlags().String("private-key", "", "Private Key (PEM format)")
 }
