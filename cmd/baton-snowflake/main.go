@@ -29,7 +29,7 @@ var (
 	AccountUrl           = field.StringField(snowflake.AccountUrl, field.WithRequired(true), field.WithDescription("Account URL."))
 	AccountIdentifier    = field.StringField(snowflake.AccountIdentifier, field.WithRequired(true), field.WithDescription("Account Identifier."))
 	UserIdentifier       = field.StringField(snowflake.UserIdentifier, field.WithRequired(true), field.WithDescription("User Identifier."))
-	PublicKeyFingerprint = field.StringField(snowflake.PublicKeyFingerprint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
+	PublicKeyFingerprint = field.StringField(snowflake.PublicKeyFingerPrint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
 	PrivateKeyPath       = field.StringField(snowflake.PrivateKeyPath, field.WithRequired(false), field.WithDescription("Private Key Path."))
 	PrivateKey           = field.StringField(snowflake.PrivateKey, field.WithRequired(false), field.WithDescription("Private Key (PEM format)."))
 	CacheDisabled        = field.StringField(batonCacheDisable, field.WithRequired(false), field.WithDescription("Verbose mode shows information about new memory allocation."))

@@ -65,7 +65,7 @@ func New(ctx context.Context, cfg *viper.Viper) (*Connector, error) {
 		userIdentifier       = cfg.GetString(snowflake.UserIdentifier)
 		privateKeyPath       = cfg.GetString(snowflake.PrivateKeyPath)
 		privateKey           = cfg.GetString(snowflake.PrivateKey)
-		publicKeyFingerprint = cfg.GetString(snowflake.PublicKeyFingerprint)
+		publicKeyFingerPrint = cfg.GetString(snowflake.PublicKeyFingerPrint)
 		err                  error
 	)
 
@@ -94,7 +94,7 @@ func New(ctx context.Context, cfg *viper.Viper) (*Connector, error) {
 	var jwtConfig = snowflake.JWTConfig{
 		AccountIdentifier:    accountIdentifier,
 		UserIdentifier:       userIdentifier,
-		PublicKeyFingerPrint: publicKeyFingerprint,
+		PublicKeyFingerPrint: publicKeyFingerPrint,
 		PrivateKeyValue:      privateKeyValue,
 	}
 	token, err := jwtConfig.GenerateBearerToken()

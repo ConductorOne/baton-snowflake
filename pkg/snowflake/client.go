@@ -22,7 +22,7 @@ const (
 	AccountUrl           = "account-url"
 	AccountIdentifier    = "account-identifier"
 	UserIdentifier       = "user-identifier"
-	PublicKeyFingerprint = "public-key-fingerprint"
+	PublicKeyFingerPrint = "public-key-fingerprint"
 	PrivateKeyPath       = "private-key-path"
 	PrivateKey           = "private-key"
 )
