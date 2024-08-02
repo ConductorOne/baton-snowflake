@@ -12,6 +12,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/golang-jwt/jwt"
+	"github.com/spf13/viper"
 )
 
 type Connector struct {
@@ -36,7 +37,7 @@ func (d *Connector) Asset(ctx context.Context, asset *v2.AssetRef) (string, io.R
 // Metadata returns metadata about the connector.
 func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
-		DisplayName: "My Baton Connector",
+		DisplayName: "Baton Snowflake",
 		Description: "The template implementation of a baton connector",
 	}, nil
 }
@@ -57,7 +58,17 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, publicKeyFingerPrint, privateKeyPath, privateKey string) (*Connector, error) {
+func New(ctx context.Context, cfg *viper.Viper) (*Connector, error) {
+	var (
+		accountUrl           = cfg.GetString(snowflake.AccountUrl)
+		accountIdentifier    = cfg.GetString(snowflake.AccountIdentifier)
+		userIdentifier       = cfg.GetString(snowflake.UserIdentifier)
+		privateKeyPath       = cfg.GetString(snowflake.PrivateKeyPath)
+		privateKey           = cfg.GetString(snowflake.PrivateKey)
+		publicKeyFingerprint = cfg.GetString(snowflake.PublicKeyFingerprint)
+		err                  error
+	)
+
 	if privateKeyPath == "" && privateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}
@@ -83,7 +94,7 @@ func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, pub
 	var jwtConfig = snowflake.JWTConfig{
 		AccountIdentifier:    accountIdentifier,
 		UserIdentifier:       userIdentifier,
-		PublicKeyFingerPrint: publicKeyFingerPrint,
+		PublicKeyFingerPrint: publicKeyFingerprint,
 		PrivateKeyValue:      privateKeyValue,
 	}
 	token, err := jwtConfig.GenerateBearerToken()

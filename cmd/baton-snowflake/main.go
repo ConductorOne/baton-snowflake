@@ -5,30 +5,52 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
+	configSchema "github.com/conductorone/baton-sdk/pkg/config"
 	"github.com/conductorone/baton-snowflake/pkg/connector"
+	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
 
-var version = "dev"
+const (
+	version           = "dev"
+	connectorName     = "baton-snowflake"
+	batonCacheDisable = "cache-disable"
+	batonCacheTTL     = "cache-ttl"
+	batonCacheMaxSize = "cache-max-size"
+)
+
+var (
+	AccountUrl           = field.StringField(snowflake.AccountUrl, field.WithRequired(true), field.WithDescription("Account URL."))
+	AccountIdentifier    = field.StringField(snowflake.AccountIdentifier, field.WithRequired(true), field.WithDescription("Account Identifier."))
+	UserIdentifier       = field.StringField(snowflake.UserIdentifier, field.WithRequired(true), field.WithDescription("User Identifier."))
+	PublicKeyFingerprint = field.StringField(snowflake.PublicKeyFingerprint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
+	PrivateKeyPath       = field.StringField(snowflake.PrivateKeyPath, field.WithRequired(false), field.WithDescription("Private Key Path."))
+	PrivateKey           = field.StringField(snowflake.PrivateKey, field.WithRequired(false), field.WithDescription("Private Key (PEM format)."))
+	CacheDisabled        = field.StringField(batonCacheDisable, field.WithRequired(false), field.WithDescription("Verbose mode shows information about new memory allocation."))
+	CacheTTL             = field.StringField(batonCacheTTL, field.WithRequired(false), field.WithDescription("Time after which entry can be evicted."))
+	CacheMaxSize         = field.StringField(batonCacheMaxSize, field.WithRequired(false), field.WithDescription("It is a limit for BytesQueue size in MB."))
+	configurationFields  = []field.SchemaField{AccountUrl, AccountIdentifier, UserIdentifier, PublicKeyFingerprint, PrivateKeyPath, PrivateKey, CacheDisabled, CacheTTL, CacheMaxSize}
+)
 
 func main() {
 	ctx := context.Background()
-
-	cfg := &config{}
-	cmd, err := cli.NewCmd(ctx, "baton-snowflake", cfg, validateConfig, getConnector)
+	_, cmd, err := configSchema.DefineConfiguration(ctx,
+		connectorName,
+		getConnector,
+		field.NewConfiguration(configurationFields),
+	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 
 	cmd.Version = version
-	cmdFlags(cmd)
-
 	err = cmd.Execute()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -36,10 +58,9 @@ func main() {
 	}
 }
 
-func getConnector(ctx context.Context, cfg *config) (types.ConnectorServer, error) {
+func getConnector(ctx context.Context, cfg *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
-
-	cb, err := connector.New(ctx, cfg.AccountUrl, cfg.AccountIdentifier, cfg.UserIdentifier, cfg.PublicKeyFingerPrint, cfg.PrivateKeyPath, cfg.PrivateKey)
+	cb, err := connector.New(ctx, cfg)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err
