@@ -38,7 +38,7 @@ func (d *Connector) Asset(ctx context.Context, asset *v2.AssetRef) (string, io.R
 func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Baton Snowflake",
-		Description: "The template implementation of a baton connector",
+		Description: "Connector syncing users, databases and account roles from Snowflake.",
 	}, nil
 }
 

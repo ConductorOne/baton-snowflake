@@ -32,10 +32,7 @@ var (
 	PublicKeyFingerprint = field.StringField(snowflake.PublicKeyFingerPrint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
 	PrivateKeyPath       = field.StringField(snowflake.PrivateKeyPath, field.WithRequired(false), field.WithDescription("Private Key Path."))
 	PrivateKey           = field.StringField(snowflake.PrivateKey, field.WithRequired(false), field.WithDescription("Private Key (PEM format)."))
-	CacheDisabled        = field.StringField(batonCacheDisable, field.WithRequired(false), field.WithDescription("Verbose mode shows information about new memory allocation."))
-	CacheTTL             = field.StringField(batonCacheTTL, field.WithRequired(false), field.WithDescription("Time after which entry can be evicted."))
-	CacheMaxSize         = field.StringField(batonCacheMaxSize, field.WithRequired(false), field.WithDescription("It is a limit for BytesQueue size in MB."))
-	configurationFields  = []field.SchemaField{AccountUrl, AccountIdentifier, UserIdentifier, PublicKeyFingerprint, PrivateKeyPath, PrivateKey, CacheDisabled, CacheTTL, CacheMaxSize}
+	configurationFields  = []field.SchemaField{AccountUrl, AccountIdentifier, UserIdentifier, PublicKeyFingerprint, PrivateKeyPath, PrivateKey}
 )
 
 func main() {
