@@ -18,11 +18,8 @@ import (
 )
 
 const (
-	version           = "dev"
-	connectorName     = "baton-snowflake"
-	batonCacheDisable = "cache-disable"
-	batonCacheTTL     = "cache-ttl"
-	batonCacheMaxSize = "cache-max-size"
+	version       = "dev"
+	connectorName = "baton-snowflake"
 )
 
 var (
