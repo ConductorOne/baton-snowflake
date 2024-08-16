@@ -12,7 +12,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/golang-jwt/jwt"
-	"github.com/spf13/viper"
 )
 
 type Connector struct {
@@ -58,17 +57,7 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context, cfg *viper.Viper) (*Connector, error) {
-	var (
-		accountUrl           = cfg.GetString(snowflake.AccountUrl)
-		accountIdentifier    = cfg.GetString(snowflake.AccountIdentifier)
-		userIdentifier       = cfg.GetString(snowflake.UserIdentifier)
-		privateKeyPath       = cfg.GetString(snowflake.PrivateKeyPath)
-		privateKey           = cfg.GetString(snowflake.PrivateKey)
-		publicKeyFingerPrint = cfg.GetString(snowflake.PublicKeyFingerPrint)
-		err                  error
-	)
-
+func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, publicKeyFingerPrint, privateKeyPath, privateKey string) (*Connector, error) {
 	if privateKeyPath == "" && privateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}

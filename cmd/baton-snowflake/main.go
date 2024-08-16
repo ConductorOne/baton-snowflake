@@ -14,22 +14,27 @@ import (
 
 	configSchema "github.com/conductorone/baton-sdk/pkg/config"
 	"github.com/conductorone/baton-snowflake/pkg/connector"
-	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
 
 const (
-	version       = "dev"
-	connectorName = "baton-snowflake"
+	version              = "dev"
+	connectorName        = "baton-snowflake"
+	accountUrl           = "account-url"
+	accountIdentifier    = "account-identifier"
+	userIdentifier       = "user-identifier"
+	publicKeyFingerPrint = "public-key-fingerprint"
+	privateKeyPath       = "private-key-path"
+	privateKey           = "private-key"
 )
 
 var (
-	AccountUrl           = field.StringField(snowflake.AccountUrl, field.WithRequired(true), field.WithDescription("Account URL."))
-	AccountIdentifier    = field.StringField(snowflake.AccountIdentifier, field.WithRequired(true), field.WithDescription("Account Identifier."))
-	UserIdentifier       = field.StringField(snowflake.UserIdentifier, field.WithRequired(true), field.WithDescription("User Identifier."))
-	PublicKeyFingerprint = field.StringField(snowflake.PublicKeyFingerPrint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
-	PrivateKeyPath       = field.StringField(snowflake.PrivateKeyPath, field.WithRequired(false), field.WithDescription("Private Key Path."))
-	PrivateKey           = field.StringField(snowflake.PrivateKey, field.WithRequired(false), field.WithDescription("Private Key (PEM format)."))
-	configurationFields  = []field.SchemaField{AccountUrl, AccountIdentifier, UserIdentifier, PublicKeyFingerprint, PrivateKeyPath, PrivateKey}
+	AccountUrlField           = field.StringField(accountUrl, field.WithRequired(true), field.WithDescription("Account URL."))
+	AccountIdentifierField    = field.StringField(accountIdentifier, field.WithRequired(true), field.WithDescription("Account Identifier."))
+	UserIdentifierField       = field.StringField(userIdentifier, field.WithRequired(true), field.WithDescription("User Identifier."))
+	PublicKeyFingerprintField = field.StringField(publicKeyFingerPrint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
+	PrivateKeyPathField       = field.StringField(privateKeyPath, field.WithRequired(false), field.WithDescription("Private Key Path."))
+	PrivateKeyField           = field.StringField(privateKey, field.WithRequired(false), field.WithDescription("Private Key (PEM format)."))
+	configurationFields       = []field.SchemaField{AccountUrlField, AccountIdentifierField, UserIdentifierField, PublicKeyFingerprintField, PrivateKeyPathField, PrivateKeyField}
 )
 
 func main() {
@@ -54,7 +59,14 @@ func main() {
 
 func getConnector(ctx context.Context, cfg *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
-	cb, err := connector.New(ctx, cfg)
+	cb, err := connector.New(ctx,
+		cfg.GetString(accountUrl),
+		cfg.GetString(accountIdentifier),
+		cfg.GetString(userIdentifier),
+		cfg.GetString(publicKeyFingerPrint),
+		cfg.GetString(privateKeyPath),
+		cfg.GetString(privateKey),
+	)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err

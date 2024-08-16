@@ -14,17 +14,7 @@ import (
 const (
 	AuthTypeHeaderKey   = "X-Snowflake-Authorization-Token-Type"
 	AuthTypeHeaderValue = "KEYPAIR_JWT"
-
-	RowTypeString = "text"
-)
-
-const (
-	AccountUrl           = "account-url"
-	AccountIdentifier    = "account-identifier"
-	UserIdentifier       = "user-identifier"
-	PublicKeyFingerPrint = "public-key-fingerprint"
-	PrivateKeyPath       = "private-key-path"
-	PrivateKey           = "private-key"
+	RowTypeString       = "text"
 )
 
 type (
