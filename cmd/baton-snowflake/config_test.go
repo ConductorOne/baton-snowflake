@@ -3,10 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/conductorone/baton-sdk/pkg/ustrings"
-)
-import (
 	"github.com/conductorone/baton-sdk/pkg/test"
+	"github.com/conductorone/baton-sdk/pkg/ustrings"
 )
 
 func TestConfigSchema(t *testing.T) {
