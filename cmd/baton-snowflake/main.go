@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
-	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/spf13/viper"
@@ -17,24 +16,8 @@ import (
 )
 
 const (
-	version              = "dev"
-	connectorName        = "baton-snowflake"
-	accountUrl           = "account-url"
-	accountIdentifier    = "account-identifier"
-	userIdentifier       = "user-identifier"
-	publicKeyFingerPrint = "public-key-fingerprint"
-	privateKeyPath       = "private-key-path"
-	privateKey           = "private-key"
-)
-
-var (
-	AccountUrlField           = field.StringField(accountUrl, field.WithRequired(true), field.WithDescription("Account URL."))
-	AccountIdentifierField    = field.StringField(accountIdentifier, field.WithRequired(true), field.WithDescription("Account Identifier."))
-	UserIdentifierField       = field.StringField(userIdentifier, field.WithRequired(true), field.WithDescription("User Identifier."))
-	PublicKeyFingerprintField = field.StringField(publicKeyFingerPrint, field.WithRequired(true), field.WithDescription("Public Key Fingerprint."))
-	PrivateKeyPathField       = field.StringField(privateKeyPath, field.WithRequired(false), field.WithDescription("Private Key Path."))
-	PrivateKeyField           = field.StringField(privateKey, field.WithRequired(false), field.WithDescription("Private Key (PEM format)."))
-	configurationFields       = []field.SchemaField{AccountUrlField, AccountIdentifierField, UserIdentifierField, PublicKeyFingerprintField, PrivateKeyPathField, PrivateKeyField}
+	version       = "dev"
+	connectorName = "baton-snowflake"
 )
 
 func main() {
@@ -42,7 +25,7 @@ func main() {
 	_, cmd, err := configSchema.DefineConfiguration(ctx,
 		connectorName,
 		getConnector,
-		field.NewConfiguration(configurationFields),
+		configurationSchema,
 	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -59,13 +42,14 @@ func main() {
 
 func getConnector(ctx context.Context, cfg *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
-	cb, err := connector.New(ctx,
-		cfg.GetString(accountUrl),
-		cfg.GetString(accountIdentifier),
-		cfg.GetString(userIdentifier),
-		cfg.GetString(publicKeyFingerPrint),
-		cfg.GetString(privateKeyPath),
-		cfg.GetString(privateKey),
+	cb, err := connector.New(
+		ctx,
+		cfg.GetString(AccountUrlField.FieldName),
+		cfg.GetString(AccountIdentifierField.FieldName),
+		cfg.GetString(UserIdentifierField.FieldName),
+		cfg.GetString(PublicKeyFingerprintField.FieldName),
+		cfg.GetString(PrivateKeyPathField.FieldName),
+		cfg.GetString(PrivateKeyField.FieldName),
 	)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
