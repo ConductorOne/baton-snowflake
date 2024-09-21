@@ -27,7 +27,7 @@ func TestUserBuilderList(t *testing.T) {
 		privateKeyPath == "" {
 		t.Skip()
 	}
-	cli, err := getCientForTesting(ctx)
+	cli, err := getClientForTesting(ctx)
 	assert.Nil(t, err)
 
 	u := &userBuilder{
@@ -39,7 +39,7 @@ func TestUserBuilderList(t *testing.T) {
 	assert.NotNil(t, rv)
 }
 
-func getCientForTesting(ctx context.Context) (*snowflake.Client, error) {
+func getClientForTesting(ctx context.Context) (*snowflake.Client, error) {
 	var jwtConfig = snowflake.JWTConfig{
 		AccountIdentifier:    accountIdentifier,
 		UserIdentifier:       userIdentifier,

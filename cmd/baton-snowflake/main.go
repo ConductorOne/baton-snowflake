@@ -7,6 +7,7 @@ import (
 
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/types"
+	"github.com/conductorone/baton-snowflake/pkg/config"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -25,7 +26,7 @@ func main() {
 	_, cmd, err := configSchema.DefineConfiguration(ctx,
 		connectorName,
 		getConnector,
-		configurationSchema,
+		config.ConfigurationSchema,
 	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -44,12 +45,12 @@ func getConnector(ctx context.Context, cfg *viper.Viper) (types.ConnectorServer,
 	l := ctxzap.Extract(ctx)
 	cb, err := connector.New(
 		ctx,
-		cfg.GetString(AccountUrlField.FieldName),
-		cfg.GetString(AccountIdentifierField.FieldName),
-		cfg.GetString(UserIdentifierField.FieldName),
-		cfg.GetString(PublicKeyFingerprintField.FieldName),
-		cfg.GetString(PrivateKeyPathField.FieldName),
-		cfg.GetString(PrivateKeyField.FieldName),
+		cfg.GetString(config.AccountUrlField.FieldName),
+		cfg.GetString(config.AccountIdentifierField.FieldName),
+		cfg.GetString(config.UserIdentifierField.FieldName),
+		cfg.GetString(config.PublicKeyFingerprintField.FieldName),
+		cfg.GetString(config.PrivateKeyPathField.FieldName),
+		cfg.GetString(config.PrivateKeyField.FieldName),
 	)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))

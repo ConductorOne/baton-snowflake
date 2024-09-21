@@ -117,17 +117,22 @@ Available Commands:
   help               Help about any command
 
 Flags:
-      --account-identifier string       Account Identifier
-      --account-url string              Account URL
+      --account-identifier string       required: Account Identifier. ($BATON_ACCOUNT_IDENTIFIER)
+      --account-url string              required: Account URL. ($BATON_ACCOUNT_URL)
       --client-id string                The client ID used to authenticate with ConductorOne ($BATON_CLIENT_ID)
       --client-secret string            The client secret used to authenticate with ConductorOne ($BATON_CLIENT_SECRET)
   -f, --file string                     The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
   -h, --help                            help for baton-snowflake
       --log-format string               The output format for logs: json, console ($BATON_LOG_FORMAT) (default "json")
       --log-level string                The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
-      --private-key-path string         Private Key Path
-  -p, --provisioning                    This must be set in order for provisioning actions to be enabled. ($BATON_PROVISIONING)
-      --public-key-fingerprint string   Public Key Fingerprint
-      --user-identifier string          User Identifier
+      --private-key string              Private Key (PEM format). ($BATON_PRIVATE_KEY)
+      --private-key-path string         Private Key Path. ($BATON_PRIVATE_KEY_PATH)
+  -p, --provisioning                    This must be set in order for provisioning actions to be enabled ($BATON_PROVISIONING)
+      --public-key-fingerprint string   required: Public Key Fingerprint. ($BATON_PUBLIC_KEY_FINGERPRINT)
+      --skip-full-sync                  This must be set to skip a full sync ($BATON_SKIP_FULL_SYNC)
+      --ticketing                       This must be set to enable ticketing support ($BATON_TICKETING)
+      --user-identifier string          required: User Identifier. ($BATON_USER_IDENTIFIER)
   -v, --version                         version for baton-snowflake
+
+Use "baton-snowflake [command] --help" for more information about a command.
 ```
