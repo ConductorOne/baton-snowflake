@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"github.com/conductorone/baton-sdk/pkg/field"
@@ -33,7 +33,7 @@ var (
 		"private-key",
 		field.WithDescription("Private Key (PEM format)."),
 	)
-	configurationSchema = field.NewConfiguration(
+	ConfigurationSchema = field.NewConfiguration(
 		[]field.SchemaField{
 			AccountIdentifierField,
 			AccountUrlField,
