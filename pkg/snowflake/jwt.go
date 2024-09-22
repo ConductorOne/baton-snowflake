@@ -82,17 +82,17 @@ func ParsePrivateKey(key []byte) (any, error) {
 	case "RSA PRIVATE KEY":
 		privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("failed to parse PKCS1 private key: %v", err)
+			return "", fmt.Errorf("failed to parse PKCS1 private key: %w", err)
 		}
 	case "EC PRIVATE KEY":
 		privateKey, err = x509.ParseECPrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("failed to parse EC private key: %v", err)
+			return "", fmt.Errorf("failed to parse EC private key: %w", err)
 		}
 	case "PRIVATE KEY":
 		privateKey, err = x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("failed to parse PKCS8 private key: %v", err)
+			return "", fmt.Errorf("failed to parse PKCS8 private key: %w", err)
 		}
 	default:
 		return "", fmt.Errorf("unsupported key type: %s", block.Type)
@@ -117,7 +117,7 @@ func publicKeyFingerprint(privateKey interface{}) (string, error) {
 	// Marshal the public key to DER-encoded PKIX format
 	pubKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal public key: %v", err)
+		return "", fmt.Errorf("failed to marshal public key: %w", err)
 	}
 
 	// Compute the SHA-256 hash of the public key
