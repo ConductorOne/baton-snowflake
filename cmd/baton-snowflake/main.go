@@ -47,7 +47,6 @@ func getConnector(ctx context.Context, cfg *viper.Viper) (types.ConnectorServer,
 		cfg.GetString(AccountUrlField.FieldName),
 		cfg.GetString(AccountIdentifierField.FieldName),
 		cfg.GetString(UserIdentifierField.FieldName),
-		cfg.GetString(PublicKeyFingerprintField.FieldName),
 		cfg.GetString(PrivateKeyPathField.FieldName),
 		cfg.GetString(PrivateKeyField.FieldName),
 	)

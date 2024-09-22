@@ -41,9 +41,8 @@ func TestUserBuilderList(t *testing.T) {
 
 func getCientForTesting(ctx context.Context) (*snowflake.Client, error) {
 	var jwtConfig = snowflake.JWTConfig{
-		AccountIdentifier:    accountIdentifier,
-		UserIdentifier:       userIdentifier,
-		PublicKeyFingerPrint: publicKeyFingerPrint,
+		AccountIdentifier: accountIdentifier,
+		UserIdentifier:    userIdentifier,
 	}
 	privateKeyValue, err := snowflake.ReadPrivateKey(privateKeyPath)
 	if err != nil {
