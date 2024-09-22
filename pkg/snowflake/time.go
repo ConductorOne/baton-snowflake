@@ -20,7 +20,7 @@ func parseTime(input string) (time.Time, error) {
 	// Step 1: Parse the string into a float64
 	floatValue, err := strconv.ParseFloat(input, 64)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse float value: %v", err)
+		return time.Time{}, fmt.Errorf("failed to parse float value: %w", err)
 	}
 
 	// Step 2: Separate the integer and fractional parts

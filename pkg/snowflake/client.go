@@ -128,7 +128,6 @@ func (m *ResultSetMetadata) ParseRow(s Parsable, row []string) error {
 		columnName := s.GetColumnName(field.Name)
 
 		switch field.Type.Kind() {
-
 		case reflect.String:
 			value, err := m.GetStringValueFromRow(row, columnName)
 			if err != nil {
