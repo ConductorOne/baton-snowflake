@@ -21,19 +21,38 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"email":      user.Email,
-		"login":      user.Email,
-		"first_name": user.FirstName,
-		"last_name":  user.LastName,
+		"email":        user.Email,
+		"login":        user.Login,
+		"display_name": user.DisplayName,
+		"first_name":   user.FirstName,
+		"last_name":    user.LastName,
+		"comment":      user.Comment,
 	}
 
 	userTraits := []rs.UserTraitOption{
 		rs.WithUserProfile(profile),
-		rs.WithUserLogin(user.Email),
-		rs.WithStatus(getUserStatus(user)),
+		rs.WithUserLogin(user.Login),
+		rs.WithMFAStatus(&v2.UserTrait_MFAStatus{MfaEnabled: user.HasMfa}),
+		rs.WithAccountType(getUserAccountType(user)),
+		rs.WithDetailedStatus(getUserStatus(user), getUserDetailedStatus(user)),
 	}
 
-	resource, err := rs.NewUserResource(user.Email, userResourceType, user.Username, userTraits)
+	if user.Email != "" {
+		userTraits = append(userTraits, rs.WithEmail(user.Email, true))
+	}
+
+	if !user.LastSuccessLogin.IsZero() {
+		userTraits = append(userTraits, rs.WithLastLogin(user.LastSuccessLogin))
+	}
+
+	displayName := user.DisplayName
+	if displayName == "" {
+		displayName = user.FirstName + " " + user.LastName
+		if displayName == " " {
+			displayName = user.Login
+		}
+	}
+	resource, err := rs.NewUserResource(displayName, userResourceType, user.Username, userTraits)
 	if err != nil {
 		return nil, err
 	}
@@ -41,12 +60,31 @@ func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, erro
 	return resource, nil
 }
 
+func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
+	// https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
+	//	TYPE = PERSON | SERVICE | LEGACY_SERVICE | NULL
+	if user.Type == "LEGACY_SERVICE" || user.Type == "SERVICE" {
+		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
+	}
+	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
+}
+
 func getUserStatus(user *snowflake.User) v2.UserTrait_Status_Status {
-	if user.Disabled {
+	if user.Disabled || user.Locked {
 		return v2.UserTrait_Status_STATUS_DISABLED
 	}
 
 	return v2.UserTrait_Status_STATUS_ENABLED
+}
+
+func getUserDetailedStatus(user *snowflake.User) string {
+	if user.Disabled {
+		return "disabled"
+	}
+	if user.Locked {
+		return "locked"
+	}
+	return ""
 }
 
 // List returns all the users from the database as resource objects.
