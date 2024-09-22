@@ -6,21 +6,28 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
 var (
 	userStructFieldToColumnMap = map[string]string{
-		"Username":        "name",
-		"FirstName":       "first_name",
-		"LastName":        "last_name",
-		"Email":           "email",
-		"Disabled":        "disabled",
-		"Locked":          "snowflake_lock",
-		"DefaultRole":     "default_role",
-		"HasRSAPublicKey": "has_rsa_public_key",
-		"HasPassword":     "has_password",
+		"Username":         "name",
+		"Login":            "login_name",
+		"DisplayName":      "display_name",
+		"FirstName":        "first_name",
+		"LastName":         "last_name",
+		"Email":            "email",
+		"Disabled":         "disabled",
+		"Locked":           "snowflake_lock",
+		"DefaultRole":      "default_role",
+		"HasRSAPublicKey":  "has_rsa_public_key",
+		"HasPassword":      "has_password",
+		"LastSuccessLogin": "last_success_login",
+		"Type":             "type",
+		"HasMfa":           "has_mfa",
+		"Comment":          "comment",
 	}
 	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
 	ignoredUserStructFieldsForDescribeOperation = []string{
@@ -31,15 +38,21 @@ var (
 
 type (
 	User struct {
-		Username        string
-		FirstName       string
-		LastName        string
-		Email           string
-		Disabled        bool
-		Locked          bool
-		DefaultRole     string
-		HasRSAPublicKey bool
-		HasPassword     bool
+		Username         string
+		Login            string
+		DisplayName      string
+		FirstName        string
+		LastName         string
+		Email            string
+		Disabled         bool
+		Locked           bool
+		DefaultRole      string
+		HasRSAPublicKey  bool
+		HasPassword      bool
+		LastSuccessLogin time.Time
+		Type             string
+		HasMfa           bool
+		Comment          string
 	}
 	ListUsersRawResponse struct {
 		StatementsApiResponseBase
