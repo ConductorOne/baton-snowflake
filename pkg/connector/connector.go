@@ -2,7 +2,6 @@ package connector
 
 import (
 	"context"
-	"crypto/rsa"
 	"fmt"
 	"io"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
-	"github.com/golang-jwt/jwt"
 )
 
 type Connector struct {
@@ -57,14 +55,14 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, publicKeyFingerPrint, privateKeyPath, privateKey string) (*Connector, error) {
+func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, privateKeyPath, privateKey string) (*Connector, error) {
 	if privateKeyPath == "" && privateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}
 	if privateKeyPath != "" && privateKey != "" {
 		return nil, fmt.Errorf("only one of private-key or private-key-path can be provided")
 	}
-	var privateKeyValue *rsa.PrivateKey
+	var privateKeyValue any
 	if privateKeyPath != "" {
 		var err error
 		privateKeyValue, err = snowflake.ReadPrivateKey(privateKeyPath)
@@ -74,17 +72,16 @@ func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, pub
 	}
 	if privateKey != "" {
 		var err error
-		privateKeyValue, err = jwt.ParseRSAPrivateKeyFromPEM([]byte(privateKey))
+		privateKeyValue, err = snowflake.ParsePrivateKey([]byte(privateKey))
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	var jwtConfig = snowflake.JWTConfig{
-		AccountIdentifier:    accountIdentifier,
-		UserIdentifier:       userIdentifier,
-		PublicKeyFingerPrint: publicKeyFingerPrint,
-		PrivateKeyValue:      privateKeyValue,
+		AccountIdentifier: accountIdentifier,
+		UserIdentifier:    userIdentifier,
+		PrivateKeyValue:   privateKeyValue,
 	}
 	token, err := jwtConfig.GenerateBearerToken()
 	if err != nil {

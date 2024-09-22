@@ -20,11 +20,6 @@ var (
 		field.WithRequired(true),
 		field.WithDescription("User Identifier."),
 	)
-	PublicKeyFingerprintField = field.StringField(
-		"public-key-fingerprint",
-		field.WithRequired(true),
-		field.WithDescription("Public Key Fingerprint."),
-	)
 	PrivateKeyPathField = field.StringField(
 		"private-key-path",
 		field.WithDescription("Private Key Path."),
@@ -39,7 +34,6 @@ var (
 			AccountUrlField,
 			PrivateKeyField,
 			PrivateKeyPathField,
-			PublicKeyFingerprintField,
 			UserIdentifierField,
 		},
 		field.FieldsMutuallyExclusive(
