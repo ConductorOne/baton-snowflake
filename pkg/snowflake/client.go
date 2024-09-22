@@ -113,6 +113,11 @@ func (m *ResultSetMetadata) GetBoolValueFromRow(row []string, key string) (bool,
 		return false, fmt.Errorf("column %s is not a string", key)
 	}
 
+	// "NULL"-ish case
+	if row[i] == "" {
+		return false, nil
+	}
+
 	return strconv.ParseBool(row[i])
 }
 
