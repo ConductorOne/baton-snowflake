@@ -114,7 +114,7 @@ func (m *ResultSetMetadata) GetBoolValueFromRow(row []string, key string) (bool,
 	}
 
 	// "NULL"-ish case
-	if row[i] == "" {
+	if row[i] == "" || row[i] == "null" {
 		return false, nil
 	}
 
