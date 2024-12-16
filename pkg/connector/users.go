@@ -100,6 +100,10 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		return nil, "", nil, wrapError(err, "failed to list users")
 	}
 
+	if len(users) == 0 {
+		return nil, "", nil, nil
+	}
+
 	var resources []*v2.Resource
 	for _, user := range users {
 		resource, err := userResource(ctx, &user) // #nosec G601
