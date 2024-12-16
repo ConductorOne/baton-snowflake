@@ -136,6 +136,10 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 		return nil, resp, err
 	}
 
+	if len(response.StatementHandles) < 2 {
+		return nil, resp, nil
+	}
+
 	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
 	if err != nil {
 		return nil, resp, err
