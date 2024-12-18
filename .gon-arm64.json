@@ -1,5 +1,5 @@
 {
-  "source": ["./dist/macos-arm64_darwin_arm64/baton-snowflake"],
+  "source": ["./dist/macos-arm64_darwin_arm64_v8.0/baton-snowflake"],
   "bundle_id": "com.conductorone.baton-snowflake",
   "apple_id": {
     "username" : "justin.gallardo@conductorone.com"
