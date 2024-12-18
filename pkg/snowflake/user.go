@@ -159,7 +159,7 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 
 func (c *Client) GetUser(ctx context.Context, username string) (*User, *http.Response, error) {
 	queries := []string{
-		fmt.Sprintf("DESCRIBE USER %s;", username),
+		fmt.Sprintf("DESCRIBE USER \"%s\";", username),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

@@ -99,7 +99,7 @@ func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]Acc
 
 func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, offset, limit int) ([]AccountRoleGrantee, *http.Response, error) {
 	queries := []string{
-		fmt.Sprintf("SHOW GRANTS OF ROLE %s;", roleName),
+		fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", roleName),
 		c.paginateLastQuery(offset, limit),
 	}
 
@@ -158,7 +158,7 @@ func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountR
 
 func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
 	queries := []string{
-		fmt.Sprintf("GRANT ROLE %s TO USER %s;", roleName, userName),
+		fmt.Sprintf("GRANT ROLE \"%s\" TO USER \"%s\";", roleName, userName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -171,7 +171,7 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 
 func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
 	queries := []string{
-		fmt.Sprintf("REVOKE ROLE %s FROM USER %s;", roleName, userName),
+		fmt.Sprintf("REVOKE ROLE \"%s\" FROM USER \"%s\";", roleName, userName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
