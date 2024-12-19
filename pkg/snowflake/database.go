@@ -95,7 +95,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http
 		return nil, resp, err
 	}
 	if len(databases) == 0 {
-		return nil, resp, nil
+		return nil, resp, fmt.Errorf("database with name %s not found", name)
 	} else if len(databases) > 1 {
 		return nil, resp, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
 	}
