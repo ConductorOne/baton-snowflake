@@ -23,3 +23,5 @@ dist/
 *.p8
 
 *.pem
+# Ignore snow config file
+./config.toml
