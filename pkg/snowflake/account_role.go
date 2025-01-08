@@ -80,6 +80,10 @@ func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]Acc
 		return nil, nil, err
 	}
 
+	if len(response.StatementHandles) < 2 {
+		return nil, resp, nil
+	}
+
 	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
 	if err != nil {
 		return nil, resp, err
@@ -112,6 +116,10 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, o
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if len(response.StatementHandles) < 2 {
+		return nil, resp, nil
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
