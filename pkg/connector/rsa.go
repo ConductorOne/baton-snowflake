@@ -3,6 +3,8 @@ package connector
 import (
 	"context"
 	"fmt"
+	"time"
+
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
@@ -12,14 +14,13 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"time"
 )
 
 type RsaIndex int
 
 const (
 	RsaIndex1 RsaIndex = 1
-	RsaIndex2          = 2
+	RsaIndex2 RsaIndex = 2
 )
 
 func (i RsaIndex) String() string {

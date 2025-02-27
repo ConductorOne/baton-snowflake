@@ -3,8 +3,9 @@ package snowflake
 import (
 	"context"
 	"fmt"
-	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"time"
+
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
 const snowflakeDateFormat = "2006-01-02 15:04:05.999"
@@ -85,7 +86,7 @@ func (r *RsaGetUserRawResponse) GetUserRsa(ctx context.Context) (*UserRsa, error
 	rsa.Username = findUserDescriptionPropertyValue(userDescriptions, "NAME")
 
 	rsa1 := findUserDescriptionPropertyValue(userDescriptions, "RSA_PUBLIC_KEY_LAST_SET_TIME")
-	if rsa1 != "" && rsa1 != "null" {
+	if rsa1 != "" && rsa1 != rowNull {
 		rsa1Time, err := time.Parse(snowflakeDateFormat, rsa1)
 		if err != nil {
 			return nil, err
@@ -94,7 +95,7 @@ func (r *RsaGetUserRawResponse) GetUserRsa(ctx context.Context) (*UserRsa, error
 	}
 
 	rsa2 := findUserDescriptionPropertyValue(userDescriptions, "RSA_PUBLIC_KEY_2_LAST_SET_TIME")
-	if rsa2 != "" && rsa2 != "null" {
+	if rsa2 != "" && rsa2 != rowNull {
 		rsa2Time, err := time.Parse(snowflakeDateFormat, rsa2)
 		if err != nil {
 			return nil, err

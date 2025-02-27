@@ -39,7 +39,7 @@ func secretResource(ctx context.Context, secret *snowflake.Secret, id *v2.Resour
 		secretTraits,
 		rs.WithParentResourceID(id),
 	)
-	
+
 	if err != nil {
 		return nil, err
 	}
