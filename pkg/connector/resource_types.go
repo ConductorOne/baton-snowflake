@@ -22,6 +22,16 @@ var (
 		DisplayName: "Database",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
 	}
+	secretResourceType = &v2.ResourceType{
+		Id:          "secret",
+		DisplayName: "Secret",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+	}
+	rsaPublicKeyResourceType = &v2.ResourceType{
+		Id:          "rsa_public_key",
+		DisplayName: "RSA Public Key",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+	}
 )
 
 func getSkipEntitlementsAnnotation() annotations.Annotations {

@@ -13,16 +13,27 @@ import (
 )
 
 type Connector struct {
-	Client *snowflake.Client
+	Client      *snowflake.Client
+	syncSecrets bool
 }
 
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
-	return []connectorbuilder.ResourceSyncer{
+	builders := []connectorbuilder.ResourceSyncer{
 		newUserBuilder(d.Client),
 		newAccountRoleBuilder(d.Client),
 		newDatabaseBuilder(d.Client),
 	}
+
+	if d.syncSecrets {
+		builders = append(
+			builders,
+			newSecretBuilder(d.Client),
+			newRsaBuilder(d.Client),
+		)
+	}
+
+	return builders
 }
 
 // Asset takes an input AssetRef and attempts to fetch it using the connector's authenticated http client
@@ -55,7 +66,15 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, privateKeyPath, privateKey string) (*Connector, error) {
+func New(
+	ctx context.Context,
+	accountUrl,
+	accountIdentifier,
+	userIdentifier,
+	privateKeyPath,
+	privateKey string,
+	syncSecrets bool,
+) (*Connector, error) {
 	if privateKeyPath == "" && privateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}
@@ -98,6 +117,7 @@ func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, pri
 	}
 
 	return &Connector{
-		Client: client,
+		Client:      client,
+		syncSecrets: syncSecrets,
 	}, nil
 }

@@ -28,6 +28,12 @@ var (
 		"private-key",
 		field.WithDescription("Private Key (PEM format)."),
 	)
+	SyncSecrets = field.BoolField(
+		"sync-secrets",
+		field.WithDescription("Whether to sync secrets or not"),
+		field.WithDefaultValue(false),
+	)
+
 	configurationSchema = field.NewConfiguration(
 		[]field.SchemaField{
 			AccountIdentifierField,
@@ -35,6 +41,7 @@ var (
 			PrivateKeyField,
 			PrivateKeyPathField,
 			UserIdentifierField,
+			SyncSecrets,
 		},
 		field.FieldsMutuallyExclusive(
 			PrivateKeyPathField,

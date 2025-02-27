@@ -52,7 +52,14 @@ func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, erro
 			displayName = user.Login
 		}
 	}
-	resource, err := rs.NewUserResource(displayName, userResourceType, user.Username, userTraits)
+	resource, err := rs.NewUserResource(
+		displayName,
+		userResourceType,
+		user.Username,
+		userTraits,
+		rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
+	)
+
 	if err != nil {
 		return nil, err
 	}
