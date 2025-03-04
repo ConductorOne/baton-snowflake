@@ -31,7 +31,8 @@ func databaseResource(database *snowflake.Database) (*v2.Resource, error) {
 		rs.WithAppProfile(profile),
 	}
 
-	resource, err := rs.NewAppResource(database.Name, databaseResourceType, database.Name, databaseTraits)
+	resource, err := rs.NewAppResource(
+		database.Name, databaseResourceType, database.Name, databaseTraits, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
 	if err != nil {
 		return nil, err
 	}

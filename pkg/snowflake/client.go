@@ -21,6 +21,7 @@ const (
 const (
 	rowTypeString       = "text"
 	rowTypeTimestampLtz = "timestamp_ltz"
+	rowNull             = "null"
 )
 
 type (
@@ -114,7 +115,7 @@ func (m *ResultSetMetadata) GetBoolValueFromRow(row []string, key string) (bool,
 	}
 
 	// "NULL"-ish case
-	if row[i] == "" || row[i] == "null" {
+	if row[i] == "" || row[i] == rowNull {
 		return false, nil
 	}
 
