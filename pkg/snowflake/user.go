@@ -126,7 +126,6 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d;", limit))
 	}
-	queries = append(queries, "SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID()));")
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -139,11 +138,11 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 		return nil, resp, err
 	}
 
-	if len(response.StatementHandles) < 2 {
+	if len(response.StatementHandles) < 1 {
 		return nil, resp, nil
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
+	req, err = c.GetStatementResponse(ctx, response.StatementHandles[0])
 	if err != nil {
 		return nil, resp, err
 	}
