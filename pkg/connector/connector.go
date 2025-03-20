@@ -53,7 +53,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 // Validate is called to ensure that the connector is properly configured. It should exercise any API credentials
 // to be sure that they are valid.
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
-	users, _, err := d.Client.ListUsers(ctx, 0, 1)
+	users, _, err := d.Client.ListUsers(ctx, "", 1)
 	if err != nil {
 		return nil, err
 	}

@@ -181,10 +181,12 @@ func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bo
 	return "", false
 }
 
-func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *http.Response, error) {
-	queries := []string{
-		"SHOW USERS;",
-		c.paginateLastQuery(offset, limit),
+func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, *http.Response, error) {
+	queries := []string{}
+	if cursor != "" {
+		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, cursor))
+	} else {
+		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d;", limit))
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -198,11 +200,7 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 		return nil, resp, err
 	}
 
-	if len(response.StatementHandles) < 2 {
-		return nil, resp, nil
-	}
-
-	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
+	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, resp, err
 	}
