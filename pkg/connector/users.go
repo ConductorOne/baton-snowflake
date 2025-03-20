@@ -13,13 +13,14 @@ import (
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *snowflake.Client
+	syncSecrets  bool
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
-func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, error) {
+func userResource(ctx context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"email":        user.Email,
 		"login":        user.Login,
@@ -52,12 +53,18 @@ func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, erro
 			displayName = user.Login
 		}
 	}
+
+	var opts []rs.ResourceOption
+	if syncSecrets {
+		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+	}
+
 	resource, err := rs.NewUserResource(
 		displayName,
 		userResourceType,
 		user.Username,
 		userTraits,
-		rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
+		opts...,
 	)
 
 	if err != nil {
@@ -113,7 +120,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var resources []*v2.Resource
 	for _, user := range users {
-		resource, err := userResource(ctx, &user) // #nosec G601
+		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
 		if err != nil {
 			return nil, "", nil, wrapError(err, "failed to create user resource")
 		}
@@ -143,9 +150,10 @@ func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 	return nil, "", nil, nil
 }
 
-func newUserBuilder(client *snowflake.Client) *userBuilder {
+func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {
 	return &userBuilder{
 		resourceType: userResourceType,
 		client:       client,
+		syncSecrets:  syncSecrets,
 	}
 }

@@ -20,9 +20,9 @@ type Connector struct {
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	builders := []connectorbuilder.ResourceSyncer{
-		newUserBuilder(d.Client),
+		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client),
+		newDatabaseBuilder(d.Client, d.syncSecrets),
 	}
 
 	if d.syncSecrets {
