@@ -28,6 +28,7 @@ jobs:
           BATON_ACCOUNT_IDENTIFIER: example
           BATON_USER_IDENTIFIER: example
           BATON_ACCOUNT_URL: https://example.snowflakecomputing.com
+          BATON_PRIVATE_KEY: ${{ secrets.BATON_PRIVATE_KEY }}
         run: ./connector capabilities > baton_capabilities.json
 
       - name: Commit changes
