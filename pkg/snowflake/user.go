@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 var (
@@ -120,12 +122,16 @@ func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bo
 }
 
 func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, *http.Response, error) {
+	l := ctxzap.Extract(ctx)
+
 	queries := []string{}
 	if cursor != "" {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, cursor))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d;", limit))
 	}
+
+	l.Info("listing users", zap.String("cursor", cursor), zap.Int("limit", limit), zap.String("query", queries[0]))
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {

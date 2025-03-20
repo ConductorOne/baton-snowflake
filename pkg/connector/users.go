@@ -8,6 +8,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type userBuilder struct {
@@ -90,10 +92,14 @@ func getUserDetailedStatus(user *snowflake.User) string {
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
 	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get next page offset")
+		return nil, "", nil, wrapError(err, "failed to get next page cursor")
 	}
+
+	l.Info("listing users", zap.String("cursor", cursor), zap.Int("limit", resourcePageSize))
 
 	users, _, err := o.client.ListUsers(ctx, cursor, resourcePageSize)
 	if err != nil {
