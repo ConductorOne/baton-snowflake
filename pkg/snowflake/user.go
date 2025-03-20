@@ -130,6 +130,7 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d;", limit))
 	}
+	queries = append(queries, "SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID()));")
 
 	l.Info("listing users", zap.String("cursor", cursor), zap.Int("limit", limit), zap.String("query", queries[0]))
 
