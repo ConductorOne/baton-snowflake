@@ -42,12 +42,12 @@ func accountRoleResource(accountRole *snowflake.AccountRole) (*v2.Resource, erro
 }
 
 func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, offset, err := parseOffsetFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to get next page offset")
 	}
 
-	accountRoles, _, err := o.client.ListAccountRoles(ctx, offset, resourcePageSize)
+	accountRoles, _, err := o.client.ListAccountRoles(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to list account roles")
 	}
@@ -66,12 +66,12 @@ func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 		return resources, "", nil, nil
 	}
 
-	nextPage, err := handleNextPage(bag, offset+resourcePageSize)
+	nextCursor, err := bag.NextToken(accountRoles[len(accountRoles)-1].Name)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to create next page cursor")
 	}
 
-	return resources, nextPage, nil, nil
+	return resources, nextCursor, nil, nil
 }
 
 func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
@@ -96,12 +96,7 @@ func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resour
 }
 
 func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	bag, offset, err := parseOffsetFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
-	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get next page offset")
-	}
-
-	accountRoleGrantees, _, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName, offset, resourcePageSize)
+	accountRoleGrantees, _, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to list account role grantees")
 	}
@@ -129,12 +124,7 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 		return grants, "", nil, nil
 	}
 
-	nextPage, err := handleNextPage(bag, offset+resourcePageSize)
-	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to create next page cursor")
-	}
-
-	return grants, nextPage, nil, nil
+	return grants, "", nil, nil
 }
 
 func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {

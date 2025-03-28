@@ -52,12 +52,12 @@ func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resou
 }
 
 func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, offset, err := parseOffsetFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to get next page offset")
 	}
 
-	databases, _, err := o.client.ListDatabases(ctx, offset, resourcePageSize)
+	databases, _, err := o.client.ListDatabases(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to list databases")
 	}
@@ -76,12 +76,12 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 		return resources, "", nil, nil
 	}
 
-	nextPage, err := handleNextPage(bag, offset+resourcePageSize)
+	nextCursor, err := bag.NextToken(databases[len(databases)-1].Name)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to create next page cursor")
 	}
 
-	return resources, nextPage, nil, nil
+	return resources, nextCursor, nil, nil
 }
 
 func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 var accountRoleStructFieldToColumnMap = map[string]string{
@@ -63,10 +65,13 @@ func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() []AccountR
 	return accountRoleGrantees
 }
 
-func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]AccountRole, *http.Response, error) {
-	queries := []string{
-		"SHOW ROLES;",
-		c.paginateLastQuery(offset, limit),
+func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int) ([]AccountRole, *http.Response, error) {
+	var queries []string
+
+	if cursor != "" {
+		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, cursor))
+	} else {
+		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d;", limit))
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -80,12 +85,10 @@ func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]Acc
 		return nil, nil, err
 	}
 
-	if len(response.StatementHandles) < 2 {
-		return nil, resp, fmt.Errorf("ListAccountRoles unexpected response code: %s message: %s",
-			response.Code, response.Message)
-	}
+	l := ctxzap.Extract(ctx)
+	l.Debug("ListAccountRoles", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
+	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, resp, err
 	}
@@ -102,10 +105,9 @@ func (c *Client) ListAccountRoles(ctx context.Context, offset, limit int) ([]Acc
 	return accountRoles, resp, nil
 }
 
-func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, offset, limit int) ([]AccountRoleGrantee, *http.Response, error) {
+func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) ([]AccountRoleGrantee, *http.Response, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", roleName),
-		c.paginateLastQuery(offset, limit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -119,11 +121,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, o
 		return nil, nil, err
 	}
 
-	if len(response.StatementHandles) < 2 {
-		return nil, resp, nil
-	}
-
-	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
+	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, resp, err
 	}
