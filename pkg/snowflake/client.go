@@ -232,10 +232,6 @@ func (c *Client) GetStatementResponse(ctx context.Context, statementHandle strin
 	)
 }
 
-func (c *Client) paginateLastQuery(offset, limit int) string {
-	return fmt.Sprintf("SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID())) LIMIT %d OFFSET %d;", limit, offset)
-}
-
 func Contains[T comparable](ts []T, val T) bool {
 	for _, t := range ts {
 		if t == val {

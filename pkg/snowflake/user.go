@@ -182,7 +182,7 @@ func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bo
 }
 
 func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, *http.Response, error) {
-	queries := []string{}
+	var queries []string
 	if cursor != "" {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, cursor))
 	} else {

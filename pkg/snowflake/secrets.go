@@ -2,8 +2,13 @@ package snowflake
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
@@ -11,6 +16,8 @@ import (
 const snowflakeDateFormat = "2006-01-02 15:04:05.999"
 
 func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, error) {
+	l := ctxzap.Extract(ctx)
+
 	queries := []string{
 		fmt.Sprintf("SHOW SECRETS IN DATABASE \"%s\";", database),
 	}
@@ -23,6 +30,29 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 	var response ListSecretsRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+			var errMsg struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+
+			err := json.NewDecoder(resp.Body).Decode(&errMsg)
+			if err != nil {
+				return nil, err
+			}
+
+			// code: 003001
+			// message: SQL access control error:\nInsufficient privileges to operate on database 'DB'
+			if errMsg.Code == "003001" {
+				l.Warn("Insufficient privileges to operate on database", zap.String("database", database))
+			} else {
+				l.Error(errMsg.Message, zap.String("database", database))
+			}
+
+			// Ignore if the account/role does not have permission to show secrets of database
+			return nil, nil
+		}
+
 		return nil, err
 	}
 	defer resp.Body.Close()
