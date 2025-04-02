@@ -32,6 +32,8 @@ Alongside the key pair, you must specify the Snowflake account URL, account iden
 either environment variables or CLI flags. The process of obtaining the these values is described in
 [the account identifiers documentation](https://docs.snowflake.com/en/user-guide/admin-account-identifier).
 
+Connect to Tool in UI under Account Icon on lower right can give you the account identifier.
+
 ## Setup script for snowflake api key pair
 
 To execute the setup script needs

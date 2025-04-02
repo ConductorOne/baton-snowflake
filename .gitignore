@@ -24,4 +24,4 @@ dist/
 
 *.pem
 # Ignore snow config file
-./config.toml
+config.toml

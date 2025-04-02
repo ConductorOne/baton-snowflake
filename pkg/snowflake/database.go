@@ -58,7 +58,8 @@ func (c *Client) ListDatabases(ctx context.Context, offset, limit int) ([]Databa
 	}
 
 	if len(response.StatementHandles) < 2 {
-		return nil, resp, nil
+		return nil, resp, fmt.Errorf("ListDatabases unexpected response code: %s message: %s",
+			response.Code, response.Message)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
