@@ -16,13 +16,14 @@ import (
 type databaseBuilder struct {
 	resourceType *v2.ResourceType
 	client       *snowflake.Client
+	syncSecrets  bool
 }
 
 func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return databaseResourceType
 }
 
-func databaseResource(database *snowflake.Database) (*v2.Resource, error) {
+func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"name": database.Name,
 	}
@@ -31,7 +32,18 @@ func databaseResource(database *snowflake.Database) (*v2.Resource, error) {
 		rs.WithAppProfile(profile),
 	}
 
-	resource, err := rs.NewAppResource(database.Name, databaseResourceType, database.Name, databaseTraits)
+	var opts []rs.ResourceOption
+	if syncSecrets {
+		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
+	}
+
+	resource, err := rs.NewAppResource(
+		database.Name,
+		databaseResourceType,
+		database.Name,
+		databaseTraits,
+		opts...,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +64,7 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 
 	var resources []*v2.Resource
 	for _, database := range databases {
-		resource, err := databaseResource(&database) // #nosec G601
+		resource, err := databaseResource(&database, o.syncSecrets) // #nosec G601
 		if err != nil {
 			return nil, "", nil, wrapError(err, "failed to create database resource")
 		}
@@ -124,9 +136,10 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, pTo
 	return grants, "", nil, nil
 }
 
-func newDatabaseBuilder(client *snowflake.Client) *databaseBuilder {
+func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool) *databaseBuilder {
 	return &databaseBuilder{
 		resourceType: databaseResourceType,
 		client:       client,
+		syncSecrets:  syncSecrets,
 	}
 }

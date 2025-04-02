@@ -13,16 +13,27 @@ import (
 )
 
 type Connector struct {
-	Client *snowflake.Client
+	Client      *snowflake.Client
+	syncSecrets bool
 }
 
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
-	return []connectorbuilder.ResourceSyncer{
-		newUserBuilder(d.Client),
+	builders := []connectorbuilder.ResourceSyncer{
+		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client),
+		newDatabaseBuilder(d.Client, d.syncSecrets),
 	}
+
+	if d.syncSecrets {
+		builders = append(
+			builders,
+			newSecretBuilder(d.Client),
+			newRsaBuilder(d.Client),
+		)
+	}
+
+	return builders
 }
 
 // Asset takes an input AssetRef and attempts to fetch it using the connector's authenticated http client
@@ -42,7 +53,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 // Validate is called to ensure that the connector is properly configured. It should exercise any API credentials
 // to be sure that they are valid.
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
-	users, _, err := d.Client.ListUsers(ctx, 0, 1)
+	users, _, err := d.Client.ListUsers(ctx, "", 1)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +66,15 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, privateKeyPath, privateKey string) (*Connector, error) {
+func New(
+	ctx context.Context,
+	accountUrl,
+	accountIdentifier,
+	userIdentifier,
+	privateKeyPath,
+	privateKey string,
+	syncSecrets bool,
+) (*Connector, error) {
 	if privateKeyPath == "" && privateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}
@@ -98,6 +117,7 @@ func New(ctx context.Context, accountUrl, accountIdentifier, userIdentifier, pri
 	}
 
 	return &Connector{
-		Client: client,
+		Client:      client,
+		syncSecrets: syncSecrets,
 	}, nil
 }

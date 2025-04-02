@@ -29,10 +29,30 @@ var (
 		"HasMfa":           "has_mfa",
 		"Comment":          "comment",
 	}
+
 	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
 	ignoredUserStructFieldsForDescribeOperation = []string{
 		"HasRSAPublicKey",
 		"HasPassword",
+	}
+
+	secretStructFieldToColumnMap = map[string]string{
+		"CreatedOn":     "created_on",
+		"Name":          "name",
+		"SchemaName":    "schema_name",
+		"DatabaseName":  "database_name",
+		"Owner":         "owner",
+		"Comment":       "comment",
+		"SecretType":    "secret_type",
+		"OAuthScopes":   "oauth_scopes",
+		"OwnerRoleType": "owner_role_type",
+	}
+
+	userDescriptionStructFieldToColumnMap = map[string]string{
+		"Property":    "property",
+		"Value":       "value",
+		"Default":     "default",
+		"Description": "description",
 	}
 )
 
@@ -54,6 +74,20 @@ type (
 		HasMfa           bool
 		Comment          string
 	}
+
+	UserRsa struct {
+		Username                 string
+		RsaPublicKeyLastSetTime  *time.Time
+		RsaPublicKeyLastSetTime2 *time.Time
+	}
+
+	UserDescriptionProperty struct {
+		Property    string
+		Value       string
+		Default     string
+		Description string
+	}
+
 	ListUsersRawResponse struct {
 		StatementsApiResponseBase
 	}
@@ -61,10 +95,38 @@ type (
 		StatementsApiResponseBase
 		Data [][]string `json:"data"`
 	}
+
+	ListSecretsRawResponse struct {
+		StatementsApiResponseBase
+	}
+
+	RsaGetUserRawResponse struct {
+		StatementsApiResponseBase
+	}
+
+	Secret struct {
+		CreatedOn     time.Time
+		Name          string
+		SchemaName    string
+		DatabaseName  string
+		Owner         string
+		Comment       string
+		SecretType    string
+		OAuthScopes   string
+		OwnerRoleType string
+	}
 )
+
+func (u *Secret) GetColumnName(fieldName string) string {
+	return secretStructFieldToColumnMap[fieldName]
+}
 
 func (u *User) GetColumnName(fieldName string) string {
 	return userStructFieldToColumnMap[fieldName]
+}
+
+func (u *UserDescriptionProperty) GetColumnName(fieldName string) string {
+	return userDescriptionStructFieldToColumnMap[fieldName]
 }
 
 func (r *ListUsersRawResponse) GetUsers() ([]User, error) {
@@ -119,10 +181,12 @@ func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bo
 	return "", false
 }
 
-func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *http.Response, error) {
-	queries := []string{
-		"SHOW USERS;",
-		c.paginateLastQuery(offset, limit),
+func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, *http.Response, error) {
+	queries := []string{}
+	if cursor != "" {
+		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, cursor))
+	} else {
+		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d;", limit))
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -136,11 +200,7 @@ func (c *Client) ListUsers(ctx context.Context, offset, limit int) ([]User, *htt
 		return nil, resp, err
 	}
 
-	if len(response.StatementHandles) < 2 {
-		return nil, resp, nil
-	}
-
-	req, err = c.GetStatementResponse(ctx, response.StatementHandles[1])
+	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, resp, err
 	}
@@ -179,4 +239,17 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, *http.Res
 	}
 
 	return user, resp, nil
+}
+
+func (r *ListSecretsRawResponse) ListSecrets() ([]Secret, error) {
+	var secrets []Secret
+	for _, row := range r.Data {
+		secret := &Secret{}
+		if err := r.ResultSetMetadata.ParseRow(secret, row); err != nil {
+			return nil, err
+		}
+
+		secrets = append(secrets, *secret)
+	}
+	return secrets, nil
 }

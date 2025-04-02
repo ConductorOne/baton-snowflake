@@ -148,6 +148,11 @@ openssl rsa -pubin -in rsa_key.pub -outform DER | openssl dgst -sha256 -binary |
 
 Compare both outputs. If both outputs match, the user correctly configured their public key.
 
+### Sync Secrets
+
+To sync secrets the account needs this role
+permission https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-control-requirements
+
 ## brew
 
 ```

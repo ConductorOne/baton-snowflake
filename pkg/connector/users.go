@@ -13,13 +13,14 @@ import (
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *snowflake.Client
+	syncSecrets  bool
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
-func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, error) {
+func userResource(ctx context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"email":        user.Email,
 		"login":        user.Login,
@@ -52,7 +53,20 @@ func userResource(ctx context.Context, user *snowflake.User) (*v2.Resource, erro
 			displayName = user.Login
 		}
 	}
-	resource, err := rs.NewUserResource(displayName, userResourceType, user.Username, userTraits)
+
+	var opts []rs.ResourceOption
+	if syncSecrets {
+		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+	}
+
+	resource, err := rs.NewUserResource(
+		displayName,
+		userResourceType,
+		user.Username,
+		userTraits,
+		opts...,
+	)
+
 	if err != nil {
 		return nil, err
 	}
@@ -90,12 +104,12 @@ func getUserDetailedStatus(user *snowflake.User) string {
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, offset, err := parseOffsetFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get next page offset")
+		return nil, "", nil, wrapError(err, "failed to get next page cursor")
 	}
 
-	users, _, err := o.client.ListUsers(ctx, offset, resourcePageSize)
+	users, _, err := o.client.ListUsers(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to list users")
 	}
@@ -106,7 +120,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var resources []*v2.Resource
 	for _, user := range users {
-		resource, err := userResource(ctx, &user) // #nosec G601
+		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
 		if err != nil {
 			return nil, "", nil, wrapError(err, "failed to create user resource")
 		}
@@ -118,12 +132,12 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		return resources, "", nil, nil
 	}
 
-	nextPage, err := handleNextPage(bag, offset+resourcePageSize)
+	nextCursor, err := bag.NextToken(users[len(users)-1].Username)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to create next page cursor")
 	}
 
-	return resources, nextPage, nil, nil
+	return resources, nextCursor, nil, nil
 }
 
 // Entitlements always returns an empty slice for users.
@@ -136,9 +150,10 @@ func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 	return nil, "", nil, nil
 }
 
-func newUserBuilder(client *snowflake.Client) *userBuilder {
+func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {
 	return &userBuilder{
 		resourceType: userResourceType,
 		client:       client,
+		syncSecrets:  syncSecrets,
 	}
 }
