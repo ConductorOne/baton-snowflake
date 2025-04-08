@@ -155,9 +155,7 @@ func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountR
 	}
 
 	if len(accountRoles) == 0 {
-		return nil, resp, fmt.Errorf("account role with name %s not found", roleName)
-	} else if len(accountRoles) > 1 {
-		return nil, resp, fmt.Errorf("expected 1 account role with name %s, got %d", roleName, len(accountRoles))
+		return nil, resp, nil
 	}
 
 	return &accountRoles[0], resp, nil
