@@ -11,6 +11,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type databaseBuilder struct {
@@ -99,6 +101,7 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 }
 
 func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
 	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to get database")
@@ -113,12 +116,17 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, pTo
 		return nil, "", nil, wrapError(err, "failed to get owner account role")
 	}
 
+	if owner == nil {
+		l.Warn("snowflake-connector: account role not found", zap.String("role", database.Owner))
+		return nil, "", nil, nil
+	}
+
 	roleResource, err := accountRoleResource(owner)
 	if err != nil {
 		return nil, "", nil, wrapError(err, "failed to create owner account role resource")
 	}
 
-	var grants []*v2.Grant = []*v2.Grant{
+	var grants = []*v2.Grant{
 		grant.NewGrant(
 			resource,
 			ownerEntitlement,
