@@ -3,7 +3,7 @@ module github.com/conductorone/baton-snowflake
 go 1.23.4
 
 require (
-	github.com/conductorone/baton-sdk v0.2.91
+	github.com/conductorone/baton-sdk v0.2.96
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
