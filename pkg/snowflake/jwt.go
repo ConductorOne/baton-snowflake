@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type JWTConfig struct {
@@ -46,8 +46,8 @@ func (c *JWTConfig) GenerateBearerToken() (string, error) {
 	claims := jwt.MapClaims{
 		"iss": c.getIssuer(),
 		"sub": c.getSubject(),
-		"iat": issuedAt.Unix(),
-		"exp": expiresAt.Unix(),
+		"iat": jwt.NewNumericDate(issuedAt),
+		"exp": jwt.NewNumericDate(expiresAt),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
