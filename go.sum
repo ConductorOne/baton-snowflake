@@ -58,8 +58,8 @@ github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyY
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
-github.com/conductorone/baton-sdk v0.2.96 h1:wsvDFKStGoeXYv/MTvp5Mn6kVigrlM26MrlCStuaQ0A=
-github.com/conductorone/baton-sdk v0.2.96/go.mod h1:nUgHSAf9P0lfamti5NlOSpeh1t99UNzMjIwf0I7n4/g=
+github.com/conductorone/baton-sdk v0.3.31 h1:SgHp43xCTD/ORcqvjMVLx/Ve2j6MOuLM2x0Zz5xPk6Q=
+github.com/conductorone/baton-sdk v0.3.31/go.mod h1:L55WO3ERMx1mfpjDgwK3jWNRGRF2E76WrQHmW6ev8VY=
 github.com/conductorone/dpop v0.2.3 h1:s91U3845GHQ6P6FWrdNr2SEOy1ES/jcFs1JtKSl2S+o=
 github.com/conductorone/dpop v0.2.3/go.mod h1:gyo8TtzB9SCFCsjsICH4IaLZ7y64CcrDXMOPBwfq/3s=
 github.com/conductorone/dpop/integrations/dpop_grpc v0.2.3 h1:kLMCNIh0Mo2vbvvkCmJ3ixsPbXEJ6HPcW53Ku9yje3s=
@@ -116,8 +116,6 @@ github.com/go-toolsmith/astequal v1.0.3 h1:+LVdyRatFS+XO78SGV4I3TCEA0AC7fKEGma+f
 github.com/go-toolsmith/astequal v1.0.3/go.mod h1:9Ai4UglvtR+4up+bAD4+hCj7iTo4m/OXVTSLnCyTAx4=
 github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
 github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
-github.com/golang-jwt/jwt v3.2.2+incompatible h1:IfV12K8xAKAnZqdXVzCZ+TOjboZ2keLg81eXfW3O+oY=
-github.com/golang-jwt/jwt v3.2.2+incompatible/go.mod h1:8pz2t5EyA70fFQQSrl6XZXzqecmYZeUEB8OUGHkxJ+I=
 github.com/golang-jwt/jwt/v5 v5.2.2 h1:Rl4B7itRWVtYIHFrSNd7vhTiz9UpLdi6gZhZ3wEeDy8=
 github.com/golang-jwt/jwt/v5 v5.2.2/go.mod h1:pqrtFR0X4osieyHYxtmOUWsAWrfe1Q5UVIyoH402zdk=
 github.com/golang-sql/civil v0.0.0-20190719163853-cb61b32ac6fe/go.mod h1:8vg3r2VgvsThLBIFL93Qb5yWzgyZWhEmBwUJWevAkK0=
