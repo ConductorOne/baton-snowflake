@@ -2,6 +2,7 @@ package dotc1z
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func loadC1z(filePath string, tmpDir string) (string, error) {
+func loadC1z(filePath string, tmpDir string, opts ...DecoderOption) (string, error) {
 	var err error
 	workingDir, err := os.MkdirTemp(tmpDir, "c1z")
 	if err != nil {
@@ -38,7 +39,7 @@ func loadC1z(filePath string, tmpDir string) (string, error) {
 		}
 		defer c1zFile.Close()
 
-		r, err := NewDecoder(c1zFile)
+		r, err := NewDecoder(c1zFile, opts...)
 		if err != nil {
 			return "", err
 		}
@@ -65,15 +66,11 @@ func saveC1z(dbFilePath string, outputFilePath string) error {
 		return err
 	}
 	defer func() {
-		err = dbFile.Close()
-		if err != nil {
-			zap.L().Error("failed to close db file", zap.Error(err))
-		}
-
-		// Cleanup the database filepath. This should always be a file within a temp directory, so we remove the entire dir.
-		err = os.RemoveAll(filepath.Dir(dbFilePath))
-		if err != nil {
-			zap.L().Error("failed to remove db dir", zap.Error(err))
+		if dbFile != nil {
+			err = dbFile.Close()
+			if err != nil {
+				zap.L().Error("failed to close db file", zap.Error(err))
+			}
 		}
 	}()
 
@@ -81,7 +78,14 @@ func saveC1z(dbFilePath string, outputFilePath string) error {
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
+	defer func() {
+		if outFile != nil {
+			err = outFile.Close()
+			if err != nil {
+				zap.L().Error("failed to close out file", zap.Error(err))
+			}
+		}
+	}()
 
 	// Write the magic file header
 	_, err = outFile.Write(C1ZFileHeader)
@@ -89,7 +93,9 @@ func saveC1z(dbFilePath string, outputFilePath string) error {
 		return err
 	}
 
-	c1z, err := zstd.NewWriter(outFile)
+	c1z, err := zstd.NewWriter(outFile,
+		zstd.WithEncoderConcurrency(1),
+	)
 	if err != nil {
 		return err
 	}
@@ -107,6 +113,23 @@ func saveC1z(dbFilePath string, outputFilePath string) error {
 	if err != nil {
 		return err
 	}
+
+	err = outFile.Sync()
+	if err != nil {
+		return fmt.Errorf("failed to sync out file: %w", err)
+	}
+
+	err = outFile.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close out file: %w", err)
+	}
+	outFile = nil
+
+	err = dbFile.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close db file: %w", err)
+	}
+	dbFile = nil
 
 	return nil
 }
