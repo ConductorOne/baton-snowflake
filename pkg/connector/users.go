@@ -20,7 +20,7 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
-func userResource(ctx context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
+func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"email":        user.Email,
 		"login":        user.Login,

@@ -9,6 +9,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/conductorone/baton-snowflake/pkg/config"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
 
@@ -66,40 +67,32 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(
-	ctx context.Context,
-	accountUrl,
-	accountIdentifier,
-	userIdentifier,
-	privateKeyPath,
-	privateKey string,
-	syncSecrets bool,
-) (*Connector, error) {
-	if privateKeyPath == "" && privateKey == "" {
+func New(ctx context.Context, cfg *config.Snowflake) (*Connector, error) {
+	if cfg.PrivateKeyPath == "" && cfg.PrivateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}
-	if privateKeyPath != "" && privateKey != "" {
+	if cfg.PrivateKeyPath != "" && cfg.PrivateKey != "" {
 		return nil, fmt.Errorf("only one of private-key or private-key-path can be provided")
 	}
 	var privateKeyValue any
-	if privateKeyPath != "" {
+	if cfg.PrivateKeyPath != "" {
 		var err error
-		privateKeyValue, err = snowflake.ReadPrivateKey(privateKeyPath)
+		privateKeyValue, err = snowflake.ReadPrivateKey(cfg.PrivateKeyPath)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if privateKey != "" {
+	if cfg.PrivateKey != "" {
 		var err error
-		privateKeyValue, err = snowflake.ParsePrivateKey([]byte(privateKey))
+		privateKeyValue, err = snowflake.ParsePrivateKey([]byte(cfg.PrivateKey))
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	var jwtConfig = snowflake.JWTConfig{
-		AccountIdentifier: accountIdentifier,
-		UserIdentifier:    userIdentifier,
+		AccountIdentifier: cfg.AccountIdentifier,
+		UserIdentifier:    cfg.UserIdentifier,
 		PrivateKeyValue:   privateKeyValue,
 	}
 	token, err := jwtConfig.GenerateBearerToken()
@@ -111,13 +104,13 @@ func New(
 		return nil, err
 	}
 
-	client, err := snowflake.New(accountUrl, jwtConfig, httpClient)
+	client, err := snowflake.New(cfg.AccountUrl, jwtConfig, httpClient)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Connector{
 		Client:      client,
-		syncSecrets: syncSecrets,
+		syncSecrets: cfg.SyncSecrets,
 	}, nil
 }

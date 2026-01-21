@@ -35,7 +35,7 @@ func (o *rsaBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return rsaPublicKeyResourceType
 }
 
-func rsaResource(ctx context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id *v2.ResourceId) (*v2.Resource, error) {
+func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id *v2.ResourceId) (*v2.Resource, error) {
 	var rsaTime *time.Time
 
 	switch rsaIdx {

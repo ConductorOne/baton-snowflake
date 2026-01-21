@@ -19,7 +19,7 @@ func (o *secretBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return secretResourceType
 }
 
-func secretResource(ctx context.Context, secret *snowflake.Secret, id *v2.ResourceId) (*v2.Resource, error) {
+func secretResource(_ context.Context, secret *snowflake.Secret, id *v2.ResourceId) (*v2.Resource, error) {
 	secretOwner, err := rs.NewResourceID(userResourceType, secret.Owner)
 	if err != nil {
 		return nil, err
