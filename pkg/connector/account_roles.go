@@ -43,19 +43,19 @@ func accountRoleResource(accountRole *snowflake.AccountRole) (*v2.Resource, erro
 func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to get next page offset")
+		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
 	accountRoles, _, err := o.client.ListAccountRoles(ctx, cursor, resourcePageSize)
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to list account roles")
+		return nil, nil, wrapError(err, "failed to list account roles")
 	}
 
 	var resources []*v2.Resource
 	for _, role := range accountRoles {
 		resource, err := accountRoleResource(&role) // #nosec G601
 		if err != nil {
-			return nil, &rs.SyncOpResults{}, wrapError(err, "failed to create account role resource")
+			return nil, nil, wrapError(err, "failed to create account role resource")
 		}
 
 		resources = append(resources, resource)
@@ -67,7 +67,7 @@ func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 
 	nextCursor, err := bag.NextToken(accountRoles[len(accountRoles)-1].Name)
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to create next page cursor")
+		return nil, nil, wrapError(err, "failed to create next page cursor")
 	}
 
 	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil
@@ -97,7 +97,7 @@ func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resour
 func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	accountRoleGrantees, _, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName)
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to list account role grantees")
+		return nil, nil, wrapError(err, "failed to list account role grantees")
 	}
 	var grants []*v2.Grant
 	for _, grantee := range accountRoleGrantees {
@@ -105,14 +105,14 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 		case "USER":
 			rsId, err := rs.NewResourceID(userResourceType, grantee.GranteeName)
 			if err != nil {
-				return nil, &rs.SyncOpResults{}, wrapError(err, "unable to create user resource id")
+				return nil, nil, wrapError(err, "unable to create user resource id")
 			}
 			g := grant.NewGrant(resource, assignedEntitlement, rsId)
 			grants = append(grants, g)
 		case "ROLE":
 			rsId, err := rs.NewResourceID(accountRoleResourceType, grantee.GranteeName)
 			if err != nil {
-				return nil, &rs.SyncOpResults{}, wrapError(err, "unable to create role resource id")
+				return nil, nil, wrapError(err, "unable to create role resource id")
 			}
 			g := grant.NewGrant(resource, assignedEntitlement, rsId)
 			grants = append(grants, g)

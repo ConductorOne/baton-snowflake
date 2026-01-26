@@ -7,7 +7,7 @@ type Snowflake struct {
 	AccountIdentifier string `mapstructure:"account-identifier"`
 	AccountUrl string `mapstructure:"account-url"`
 	PrivateKey string `mapstructure:"private-key"`
-	PrivateKeyPath string `mapstructure:"private-key-path"`
+	PrivateKeyPath []byte `mapstructure:"private-key-path"`
 	UserIdentifier string `mapstructure:"user-identifier"`
 	SyncSecrets bool `mapstructure:"sync-secrets"`
 }

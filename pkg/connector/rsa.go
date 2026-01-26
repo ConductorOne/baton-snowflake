@@ -95,7 +95,7 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 			l.Warn("UserRsa failed", zap.String("username", userName), zap.Error(err))
 			return nil, &rs.SyncOpResults{}, nil
 		}
-		return nil, &rs.SyncOpResults{}, err
+		return nil, nil, err
 	}
 
 	l.Debug("UserRsa", zap.Any("user", user))
@@ -106,7 +106,7 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 	for _, idx := range indx {
 		resource, err := rsaResource(ctx, user, idx, parentResourceID)
 		if err != nil {
-			return nil, &rs.SyncOpResults{}, err
+			return nil, nil, err
 		}
 
 		if resource != nil {

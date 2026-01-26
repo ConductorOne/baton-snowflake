@@ -68,16 +68,16 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 
 // New returns a new instance of the connector.
 func New(ctx context.Context, cfg *config.Snowflake) (*Connector, error) {
-	if cfg.PrivateKeyPath == "" && cfg.PrivateKey == "" {
+	if len(cfg.PrivateKeyPath) == 0 && cfg.PrivateKey == "" {
 		return nil, fmt.Errorf("private-key or private-key-path is required")
 	}
-	if cfg.PrivateKeyPath != "" && cfg.PrivateKey != "" {
+	if len(cfg.PrivateKeyPath) > 0 && cfg.PrivateKey != "" {
 		return nil, fmt.Errorf("only one of private-key or private-key-path can be provided")
 	}
 	var privateKeyValue any
-	if cfg.PrivateKeyPath != "" {
+	if len(cfg.PrivateKeyPath) > 0 {
 		var err error
-		privateKeyValue, err = snowflake.ReadPrivateKey(cfg.PrivateKeyPath)
+		privateKeyValue, err = snowflake.ParsePrivateKey(cfg.PrivateKeyPath)
 		if err != nil {
 			return nil, err
 		}

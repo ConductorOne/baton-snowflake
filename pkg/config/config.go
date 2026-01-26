@@ -9,35 +9,38 @@ var (
 		"account-url",
 		field.WithDisplayName("Account URL"),
 		field.WithRequired(true),
-		field.WithDescription("Account URL."),
+		field.WithDescription("The full URL for your Snowflake account."),
 	)
 	AccountIdentifierField = field.StringField(
 		"account-identifier",
-		field.WithDisplayName("Account Identifier"),
+		field.WithDisplayName("Account ID / Locator"),
 		field.WithRequired(true),
-		field.WithDescription("Account Identifier."),
+		field.WithDescription("Your Snowflake account identifier. This can be either the Account ID (UUID format) or Account Locator (shorter identifier)."),
 	)
 	UserIdentifierField = field.StringField(
 		"user-identifier",
 		field.WithDisplayName("User Identifier"),
 		field.WithRequired(true),
-		field.WithDescription("User Identifier."),
+		field.WithDescription("The Snowflake username for the service account that will be used to authenticate."),
 	)
-	PrivateKeyPathField = field.StringField(
+	PrivateKeyPathField = field.FileUploadField(
 		"private-key-path",
+		[]string{".p8", ".pem", ".key"},
 		field.WithDisplayName("Private Key Path"),
-		field.WithDescription("Private Key Path."),
+		field.WithDescription("Path to the unencrypted private key file in PEM format."),
+		field.WithIsSecret(true),
+		field.WithExportTarget(field.ExportTargetCLIOnly),
 	)
 	PrivateKeyField = field.StringField(
 		"private-key",
 		field.WithDisplayName("Private Key"),
-		field.WithDescription("Private Key (PEM format)."),
+		field.WithDescription("The unencrypted private key value in PEM format."),
 		field.WithIsSecret(true),
 	)
 	SyncSecrets = field.BoolField(
 		"sync-secrets",
 		field.WithDisplayName("Sync Secrets"),
-		field.WithDescription("Whether to sync secrets or not"),
+		field.WithDescription("Enable synchronization of Snowflake secrets. When enabled, the connector will sync secrets from your Snowflake account."),
 		field.WithDefaultValue(false),
 	)
 
@@ -65,7 +68,7 @@ var (
 		configurationFields,
 		field.WithConstraints(fieldRelationships...),
 		field.WithConnectorDisplayName("Snowflake"),
-		field.WithHelpUrl("/docs/baton/snowflake"),
+		field.WithHelpUrl("/docs/baton/snowflake-v2"),
 		field.WithIconUrl("/static/app-icons/snowflake.svg"),
 	)
 )

@@ -104,12 +104,12 @@ func getUserDetailedStatus(user *snowflake.User) string {
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to get next page cursor")
+		return nil, nil, wrapError(err, "failed to get next page cursor")
 	}
 
 	users, _, err := o.client.ListUsers(ctx, cursor, resourcePageSize)
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to list users")
+		return nil, nil, wrapError(err, "failed to list users")
 	}
 
 	if len(users) == 0 {
@@ -120,7 +120,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	for _, user := range users {
 		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
 		if err != nil {
-			return nil, &rs.SyncOpResults{}, wrapError(err, "failed to create user resource")
+			return nil, nil, wrapError(err, "failed to create user resource")
 		}
 
 		resources = append(resources, resource)
@@ -132,7 +132,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	nextCursor, err := bag.NextToken(users[len(users)-1].Username)
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to create next page cursor")
+		return nil, nil, wrapError(err, "failed to create next page cursor")
 	}
 
 	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil

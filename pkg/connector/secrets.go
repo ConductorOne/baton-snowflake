@@ -61,7 +61,7 @@ func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceI
 
 	secrets, err := o.client.ListSecrets(ctx, databaseName)
 	if err != nil {
-		return nil, &rs.SyncOpResults{}, err
+		return nil, nil, err
 	}
 
 	var resources []*v2.Resource
@@ -69,7 +69,7 @@ func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceI
 	for _, secret := range secrets {
 		resource, err := secretResource(ctx, &secret, parentResourceID)
 		if err != nil {
-			return nil, &rs.SyncOpResults{}, err
+			return nil, nil, err
 		}
 		resources = append(resources, resource)
 	}
