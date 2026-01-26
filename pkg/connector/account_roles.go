@@ -6,7 +6,6 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	grant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
@@ -41,40 +40,40 @@ func accountRoleResource(accountRole *snowflake.AccountRole) (*v2.Resource, erro
 	return resource, nil
 }
 
-func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get next page offset")
+		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to get next page offset")
 	}
 
 	accountRoles, _, err := o.client.ListAccountRoles(ctx, cursor, resourcePageSize)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to list account roles")
+		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to list account roles")
 	}
 
 	var resources []*v2.Resource
 	for _, role := range accountRoles {
 		resource, err := accountRoleResource(&role) // #nosec G601
 		if err != nil {
-			return nil, "", nil, wrapError(err, "failed to create account role resource")
+			return nil, &rs.SyncOpResults{}, wrapError(err, "failed to create account role resource")
 		}
 
 		resources = append(resources, resource)
 	}
 
 	if isLastPage(len(accountRoles), resourcePageSize) {
-		return resources, "", nil, nil
+		return resources, &rs.SyncOpResults{}, nil
 	}
 
 	nextCursor, err := bag.NextToken(accountRoles[len(accountRoles)-1].Name)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to create next page cursor")
+		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to create next page cursor")
 	}
 
-	return resources, nextCursor, nil, nil
+	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil
 }
 
-func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	var rv []*v2.Entitlement
 
 	rv = append(rv, ent.NewAssignmentEntitlement(
@@ -92,13 +91,13 @@ func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resour
 		ent.WithDisplayName(fmt.Sprintf("%s account role %s", resource.DisplayName, assignedEntitlement)),
 	))
 
-	return rv, "", nil, nil
+	return rv, &rs.SyncOpResults{}, nil
 }
 
-func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	accountRoleGrantees, _, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to list account role grantees")
+		return nil, &rs.SyncOpResults{}, wrapError(err, "failed to list account role grantees")
 	}
 	var grants []*v2.Grant
 	for _, grantee := range accountRoleGrantees {
@@ -106,25 +105,21 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 		case "USER":
 			rsId, err := rs.NewResourceID(userResourceType, grantee.GranteeName)
 			if err != nil {
-				return nil, "", nil, wrapError(err, "unable to create user resource id")
+				return nil, &rs.SyncOpResults{}, wrapError(err, "unable to create user resource id")
 			}
 			g := grant.NewGrant(resource, assignedEntitlement, rsId)
 			grants = append(grants, g)
 		case "ROLE":
 			rsId, err := rs.NewResourceID(accountRoleResourceType, grantee.GranteeName)
 			if err != nil {
-				return nil, "", nil, wrapError(err, "unable to create role resource id")
+				return nil, &rs.SyncOpResults{}, wrapError(err, "unable to create role resource id")
 			}
 			g := grant.NewGrant(resource, assignedEntitlement, rsId)
 			grants = append(grants, g)
 		}
 	}
 
-	if isLastPage(len(accountRoleGrantees), resourcePageSize) {
-		return grants, "", nil, nil
-	}
-
-	return grants, "", nil, nil
+	return grants, &rs.SyncOpResults{}, nil
 }
 
 func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {

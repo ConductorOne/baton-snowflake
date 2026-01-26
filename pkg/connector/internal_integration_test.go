@@ -7,6 +7,7 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/assert"
@@ -34,9 +35,10 @@ func TestUserBuilderList(t *testing.T) {
 		resourceType: userResourceType,
 		client:       cli,
 	}
-	rv, _, _, err := u.List(ctx, &v2.ResourceId{}, &pagination.Token{})
+	rv, results, err := u.List(ctx, &v2.ResourceId{}, rs.SyncOpAttrs{PageToken: pagination.Token{}})
 	assert.Nil(t, err)
 	assert.NotNil(t, rv)
+	assert.NotNil(t, results)
 }
 
 func getCientForTesting(ctx context.Context) (*snowflake.Client, error) {

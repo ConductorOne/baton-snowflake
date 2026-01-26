@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
@@ -49,21 +47,21 @@ func secretResource(_ context.Context, secret *snowflake.Secret, id *v2.Resource
 
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
-func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, _ rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	if parentResourceID == nil {
 		// ignore parentResourceID
-		return nil, "", nil, nil
+		return nil, &rs.SyncOpResults{}, nil
 	}
 
 	if parentResourceID.ResourceType != databaseResourceType.Id {
-		return nil, "", nil, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
+		return nil, &rs.SyncOpResults{}, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
 	}
 
 	databaseName := parentResourceID.Resource
 
 	secrets, err := o.client.ListSecrets(ctx, databaseName)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, &rs.SyncOpResults{}, err
 	}
 
 	var resources []*v2.Resource
@@ -71,22 +69,22 @@ func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceI
 	for _, secret := range secrets {
 		resource, err := secretResource(ctx, &secret, parentResourceID)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, &rs.SyncOpResults{}, err
 		}
 		resources = append(resources, resource)
 	}
 
-	return resources, "", nil, nil
+	return resources, &rs.SyncOpResults{}, nil
 }
 
 // Entitlements always returns an empty slice for users.
-func (o *secretBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *secretBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, &rs.SyncOpResults{}, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
-func (o *secretBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *secretBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	return nil, &rs.SyncOpResults{}, nil
 }
 
 func newSecretBuilder(client *snowflake.Client) *secretBuilder {

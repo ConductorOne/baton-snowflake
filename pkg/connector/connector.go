@@ -18,9 +18,9 @@ type Connector struct {
 	syncSecrets bool
 }
 
-// ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
-func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
-	builders := []connectorbuilder.ResourceSyncer{
+// ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
+func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
+	builders := []connectorbuilder.ResourceSyncerV2{
 		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
 		newDatabaseBuilder(d.Client, d.syncSecrets),
