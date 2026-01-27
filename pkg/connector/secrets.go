@@ -50,11 +50,11 @@ func secretResource(_ context.Context, secret *snowflake.Secret, id *v2.Resource
 func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, _ rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	if parentResourceID == nil {
 		// ignore parentResourceID
-		return nil, &rs.SyncOpResults{}, nil
+		return nil, nil, nil
 	}
 
 	if parentResourceID.ResourceType != databaseResourceType.Id {
-		return nil, &rs.SyncOpResults{}, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
+		return nil, nil, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
 	}
 
 	databaseName := parentResourceID.Resource
@@ -74,17 +74,17 @@ func (o *secretBuilder) List(ctx context.Context, parentResourceID *v2.ResourceI
 		resources = append(resources, resource)
 	}
 
-	return resources, &rs.SyncOpResults{}, nil
+	return resources, nil, nil
 }
 
 // Entitlements always returns an empty slice for users.
 func (o *secretBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
-	return nil, &rs.SyncOpResults{}, nil
+	return nil, nil, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
 func (o *secretBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	return nil, &rs.SyncOpResults{}, nil
+	return nil, nil, nil
 }
 
 func newSecretBuilder(client *snowflake.Client) *secretBuilder {

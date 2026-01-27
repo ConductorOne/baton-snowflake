@@ -10,12 +10,12 @@ jobs:
   go-lint:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x
-      - name: Checkout code
-        uses: actions/checkout@v4
+          go-version-file: 'go.mod'
       - name: Run linters
         uses: golangci/golangci-lint-action@v8
         with:
@@ -24,17 +24,15 @@ jobs:
   go-test:
     strategy:
       matrix:
-        go-version: [1.23.x]
         platform: [ubuntu-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Install Go
-        if: success()
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ matrix.go-version }}
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
       - name: go tests
         run: go test -v -covermode=count -json ./... > test.json
       - name: annotate go tests
@@ -65,12 +63,12 @@ jobs:
       CONNECTOR_PRINCIPAL: 'user:9876'
       CONNECTOR_PRINCIPAL_TYPE: 'user'
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.23.x
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
       # Install any dependencies here (or delete this)
       # - name: Install postgres client
       #   run: sudo apt install postgresql-client

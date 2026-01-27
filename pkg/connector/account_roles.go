@@ -62,7 +62,7 @@ func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 	}
 
 	if isLastPage(len(accountRoles), resourcePageSize) {
-		return resources, &rs.SyncOpResults{}, nil
+		return resources, nil, nil
 	}
 
 	nextCursor, err := bag.NextToken(accountRoles[len(accountRoles)-1].Name)
@@ -119,7 +119,7 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 		}
 	}
 
-	return grants, &rs.SyncOpResults{}, nil
+	return grants, nil, nil
 }
 
 func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {

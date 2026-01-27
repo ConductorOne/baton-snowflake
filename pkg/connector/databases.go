@@ -73,7 +73,7 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 	}
 
 	if isLastPage(len(databases), resourcePageSize) {
-		return resources, &rs.SyncOpResults{}, nil
+		return resources, nil, nil
 	}
 
 	nextCursor, err := bag.NextToken(databases[len(databases)-1].Name)
@@ -95,7 +95,7 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 		ent.WithDisplayName(fmt.Sprintf("Is owner of %s", resource.DisplayName)),
 	))
 
-	return rv, &rs.SyncOpResults{}, nil
+	return rv, nil, nil
 }
 
 func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
@@ -106,7 +106,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	}
 
 	if database.Owner == "" {
-		return nil, &rs.SyncOpResults{}, nil
+		return nil, nil, nil
 	}
 
 	owner, _, err := o.client.GetAccountRole(ctx, database.Owner)
@@ -116,7 +116,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 
 	if owner == nil {
 		l.Warn("snowflake-connector: account role not found", zap.String("role", database.Owner))
-		return nil, &rs.SyncOpResults{}, nil
+		return nil, nil, nil
 	}
 
 	roleResource, err := accountRoleResource(owner)
@@ -139,7 +139,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 		),
 	}
 
-	return grants, &rs.SyncOpResults{}, nil
+	return grants, nil, nil
 }
 
 func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool) *databaseBuilder {

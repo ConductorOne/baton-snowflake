@@ -113,7 +113,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	if len(users) == 0 {
-		return nil, &rs.SyncOpResults{}, nil
+		return nil, nil, nil
 	}
 
 	var resources []*v2.Resource
@@ -127,7 +127,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	if isLastPage(len(users), resourcePageSize) {
-		return resources, &rs.SyncOpResults{}, nil
+		return resources, nil, nil
 	}
 
 	nextCursor, err := bag.NextToken(users[len(users)-1].Username)
@@ -140,12 +140,12 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 // Entitlements always returns an empty slice for users.
 func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
-	return nil, &rs.SyncOpResults{}, nil
+	return nil, nil, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
 func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	return nil, &rs.SyncOpResults{}, nil
+	return nil, nil, nil
 }
 
 func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {

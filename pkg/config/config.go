@@ -23,19 +23,21 @@ var (
 		field.WithRequired(true),
 		field.WithDescription("The Snowflake username for the service account that will be used to authenticate."),
 	)
-	PrivateKeyPathField = field.FileUploadField(
-		"private-key-path",
+	// PrivateKeyField: file upload for c1 UI.
+	PrivateKeyField = field.FileUploadField(
+		"private-key",
 		[]string{".p8", ".pem", ".key"},
+		field.WithDisplayName("Private Key"),
+		field.WithDescription("Select the unencrypted private key file in PEM format."),
+		field.WithIsSecret(true),
+	)
+	// PrivateKeyPathField: file path for CLI only.
+	PrivateKeyPathField = field.StringField(
+		"private-key-path",
 		field.WithDisplayName("Private Key Path"),
-		field.WithDescription("Path to the unencrypted private key file in PEM format."),
+		field.WithDescription("Path to the unencrypted private key file in PEM format (CLI only)."),
 		field.WithIsSecret(true),
 		field.WithExportTarget(field.ExportTargetCLIOnly),
-	)
-	PrivateKeyField = field.StringField(
-		"private-key",
-		field.WithDisplayName("Private Key"),
-		field.WithDescription("The unencrypted private key value in PEM format."),
-		field.WithIsSecret(true),
 	)
 	SyncSecrets = field.BoolField(
 		"sync-secrets",

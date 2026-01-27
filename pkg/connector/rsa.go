@@ -78,11 +78,11 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 
 	if parentResourceID == nil {
 		// ignore parentResourceID
-		return nil, &rs.SyncOpResults{}, nil
+		return nil, nil, nil
 	}
 
 	if parentResourceID.ResourceType != userResourceType.Id {
-		return nil, &rs.SyncOpResults{}, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
+		return nil, nil, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
 	}
 
 	userName := parentResourceID.Resource
@@ -93,7 +93,7 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 			// Ignore user that don't have permission to describe user
 			// TODO: api return 422 when user doesn't have permission to describe user
 			l.Warn("UserRsa failed", zap.String("username", userName), zap.Error(err))
-			return nil, &rs.SyncOpResults{}, nil
+			return nil, nil, nil
 		}
 		return nil, nil, err
 	}
@@ -114,17 +114,17 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 		}
 	}
 
-	return resources, &rs.SyncOpResults{}, nil
+	return resources, nil, nil
 }
 
 // Entitlements always returns an empty slice for users.
 func (o *rsaBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
-	return nil, &rs.SyncOpResults{}, nil
+	return nil, nil, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
 func (o *rsaBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	return nil, &rs.SyncOpResults{}, nil
+	return nil, nil, nil
 }
 
 func newRsaBuilder(client *snowflake.Client) *rsaBuilder {
