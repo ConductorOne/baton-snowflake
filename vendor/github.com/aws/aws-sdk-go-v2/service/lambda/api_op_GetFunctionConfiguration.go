@@ -68,17 +68,28 @@ type GetFunctionConfigurationOutput struct {
 	// x86_64 .
 	Architectures []types.Architecture
 
+	// Configuration for the capacity provider that manages compute resources for
+	// Lambda functions.
+	CapacityProviderConfig *types.CapacityProviderConfig
+
 	// The SHA256 hash of the function's deployment package.
 	CodeSha256 *string
 
 	// The size of the function's deployment package, in bytes.
 	CodeSize int64
 
+	// The SHA256 hash of the function configuration.
+	ConfigSha256 *string
+
 	// The function's dead letter queue.
 	DeadLetterConfig *types.DeadLetterConfig
 
 	// The function's description.
 	Description *string
+
+	// The function's durable execution configuration settings, if the function is
+	// configured for durability.
+	DurableConfig *types.DurableConfig
 
 	// The function's [environment variables]. Omitted from CloudTrail logs.
 	//
@@ -215,6 +226,10 @@ type GetFunctionConfigurationOutput struct {
 	// you can't invoke or modify the function.
 	StateReasonCode types.StateReasonCode
 
+	// The function's tenant isolation configuration settings. Determines whether the
+	// Lambda function runs on a shared or dedicated infrastructure per unique tenant.
+	TenancyConfig *types.TenancyConfig
+
 	// The amount of time in seconds that Lambda allows a function to run before
 	// stopping it.
 	Timeout *int32
@@ -322,16 +337,13 @@ func (c *Client) addOperationGetFunctionConfigurationMiddlewares(stack *middlewa
 	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addSpanInitializeStart(stack); err != nil {
+	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
 		return err
 	}
-	if err = addSpanInitializeEnd(stack); err != nil {
+	if err = addInterceptAttempt(stack, options); err != nil {
 		return err
 	}
-	if err = addSpanBuildRequestStart(stack); err != nil {
-		return err
-	}
-	if err = addSpanBuildRequestEnd(stack); err != nil {
+	if err = addInterceptors(stack, options); err != nil {
 		return err
 	}
 	return nil
@@ -360,7 +372,7 @@ type FunctionActiveWaiterOptions struct {
 	MinDelay time.Duration
 
 	// MaxDelay is the maximum amount of time to delay between retries. If unset or
-	// set to zero, FunctionActiveWaiter will use default max delay of 120 seconds.
+	// set to zero, FunctionActiveWaiter will use default max delay of 300 seconds.
 	// Note that MaxDelay must resolve to value greater than or equal to the MinDelay.
 	MaxDelay time.Duration
 
@@ -390,7 +402,7 @@ type FunctionActiveWaiter struct {
 func NewFunctionActiveWaiter(client GetFunctionConfigurationAPIClient, optFns ...func(*FunctionActiveWaiterOptions)) *FunctionActiveWaiter {
 	options := FunctionActiveWaiterOptions{}
 	options.MinDelay = 5 * time.Second
-	options.MaxDelay = 120 * time.Second
+	options.MaxDelay = 300 * time.Second
 	options.Retryable = functionActiveStateRetryable
 
 	for _, fn := range optFns {
@@ -425,7 +437,7 @@ func (w *FunctionActiveWaiter) WaitForOutput(ctx context.Context, params *GetFun
 	}
 
 	if options.MaxDelay <= 0 {
-		options.MaxDelay = 120 * time.Second
+		options.MaxDelay = 300 * time.Second
 	}
 
 	if options.MinDelay > options.MaxDelay {
@@ -555,7 +567,7 @@ type FunctionUpdatedWaiterOptions struct {
 	MinDelay time.Duration
 
 	// MaxDelay is the maximum amount of time to delay between retries. If unset or
-	// set to zero, FunctionUpdatedWaiter will use default max delay of 120 seconds.
+	// set to zero, FunctionUpdatedWaiter will use default max delay of 300 seconds.
 	// Note that MaxDelay must resolve to value greater than or equal to the MinDelay.
 	MaxDelay time.Duration
 
@@ -585,7 +597,7 @@ type FunctionUpdatedWaiter struct {
 func NewFunctionUpdatedWaiter(client GetFunctionConfigurationAPIClient, optFns ...func(*FunctionUpdatedWaiterOptions)) *FunctionUpdatedWaiter {
 	options := FunctionUpdatedWaiterOptions{}
 	options.MinDelay = 5 * time.Second
-	options.MaxDelay = 120 * time.Second
+	options.MaxDelay = 300 * time.Second
 	options.Retryable = functionUpdatedStateRetryable
 
 	for _, fn := range optFns {
@@ -620,7 +632,7 @@ func (w *FunctionUpdatedWaiter) WaitForOutput(ctx context.Context, params *GetFu
 	}
 
 	if options.MaxDelay <= 0 {
-		options.MaxDelay = 120 * time.Second
+		options.MaxDelay = 300 * time.Second
 	}
 
 	if options.MinDelay > options.MaxDelay {
@@ -751,7 +763,7 @@ type PublishedVersionActiveWaiterOptions struct {
 	MinDelay time.Duration
 
 	// MaxDelay is the maximum amount of time to delay between retries. If unset or
-	// set to zero, PublishedVersionActiveWaiter will use default max delay of 120
+	// set to zero, PublishedVersionActiveWaiter will use default max delay of 1560
 	// seconds. Note that MaxDelay must resolve to value greater than or equal to the
 	// MinDelay.
 	MaxDelay time.Duration
@@ -782,7 +794,7 @@ type PublishedVersionActiveWaiter struct {
 func NewPublishedVersionActiveWaiter(client GetFunctionConfigurationAPIClient, optFns ...func(*PublishedVersionActiveWaiterOptions)) *PublishedVersionActiveWaiter {
 	options := PublishedVersionActiveWaiterOptions{}
 	options.MinDelay = 5 * time.Second
-	options.MaxDelay = 120 * time.Second
+	options.MaxDelay = 1560 * time.Second
 	options.Retryable = publishedVersionActiveStateRetryable
 
 	for _, fn := range optFns {
@@ -817,7 +829,7 @@ func (w *PublishedVersionActiveWaiter) WaitForOutput(ctx context.Context, params
 	}
 
 	if options.MaxDelay <= 0 {
-		options.MaxDelay = 120 * time.Second
+		options.MaxDelay = 1560 * time.Second
 	}
 
 	if options.MinDelay > options.MaxDelay {

@@ -8,8 +8,12 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/conductorone/baton-snowflake/pkg/config"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type Connector struct {
@@ -120,4 +124,30 @@ func New(
 		Client:      client,
 		syncSecrets: syncSecrets,
 	}, nil
+}
+
+// NewConnector creates a new connector using the provided configuration.
+func NewConnector(ctx context.Context, cfg *config.Snowflake) (types.ConnectorServer, error) {
+	l := ctxzap.Extract(ctx)
+	cb, err := New(
+		ctx,
+		cfg.AccountURL,
+		cfg.AccountIdentifier,
+		cfg.UserIdentifier,
+		cfg.PrivateKeyPath,
+		cfg.PrivateKey,
+		cfg.SyncSecrets,
+	)
+	if err != nil {
+		l.Error("error creating connector", zap.Error(err))
+		return nil, err
+	}
+
+	c, err := connectorbuilder.NewConnector(ctx, cb)
+	if err != nil {
+		l.Error("error creating connector", zap.Error(err))
+		return nil, err
+	}
+
+	return c, nil
 }
