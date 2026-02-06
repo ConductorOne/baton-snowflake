@@ -4,8 +4,6 @@ import (
 	"context"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
@@ -20,7 +18,7 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
-func userResource(ctx context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
+func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"email":        user.Email,
 		"login":        user.Login,
@@ -103,51 +101,51 @@ func getUserDetailedStatus(user *snowflake.User) string {
 
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
-func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get next page cursor")
+		return nil, nil, wrapError(err, "failed to get next page cursor")
 	}
 
 	users, _, err := o.client.ListUsers(ctx, cursor, resourcePageSize)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to list users")
+		return nil, nil, wrapError(err, "failed to list users")
 	}
 
 	if len(users) == 0 {
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	var resources []*v2.Resource
 	for _, user := range users {
 		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
 		if err != nil {
-			return nil, "", nil, wrapError(err, "failed to create user resource")
+			return nil, nil, wrapError(err, "failed to create user resource")
 		}
 
 		resources = append(resources, resource)
 	}
 
 	if isLastPage(len(users), resourcePageSize) {
-		return resources, "", nil, nil
+		return resources, nil, nil
 	}
 
 	nextCursor, err := bag.NextToken(users[len(users)-1].Username)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to create next page cursor")
+		return nil, nil, wrapError(err, "failed to create next page cursor")
 	}
 
-	return resources, nextCursor, nil, nil
+	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil
 }
 
 // Entitlements always returns an empty slice for users.
-func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
-func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {

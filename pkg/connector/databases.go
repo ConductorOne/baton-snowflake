@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
@@ -53,40 +51,40 @@ func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resou
 	return resource, nil
 }
 
-func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, cursor, err := parseCursorFromToken(pToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get next page offset")
+		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
 	databases, _, err := o.client.ListDatabases(ctx, cursor, resourcePageSize)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to list databases")
+		return nil, nil, wrapError(err, "failed to list databases")
 	}
 
 	var resources []*v2.Resource
 	for _, database := range databases {
 		resource, err := databaseResource(&database, o.syncSecrets) // #nosec G601
 		if err != nil {
-			return nil, "", nil, wrapError(err, "failed to create database resource")
+			return nil, nil, wrapError(err, "failed to create database resource")
 		}
 
 		resources = append(resources, resource)
 	}
 
 	if isLastPage(len(databases), resourcePageSize) {
-		return resources, "", nil, nil
+		return resources, nil, nil
 	}
 
 	nextCursor, err := bag.NextToken(databases[len(databases)-1].Name)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to create next page cursor")
+		return nil, nil, wrapError(err, "failed to create next page cursor")
 	}
 
-	return resources, nextCursor, nil, nil
+	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil
 }
 
-func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	var rv []*v2.Entitlement
 
 	rv = append(rv, ent.NewAssignmentEntitlement(
@@ -97,33 +95,33 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 		ent.WithDisplayName(fmt.Sprintf("Is owner of %s", resource.DisplayName)),
 	))
 
-	return rv, "", nil, nil
+	return rv, nil, nil
 }
 
-func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	l := ctxzap.Extract(ctx)
 	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get database")
+		return nil, nil, wrapError(err, "failed to get database")
 	}
 
 	if database.Owner == "" {
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	owner, _, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to get owner account role")
+		return nil, nil, wrapError(err, "failed to get owner account role")
 	}
 
 	if owner == nil {
 		l.Warn("snowflake-connector: account role not found", zap.String("role", database.Owner))
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	roleResource, err := accountRoleResource(owner)
 	if err != nil {
-		return nil, "", nil, wrapError(err, "failed to create owner account role resource")
+		return nil, nil, wrapError(err, "failed to create owner account role resource")
 	}
 
 	var grants = []*v2.Grant{
@@ -141,7 +139,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, pTo
 		),
 	}
 
-	return grants, "", nil, nil
+	return grants, nil, nil
 }
 
 func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool) *databaseBuilder {

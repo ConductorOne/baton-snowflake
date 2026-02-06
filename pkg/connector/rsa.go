@@ -6,8 +6,6 @@ import (
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -35,7 +33,7 @@ func (o *rsaBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return rsaPublicKeyResourceType
 }
 
-func rsaResource(ctx context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id *v2.ResourceId) (*v2.Resource, error) {
+func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id *v2.ResourceId) (*v2.Resource, error) {
 	var rsaTime *time.Time
 
 	switch rsaIdx {
@@ -75,16 +73,16 @@ func rsaResource(ctx context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, 
 
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
-func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, _ rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	l := ctxzap.Extract(ctx)
 
 	if parentResourceID == nil {
 		// ignore parentResourceID
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	if parentResourceID.ResourceType != userResourceType.Id {
-		return nil, "", nil, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
+		return nil, nil, fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType)
 	}
 
 	userName := parentResourceID.Resource
@@ -95,9 +93,9 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 			// Ignore user that don't have permission to describe user
 			// TODO: api return 422 when user doesn't have permission to describe user
 			l.Warn("UserRsa failed", zap.String("username", userName), zap.Error(err))
-			return nil, "", nil, nil
+			return nil, nil, nil
 		}
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	l.Debug("UserRsa", zap.Any("user", user))
@@ -108,7 +106,7 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 	for _, idx := range indx {
 		resource, err := rsaResource(ctx, user, idx, parentResourceID)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 
 		if resource != nil {
@@ -116,17 +114,17 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 		}
 	}
 
-	return resources, "", nil, nil
+	return resources, nil, nil
 }
 
 // Entitlements always returns an empty slice for users.
-func (o *rsaBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *rsaBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
-func (o *rsaBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *rsaBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 func newRsaBuilder(client *snowflake.Client) *rsaBuilder {

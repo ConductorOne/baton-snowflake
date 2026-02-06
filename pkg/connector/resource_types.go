@@ -26,11 +26,13 @@ var (
 		Id:          "secret",
 		DisplayName: "Secret",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+		Annotations: getSkipEntitlementsAnnotation(),
 	}
 	rsaPublicKeyResourceType = &v2.ResourceType{
 		Id:          "rsa_public_key",
 		DisplayName: "RSA Public Key",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+		Annotations: getSkipEntitlementsAnnotation(),
 	}
 )
 
