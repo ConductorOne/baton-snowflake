@@ -43,13 +43,15 @@ var (
 			UserIdentifierField,
 			SyncSecrets,
 		},
-		field.FieldsMutuallyExclusive(
-			PrivateKeyPathField,
-			PrivateKeyField,
-		),
-		field.FieldsAtLeastOneUsed(
-			PrivateKeyPathField,
-			PrivateKeyField,
+		field.WithConstraints(
+			field.FieldsMutuallyExclusive(
+				PrivateKeyPathField,
+				PrivateKeyField,
+			),
+			field.FieldsAtLeastOneUsed(
+				PrivateKeyPathField,
+				PrivateKeyField,
+			),
 		),
 	)
 )
