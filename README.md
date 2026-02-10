@@ -2,7 +2,7 @@
 
 #
 
-`baton-snowflake` [![Go Reference](https://pkg.go.dev/badge/github.com/conductorone/baton-snowflake.svg)](https://pkg.go.dev/github.com/conductorone/baton-snowflake) ![main ci](https://github.com/conductorone/baton-snowflake/actions/workflows/main.yaml/badge.svg)
+`baton-snowflake` [![Go Reference](https://pkg.go.dev/badge/github.com/conductorone/baton-snowflake.svg)](https://pkg.go.dev/github.com/conductorone/baton-snowflake) ![ci](https://github.com/conductorone/baton-snowflake/actions/workflows/ci.yaml/badge.svg)
 
 `baton-snowflake` is a connector for Baton built using the [Baton SDK](https://github.com/conductorone/baton-sdk). It
 works with Snowflake V6 API.
