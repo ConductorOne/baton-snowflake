@@ -2,10 +2,18 @@ package connector
 
 import (
 	"context"
+	"fmt"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/annotations"
+	connectorbuilder "github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/crypto"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type userBuilder struct {
@@ -99,6 +107,56 @@ func getUserDetailedStatus(user *snowflake.User) string {
 	return ""
 }
 
+// extractProfileFields extracts optional fields from the accountInfo profile and populates the createReq.
+func extractProfileFields(accountInfo *v2.AccountInfo, createReq *snowflake.CreateUserRequest) {
+	profile := accountInfo.GetProfile()
+	if profile == nil {
+		return
+	}
+
+	pMap := profile.AsMap()
+
+	if loginNameStr, ok := pMap["login"].(string); ok && loginNameStr != "" {
+		createReq.LoginName = loginNameStr
+	}
+	if displayNameStr, ok := pMap["display_name"].(string); ok && displayNameStr != "" {
+		createReq.DisplayName = displayNameStr
+	}
+	if firstNameStr, ok := pMap["first_name"].(string); ok && firstNameStr != "" {
+		createReq.FirstName = firstNameStr
+	}
+	if lastNameStr, ok := pMap["last_name"].(string); ok && lastNameStr != "" {
+		createReq.LastName = lastNameStr
+	}
+	if emailStr, ok := pMap["email"].(string); ok && emailStr != "" {
+		createReq.Email = emailStr
+	}
+	if commentStr, ok := pMap["comment"].(string); ok && commentStr != "" {
+		createReq.Comment = commentStr
+	}
+	// Handle disabled as boolean
+	if disabledVal, ok := pMap["disabled"].(bool); ok {
+		createReq.Disabled = disabledVal
+	}
+	// Allow must_change_password to be overridden from profile (as boolean)
+	if mustChangeVal, ok := pMap["must_change_password"].(bool); ok {
+		createReq.MustChangePassword = mustChangeVal
+	}
+	// Default warehouse, namespace, role, and secondary roles
+	if defaultWarehouseStr, ok := pMap["default_warehouse"].(string); ok && defaultWarehouseStr != "" {
+		createReq.DefaultWarehouse = defaultWarehouseStr
+	}
+	if defaultNamespaceStr, ok := pMap["default_namespace"].(string); ok && defaultNamespaceStr != "" {
+		createReq.DefaultNamespace = defaultNamespaceStr
+	}
+	if defaultRoleStr, ok := pMap["default_role"].(string); ok && defaultRoleStr != "" {
+		createReq.DefaultRole = defaultRoleStr
+	}
+	if defaultSecondaryRolesStr, ok := pMap["default_secondary_roles"].(string); ok && defaultSecondaryRolesStr != "" {
+		createReq.DefaultSecondaryRoles = defaultSecondaryRolesStr
+	}
+}
+
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
@@ -146,6 +204,139 @@ func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ r
 // Grants always returns an empty slice for users since they don't have any entitlements.
 func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	return nil, nil, nil
+}
+
+// CreateAccountCapabilityDetails returns the capability details for user account provisioning.
+func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
+	return &v2.CredentialDetailsAccountProvisioning{
+		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
+		},
+		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+	}, nil, nil
+}
+
+// CreateAccount creates a new Snowflake user using the REST API.
+func (o *userBuilder) CreateAccount(
+	ctx context.Context,
+	accountInfo *v2.AccountInfo,
+	credentialOptions *v2.LocalCredentialOptions,
+) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	// Extract user name from accountInfo
+	// The user name should come from profile.name first (required in schema), then fall back to Login
+	userName := ""
+	if profile := accountInfo.GetProfile(); profile != nil {
+		if nameStr, ok := rs.GetProfileStringValue(profile, "name"); ok && nameStr != "" {
+			userName = nameStr
+		}
+	}
+	// Fall back to login if profile name is not available
+	if userName == "" {
+		userName = accountInfo.GetLogin()
+	}
+
+	if userName == "" {
+		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user name is required (provide via profile.name or login)")
+	}
+
+	// Build create user request
+	// name is the only required field for the create user request
+	createReq := &snowflake.CreateUserRequest{
+		Name: userName,
+	}
+
+	// Extract optional fields from profile (login and email are optional - only set if provided in profile)
+	extractProfileFields(accountInfo, createReq)
+
+	// Handle password generation
+	var plaintextData []*v2.PlaintextData
+	if credentialOptions != nil {
+		// Generate password if random password is requested
+		if randomPassword := credentialOptions.GetRandomPassword(); randomPassword != nil {
+			password, err := crypto.GeneratePassword(ctx, credentialOptions)
+			if err != nil {
+				return nil, nil, nil, wrapError(err, "failed to generate random password")
+			}
+			createReq.Password = password
+
+			// Return the plaintext password so it can be encrypted and returned to the caller
+			plaintextData = append(plaintextData, v2.PlaintextData_builder{
+				Name:        "password",
+				Description: "Generated password for Snowflake user",
+				Bytes:       []byte(password),
+			}.Build())
+		} else if plaintextPassword := credentialOptions.GetPlaintextPassword(); plaintextPassword != nil {
+			// Use provided plaintext password
+			createReq.Password = plaintextPassword.GetPlaintextPassword()
+		}
+	}
+
+	// Create user via REST API
+	user, rateLimitDesc, err := o.client.CreateUserREST(ctx, createReq)
+	if err != nil {
+		l.Error("failed to create user",
+			zap.String("user_name", userName),
+			zap.Error(err),
+		)
+		var annos annotations.Annotations
+		if rateLimitDesc != nil {
+			annos = annotations.New(rateLimitDesc)
+		}
+		return nil, nil, annos, wrapError(err, "failed to create user")
+	}
+
+	// Build resource for the new user
+	resource, err := userResource(ctx, user, o.syncSecrets)
+	if err != nil {
+		return nil, nil, nil, wrapError(err, "failed to create user resource")
+	}
+
+	l.Debug("user created successfully",
+		zap.String("user_name", user.Username),
+	)
+
+	// Build annotations with rate limit information
+	var annos annotations.Annotations
+	if rateLimitDesc != nil {
+		annos = annotations.New(rateLimitDesc)
+	}
+
+	// Return success result with plaintext data (password)
+	result := &v2.CreateAccountResponse_SuccessResult{
+		Resource: resource,
+	}
+
+	return result, plaintextData, annos, nil
+}
+
+// Delete deletes a Snowflake user using the REST API.
+func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, parentResourceID *v2.ResourceId) (annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	userName := resourceId.Resource
+	if userName == "" {
+		return nil, fmt.Errorf("baton-snowflake: user name is required")
+	}
+
+	// Delete user via REST API
+	// Using default options (ifExists=false)
+	_, err := o.client.DeleteUserREST(ctx, userName, nil)
+	if err != nil {
+		l.Error("failed to delete user",
+			zap.String("user_name", userName),
+			zap.Error(err),
+		)
+		return nil, wrapError(err, "failed to delete user")
+	}
+
+	l.Debug("user deleted successfully",
+		zap.String("user_name", userName),
+	)
+
+	return nil, nil
 }
 
 func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {

@@ -16,6 +16,8 @@ import (
 const (
 	AuthTypeHeaderKey   = "X-Snowflake-Authorization-Token-Type"
 	AuthTypeHeaderValue = "KEYPAIR_JWT"
+	RoleHeaderKey       = "X-Snowflake-Role"
+	UserAdminRole       = "USERADMIN"
 )
 
 const (
