@@ -33,6 +33,7 @@ func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resou
 	}
 
 	var opts []rs.ResourceOption
+	opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id}))
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
 	}
@@ -115,7 +116,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	}
 
 	if owner == nil {
-		l.Warn("snowflake-connector: account role not found", zap.String("role", database.Owner))
+		l.Debug("snowflake-connector: account role not found", zap.String("role", database.Owner))
 		return nil, nil, nil
 	}
 

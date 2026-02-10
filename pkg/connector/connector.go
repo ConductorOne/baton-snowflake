@@ -24,6 +24,7 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
 		newDatabaseBuilder(d.Client, d.syncSecrets),
+		newTableBuilder(d.Client),
 	}
 
 	if d.syncSecrets {
@@ -47,7 +48,7 @@ func (d *Connector) Asset(ctx context.Context, asset *v2.AssetRef) (string, io.R
 func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Baton Snowflake",
-		Description: "Connector syncing users, databases and account roles from Snowflake.",
+		Description: "Connector syncing users, databases, tables, and account roles from Snowflake.",
 	}, nil
 }
 

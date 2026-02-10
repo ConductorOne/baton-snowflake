@@ -22,6 +22,11 @@ var (
 		DisplayName: "Database",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
 	}
+	tableResourceType = &v2.ResourceType{
+		Id:          "table",
+		DisplayName: "Table",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+	}
 	secretResourceType = &v2.ResourceType{
 		Id:          "secret",
 		DisplayName: "Secret",
