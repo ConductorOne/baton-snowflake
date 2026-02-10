@@ -50,7 +50,6 @@ jobs:
       BATON_ACCOUNT_IDENTIFIER: ${{ secrets.BATON_ACCOUNT_IDENTIFIER }}
       BATON_USER_IDENTIFIER: ${{ secrets.BATON_USER_IDENTIFIER }}
       BATON_ACCOUNT_URL: ${{ secrets.BATON_ACCOUNT_URL }}
-      BATON_PRIVATE_KEY: ${{ secrets.BATON_PRIVATE_KEY }}
       # The following parameters are passed to grant/revoke commands
       # Change these to the correct IDs for your test data
       CONNECTOR_GRANT: 'grant:entitlement:group:1234:member:user:9876'
@@ -73,13 +72,20 @@ jobs:
       - name: Install baton
         run: ./scripts/get-baton.sh && mv baton /usr/local/bin
 
+      - name: Setup private key
+        run: |
+          echo "${{ secrets.BATON_PRIVATE_KEY }}" | base64 -d > /tmp/snowflake_key.p8
+          chmod 600 /tmp/snowflake_key.p8
+
       - name: Test Account Provisioning
-        uses: ConductorOne/github-workflows/.github/actions/account-provisioning@main
+        uses: ConductorOne/github-workflows/actions/account-provisioning@v4
         with:
           connector: './baton-snowflake'
-          account-email: 'test-provisioning@example.com'
-          account-login: 'test-provisioning-user'
-          account-profile: '{"first_name": "Test", "last_name": "User", "name": "test-provisioning-user", "email": "test-provisioning@example.com"}'
+          account-email: 'testProvisioningUser@example.com'
+          account-login: 'testProvisioningUser'
+          account-profile: '{"first_name": "Test", "last_name": "User", "name": "testProvisioningUser", "email": "testProvisioningUser@example.com"}'
           account-type: 'user'
           search-method: 'email'
+        env:
+          BATON_PRIVATE_KEY_PATH: /tmp/snowflake_key.p8
 
