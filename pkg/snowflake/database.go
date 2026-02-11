@@ -79,18 +79,20 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	if err != nil {
 		return nil, nil, err
 	}
+	defer closeResponseBody(resp)
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListDatabases", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
 	dbs, err := response.GetDatabases()
 	if err != nil {
@@ -118,11 +120,13 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http
 		}
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
 	databases, err := response.GetDatabases()
 	if err != nil {
 		return nil, resp, err
 	}
+
 	if len(databases) == 0 {
 		return nil, resp, fmt.Errorf("database with name %s not found", name)
 	} else if len(databases) > 1 {

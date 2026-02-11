@@ -3,6 +3,9 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
+	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -244,8 +247,10 @@ func (o *userBuilder) CreateAccount(
 
 	// Build create user request
 	// name is the only required field for the create user request
+	// Quote the username to preserve case sensitivity (Snowflake stores unquoted identifiers in uppercase)
+	quotedUserName := fmt.Sprintf("\"%s\"", userName)
 	createReq := &snowflake.CreateUserRequest{
-		Name: userName,
+		Name: quotedUserName,
 	}
 
 	// Extract optional fields from profile (login and email are optional - only set if provided in profile)
@@ -275,7 +280,7 @@ func (o *userBuilder) CreateAccount(
 	}
 
 	// Create user via REST API
-	user, rateLimitDesc, err := o.client.CreateUserREST(ctx, createReq)
+	_, rateLimitDesc, err := o.client.CreateUserREST(ctx, createReq)
 	if err != nil {
 		l.Error("failed to create user",
 			zap.String("user_name", userName),
@@ -286,6 +291,19 @@ func (o *userBuilder) CreateAccount(
 			annos = annotations.New(rateLimitDesc)
 		}
 		return nil, nil, annos, wrapError(err, "failed to create user")
+	}
+
+	user, err := o.fetchUserWithSQLRetry(ctx, userName)
+	if err != nil {
+		l.Error("failed to fetch user after creation",
+			zap.String("user_name", userName),
+			zap.Error(err),
+		)
+		annos := annotations.Annotations{}
+		if rateLimitDesc != nil {
+			annos.Update(rateLimitDesc)
+		}
+		return nil, nil, annos, wrapError(err, "failed to fetch user after creation")
 	}
 
 	// Build resource for the new user
@@ -312,6 +330,68 @@ func (o *userBuilder) CreateAccount(
 	return result, plaintextData, annos, nil
 }
 
+// fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
+// Retries up to 5 times with exponential backoff if we get a 422 Unprocessable Entity error.
+func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string) (*snowflake.User, error) {
+	l := ctxzap.Extract(ctx)
+	maxRetries := 5
+	baseDelay := 500 * time.Millisecond
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		user, resp, err := o.client.GetUser(ctx, userName)
+		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
+			l.Debug("user fetched successfully via SQL API",
+				zap.String("user_name", userName),
+			)
+			return user, nil
+		}
+
+		// Check if we got a 422 error
+		is422 := false
+		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+			is422 = true
+		} else if err != nil {
+			errStr := strings.ToLower(err.Error())
+			is422 = strings.Contains(errStr, "422") || strings.Contains(errStr, "unprocessable entity")
+		}
+
+		// If it's not a 422 error, or we've exhausted retries, return the error
+		if !is422 || attempt >= maxRetries {
+			if err != nil {
+				return nil, err
+			}
+			if resp != nil && resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("baton-snowflake: unexpected status code %d when fetching user", resp.StatusCode)
+			}
+			return nil, fmt.Errorf("baton-snowflake: failed to fetch user")
+		}
+
+		// Calculate exponential backoff: baseDelay * 2^attempt
+		delay := baseDelay
+		for i := 0; i < attempt; i++ {
+			delay *= 2
+		}
+
+		l.Debug("user fetch returned 422, retrying with SQL API",
+			zap.String("user_name", userName),
+			zap.Int("attempt", attempt+1),
+			zap.Int("max_retries", maxRetries),
+			zap.Duration("delay", delay),
+		)
+
+		// Wait before retrying
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+			// Continue to next iteration
+		}
+	}
+
+	// This should not be reached, but handle it just in case
+	return nil, fmt.Errorf("baton-snowflake: failed to fetch user after %d retries", maxRetries)
+}
+
 // Delete deletes a Snowflake user using the REST API.
 func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, parentResourceID *v2.ResourceId) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
@@ -321,9 +401,12 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, par
 		return nil, fmt.Errorf("baton-snowflake: user name is required")
 	}
 
+	// Quote the username to match the case-sensitive identifier created with quotes
+	// This ensures we delete the exact case-sensitive identifier
+	quotedUserName := fmt.Sprintf("\"%s\"", userName)
 	// Delete user via REST API
 	// Using default options (ifExists=false)
-	_, err := o.client.DeleteUserREST(ctx, userName, nil)
+	_, err := o.client.DeleteUserREST(ctx, quotedUserName, nil)
 	if err != nil {
 		l.Error("failed to delete user",
 			zap.String("user_name", userName),

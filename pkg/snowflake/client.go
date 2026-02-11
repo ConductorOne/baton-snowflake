@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -241,4 +242,13 @@ func Contains[T comparable](ts []T, val T) bool {
 		}
 	}
 	return false
+}
+
+// closeResponseBody drains and closes the response body if it exists.
+// This ensures proper resource cleanup and allows connection reuse.
+func closeResponseBody(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
 }

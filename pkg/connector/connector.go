@@ -54,7 +54,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 				"name": {
 					DisplayName: "User Name",
 					Required:    true,
-					Description: "The name of the user (required). Can be provided via login or profile.name",
+					Description: "The name of the user (required - case-sensitive)",
 					Placeholder: "username",
 					Order:       0,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
@@ -125,7 +125,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					DisplayName: "Disabled",
 					Required:    false,
 					Description: "Whether the user account should be disabled",
-					Order:       8,
+					Order:       7,
 					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
 						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
 					},
@@ -134,7 +134,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					DisplayName: "Must Change Password",
 					Required:    false,
 					Description: "Whether the user must change their password on next login",
-					Order:       9,
+					Order:       8,
 					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
 						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
 					},
@@ -144,7 +144,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default warehouse to use when this user starts a session",
 					Placeholder: "COMPUTE_WH",
-					Order:       10,
+					Order:       9,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
@@ -154,7 +154,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default namespace to use when this user starts a session",
 					Placeholder: "DATABASE.SCHEMA",
-					Order:       11,
+					Order:       10,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
@@ -164,7 +164,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default role to use when this user starts a session",
 					Placeholder: "PUBLIC",
-					Order:       12,
+					Order:       11,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
@@ -174,7 +174,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default secondary roles of this user to use when starting a session. Valid values: ALL or NONE. Default is ALL.",
 					Placeholder: "ALL",
-					Order:       13,
+					Order:       12,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},

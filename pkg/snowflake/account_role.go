@@ -84,18 +84,20 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	if err != nil {
 		return nil, nil, err
 	}
+	defer closeResponseBody(resp)
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListAccountRoles", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
 	accountRoles, err := response.GetAccountRoles()
 	if err != nil {
@@ -120,17 +122,21 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 	if err != nil {
 		return nil, nil, err
 	}
+	defer closeResponseBody(resp)
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
-	return response.GetAccountRoleGrantees(), resp, nil
+	accountRoleGrantees := response.GetAccountRoleGrantees()
+
+	return accountRoleGrantees, resp, nil
 }
 
 func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, *http.Response, error) {
@@ -148,6 +154,7 @@ func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountR
 	if err != nil {
 		return nil, nil, err
 	}
+	defer closeResponseBody(resp)
 
 	accountRoles, err := response.GetAccountRoles()
 	if err != nil {
@@ -171,7 +178,13 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 		return nil, err
 	}
 
-	return c.Do(req)
+	resp, err := c.Do(req)
+	if err != nil {
+		return resp, err
+	}
+	defer closeResponseBody(resp)
+
+	return resp, nil
 }
 
 func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
@@ -184,5 +197,11 @@ func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName strin
 		return nil, err
 	}
 
-	return c.Do(req)
+	resp, err := c.Do(req)
+	if err != nil {
+		return resp, err
+	}
+	defer closeResponseBody(resp)
+
+	return resp, nil
 }

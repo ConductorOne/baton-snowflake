@@ -34,7 +34,8 @@ type CreateUserRequest struct {
 
 // CreateUserResponse represents the response from creating a user.
 type CreateUserResponse struct {
-	User    User   `json:"user"`
+	Status  string `json:"status,omitempty"`
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -71,6 +72,8 @@ func createUsersApiUrl(accountUrl string) (*url.URL, error) {
 }
 
 // createUserApiUrl creates the URL for a specific user REST API endpoint.
+// The userName should be the actual identifier (case-sensitive if created with quotes).
+// url.JoinPath will properly encode the path segment.
 func createUserApiUrl(accountUrl string, userName string) (*url.URL, error) {
 	stringUrl, err := url.JoinPath(accountUrl, "api/v2/users", userName)
 	if err != nil {
@@ -81,7 +84,15 @@ func createUserApiUrl(accountUrl string, userName string) (*url.URL, error) {
 }
 
 // doRequest is a helper method that wraps HTTP request logic for REST API calls.
-func (c *Client) doRequest(ctx context.Context, method string, endpoint *url.URL, target interface{}, body interface{}, opts ...uhttp.RequestOption) (*http.Header, *v2.RateLimitDescription, error) {
+// Returns the response headers, rate limit description, status code, and error.
+func (c *Client) doRequest(
+	ctx context.Context,
+	method string,
+	endpoint *url.URL,
+	target interface{},
+	body interface{},
+	opts ...uhttp.RequestOption,
+) (*http.Header, *v2.RateLimitDescription, int, error) {
 	var requestOptions []uhttp.RequestOption
 	requestOptions = append(requestOptions,
 		uhttp.WithAcceptJSONHeader(),
@@ -96,7 +107,7 @@ func (c *Client) doRequest(ctx context.Context, method string, endpoint *url.URL
 
 	request, err := c.NewRequest(ctx, method, endpoint, requestOptions...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("baton-snowflake: failed to create request: %w", err)
+		return nil, nil, 0, fmt.Errorf("baton-snowflake: failed to create request: %w", err)
 	}
 
 	var rateLimitData v2.RateLimitDescription
@@ -111,7 +122,7 @@ func (c *Client) doRequest(ctx context.Context, method string, endpoint *url.URL
 
 	response, err := c.Do(request, doOptions...)
 	if err != nil {
-		return nil, &rateLimitData, fmt.Errorf("baton-snowflake: request failed: %w", err)
+		return nil, &rateLimitData, 0, fmt.Errorf("baton-snowflake: request failed: %w", err)
 	}
 	defer func() {
 		if response == nil || response.Body == nil {
@@ -124,42 +135,46 @@ func (c *Client) doRequest(ctx context.Context, method string, endpoint *url.URL
 		}
 	}()
 
-	if response.StatusCode >= 300 {
+	statusCode := response.StatusCode
+	if statusCode >= 300 {
 		// Try to extract error message from response
 		if errorResponse.Code != "" || errorResponse.ErrMsg != "" {
-			return &response.Header, &rateLimitData, fmt.Errorf("baton-snowflake: snowflake API error: %s - %s", errorResponse.Code, errorResponse.Message())
+			return &response.Header, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: snowflake API error: %s - %s", errorResponse.Code, errorResponse.Message())
 		}
-		return &response.Header, &rateLimitData, fmt.Errorf("baton-snowflake: unexpected status code %d", response.StatusCode)
+		return &response.Header, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: unexpected status code %d", statusCode)
 	}
 
-	return &response.Header, &rateLimitData, nil
+	return &response.Header, &rateLimitData, statusCode, nil
 }
 
 // CreateUserREST creates a new Snowflake user using the REST API.
 // POST /api/v2/users.
-func (c *Client) CreateUserREST(ctx context.Context, req *CreateUserRequest) (*User, *v2.RateLimitDescription, error) {
+// Returns completed=true if status code is 200, false if 202 (accepted but not completed).
+func (c *Client) CreateUserREST(ctx context.Context, req *CreateUserRequest) (bool, *v2.RateLimitDescription, error) {
 	l := ctxzap.Extract(ctx)
 
 	usersApiUrl, err := createUsersApiUrl(c.AccountUrl)
 	if err != nil {
-		return nil, nil, fmt.Errorf("baton-snowflake: failed to create users API URL: %w", err)
+		return false, nil, fmt.Errorf("baton-snowflake: failed to create users API URL: %w", err)
 	}
 
 	var response CreateUserResponse
-	_, rateLimitDesc, err := c.doRequest(ctx, http.MethodPost, usersApiUrl, &response, req, uhttp.WithHeader(RoleHeaderKey, UserAdminRole))
+	_, rateLimitDesc, statusCode, err := c.doRequest(ctx, http.MethodPost, usersApiUrl, &response, req, uhttp.WithHeader(RoleHeaderKey, UserAdminRole))
 	if err != nil {
-		l.Error("baton-snowflake: failed to create user",
-			zap.String("user_name", req.Name),
-			zap.Error(err),
-		)
-		return nil, rateLimitDesc, err
+		return false, rateLimitDesc, err
 	}
 
-	l.Debug("baton-snowflake: user created successfully",
-		zap.String("user_name", response.User.Username),
+	completed := statusCode == http.StatusOK
+
+	l.Debug("baton-snowflake: user creation request completed",
+		zap.String("user_name", req.Name),
+		zap.Int("status_code", statusCode),
+		zap.Bool("completed", completed),
+		zap.String("status", response.Status),
+		zap.String("message", response.Message),
 	)
 
-	return &response.User, rateLimitDesc, nil
+	return completed, rateLimitDesc, nil
 }
 
 // DeleteUserREST deletes a Snowflake user using the REST API.
@@ -181,7 +196,7 @@ func (c *Client) DeleteUserREST(ctx context.Context, userName string, options *D
 		userApiUrl.RawQuery = query.Encode()
 	}
 
-	_, rateLimitDesc, err := c.doRequest(ctx, http.MethodDelete, userApiUrl, nil, nil, uhttp.WithHeader(RoleHeaderKey, UserAdminRole))
+	_, rateLimitDesc, _, err := c.doRequest(ctx, http.MethodDelete, userApiUrl, nil, nil, uhttp.WithHeader(RoleHeaderKey, UserAdminRole))
 	if err != nil {
 		l.Error("baton-snowflake: failed to delete user",
 			zap.String("user_name", userName),

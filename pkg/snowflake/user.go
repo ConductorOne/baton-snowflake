@@ -31,9 +31,11 @@ var (
 	}
 
 	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
+	// These fields are ignored when parsing DESCRIBE USER output.
 	ignoredUserStructFieldsForDescribeOperation = []string{
 		"HasRSAPublicKey",
 		"HasPassword",
+		"LastSuccessLogin", // May not be present for newly created users
 	}
 
 	secretStructFieldToColumnMap = map[string]string{
@@ -199,15 +201,17 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	if err != nil {
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
 	users, err := response.GetUsers()
 	if err != nil {
@@ -232,6 +236,7 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, *http.Res
 	if err != nil {
 		return nil, resp, err
 	}
+	defer closeResponseBody(resp)
 
 	user, err := response.GetUser()
 	if err != nil {
