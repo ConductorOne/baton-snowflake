@@ -168,7 +168,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		return nil, nil, wrapError(err, "failed to get next page cursor")
 	}
 
-	users, _, err := o.client.ListUsers(ctx, cursor, resourcePageSize)
+	users, err := o.client.ListUsers(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list users")
 	}
@@ -338,8 +338,8 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 	baseDelay := 500 * time.Millisecond
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		user, resp, err := o.client.GetUser(ctx, userName)
-		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
+		user, statusCode, err := o.client.GetUser(ctx, userName)
+		if err == nil && statusCode == http.StatusOK {
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),
 			)
@@ -348,7 +348,7 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 
 		// Check if we got a 422 error
 		is422 := false
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+		if statusCode == http.StatusUnprocessableEntity {
 			is422 = true
 		} else if err != nil {
 			errStr := strings.ToLower(err.Error())
@@ -360,8 +360,8 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 			if err != nil {
 				return nil, err
 			}
-			if resp != nil && resp.StatusCode != http.StatusOK {
-				return nil, fmt.Errorf("baton-snowflake: unexpected status code %d when fetching user", resp.StatusCode)
+			if statusCode != http.StatusOK {
+				return nil, fmt.Errorf("baton-snowflake: unexpected status code %d when fetching user", statusCode)
 			}
 			return nil, fmt.Errorf("baton-snowflake: failed to fetch user")
 		}

@@ -61,7 +61,7 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
-	databases, _, err := o.client.ListDatabases(ctx, cursor, resourcePageSize)
+	databases, err := o.client.ListDatabases(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list databases")
 	}

@@ -3,7 +3,6 @@ package snowflake
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -60,7 +59,7 @@ func (r *ListDatabasesRawResponse) GetDatabases() ([]Database, error) {
 	return databases, nil
 }
 
-func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([]Database, *http.Response, error) {
+func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([]Database, error) {
 	var queries []string
 
 	if cursor != "" {
@@ -71,13 +70,13 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListDatabasesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
@@ -86,30 +85,30 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
 	dbs, err := response.GetDatabases()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
-	return dbs, resp, nil
+	return dbs, nil
 }
 
-func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http.Response, error) {
+func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", name),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListDatabasesRawResponse
@@ -124,14 +123,14 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http
 
 	databases, err := response.GetDatabases()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
 	if len(databases) == 0 {
-		return nil, resp, fmt.Errorf("database with name %s not found", name)
+		return nil, fmt.Errorf("database with name %s not found", name)
 	} else if len(databases) > 1 {
-		return nil, resp, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
+		return nil, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
 	}
 
-	return &databases[0], resp, nil
+	return &databases[0], nil
 }

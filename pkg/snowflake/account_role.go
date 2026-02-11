@@ -3,7 +3,6 @@ package snowflake
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -65,7 +64,7 @@ func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() []AccountR
 	return accountRoleGrantees
 }
 
-func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int) ([]AccountRole, *http.Response, error) {
+func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int) ([]AccountRole, error) {
 	var queries []string
 
 	if cursor != "" {
@@ -76,13 +75,13 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListAccountRolesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
@@ -91,117 +90,117 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
 	accountRoles, err := response.GetAccountRoles()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
-	return accountRoles, resp, nil
+	return accountRoles, nil
 }
 
-func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) ([]AccountRoleGrantee, *http.Response, error) {
+func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) ([]AccountRoleGrantee, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", roleName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListAccountRoleGranteesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
 	accountRoleGrantees := response.GetAccountRoleGrantees()
 
-	return accountRoleGrantees, resp, nil
+	return accountRoleGrantees, nil
 }
 
-func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, *http.Response, error) {
+func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", roleName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListAccountRolesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer closeResponseBody(resp)
 
 	accountRoles, err := response.GetAccountRoles()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
 	if len(accountRoles) == 0 {
-		return nil, resp, nil
+		return nil, nil
 	}
 
-	return &accountRoles[0], resp, nil
+	return &accountRoles[0], nil
 }
 
-func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
+func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) error {
 	queries := []string{
 		fmt.Sprintf("GRANT ROLE \"%s\" TO USER \"%s\";", roleName, userName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return resp, err
+		return err
 	}
 	defer closeResponseBody(resp)
 
-	return resp, nil
+	return nil
 }
 
-func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) (*http.Response, error) {
+func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) error {
 	queries := []string{
 		fmt.Sprintf("REVOKE ROLE \"%s\" FROM USER \"%s\";", roleName, userName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return resp, err
+		return err
 	}
 	defer closeResponseBody(resp)
 
-	return resp, nil
+	return nil
 }
