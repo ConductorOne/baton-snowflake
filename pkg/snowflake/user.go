@@ -197,20 +197,20 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 
 	var response ListUsersRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	defer closeResponseBody(resp)
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	defer closeResponseBody(resp)
 
 	users, err := response.GetUsers()
 	if err != nil {
@@ -232,6 +232,7 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, int, erro
 
 	var response GetUserRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		statusCode := 0
 		if resp != nil {
@@ -239,7 +240,6 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, int, erro
 		}
 		return nil, statusCode, err
 	}
-	defer closeResponseBody(resp)
 
 	user, err := response.GetUser()
 	if err != nil {

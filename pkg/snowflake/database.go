@@ -75,10 +75,10 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 	var response ListDatabasesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	defer closeResponseBody(resp)
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListDatabases", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
@@ -88,10 +88,10 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 		return nil, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	defer closeResponseBody(resp)
 
 	dbs, err := response.GetDatabases()
 	if err != nil {
@@ -113,13 +113,13 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, error
 
 	var response ListDatabasesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		if IsUnprocessableEntity(resp, err) {
 			return nil, resp, nil
 		}
 		return nil, resp, err
 	}
-	defer closeResponseBody(resp)
 
 	databases, err := response.GetDatabases()
 	if err != nil {

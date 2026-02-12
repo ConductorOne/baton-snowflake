@@ -121,9 +121,6 @@ func (c *Client) doRequest(
 	}
 
 	response, err := c.Do(request, doOptions...)
-	if err != nil {
-		return nil, &rateLimitData, 0, fmt.Errorf("baton-snowflake: request failed: %w", err)
-	}
 	defer func() {
 		if response == nil || response.Body == nil {
 			return
@@ -134,6 +131,9 @@ func (c *Client) doRequest(
 			log.Printf("baton-snowflake: warning: failed to close response body: %v", closeErr)
 		}
 	}()
+	if err != nil {
+		return nil, &rateLimitData, 0, fmt.Errorf("baton-snowflake: request failed: %w", err)
+	}
 
 	statusCode := response.StatusCode
 	if statusCode >= 300 {
