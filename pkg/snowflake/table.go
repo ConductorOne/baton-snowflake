@@ -104,7 +104,9 @@ func (c *Client) ListTables(ctx context.Context, database, cursor string, limit 
 
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -118,7 +120,9 @@ func (c *Client) ListTables(ctx context.Context, database, cursor string, limit 
 		}
 		return nil, resp, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	tables, err := response.ListTables()
 	if err != nil {
@@ -160,7 +164,9 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 		}
 		return nil, "", nil, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -174,7 +180,9 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 		}
 		return nil, "", resp, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	tables, err := response.ListTables()
 	if err != nil {
@@ -250,7 +258,9 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 		}
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -260,7 +270,9 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	if err != nil {
 		return nil, resp, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	tables, err := response.ListTables()
 	if err != nil {
@@ -366,7 +378,9 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 
 		return nil, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -380,7 +394,9 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 		}
 		return nil, err
 	}
-	defer resp.Body.Close()
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 
 	grants, err := response.GetTableGrants()
 	if err != nil {

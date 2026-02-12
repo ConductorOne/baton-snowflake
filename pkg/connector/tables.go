@@ -60,22 +60,28 @@ func getObjectKind(resource *v2.Resource) string {
 	return defaultObjectKind
 }
 
-func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Resource, databaseName string) bool {
+func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Resource, databaseName string) (bool, error) {
 	if v := getTableProfileField(resource, "database_is_shared_system"); v != nil {
 		switch val := v.(type) {
 		case bool:
-			return val
+			return val, nil
 		case float64:
-			return val != 0
+			return val != 0, nil
 		case string:
-			return val == "true" || val == "1"
+			return val == "true" || val == "1", nil
 		}
 	}
 	db, resp, err := o.client.GetDatabase(ctx, databaseName)
-	if err != nil || db == nil || snowflake.IsUnprocessableEntity(resp, err) {
-		return true
+	if snowflake.IsUnprocessableEntity(resp, err) {
+		return true, nil
 	}
-	return db.IsSharedOrSystem()
+	if err != nil {
+		return false, err
+	}
+	if db == nil {
+		return false, fmt.Errorf("GetDatabase returned nil database for %q", databaseName)
+	}
+	return db.IsSharedOrSystem(), nil
 }
 
 type tableBuilder struct {
@@ -201,7 +207,11 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	}
 	var rv []*v2.Entitlement
 
-	if o.isDBSharedOrSystem(ctx, resource, databaseName) {
+	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, resource, databaseName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if isSharedOrSystem {
 		return append(rv, ownerEntitlementOnly(resource)...), &rs.SyncOpResults{}, nil
 	}
 
@@ -238,7 +248,11 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		return nil, nil, err
 	}
 
-	if o.isDBSharedOrSystem(ctx, resource, databaseName) {
+	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, resource, databaseName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if isSharedOrSystem {
 		return nil, &rs.SyncOpResults{}, nil
 	}
 
@@ -312,14 +326,22 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	}
 
 	if ownerPrincipalID == nil {
-		table, _, _ := o.client.GetTable(ctx, databaseName, schemaName, tableName)
+		table, _, err := o.client.GetTable(ctx, databaseName, schemaName, tableName)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to get table for owner fallback")
+		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {
 			owner, ownerResp, err := o.client.GetAccountRole(ctx, table.Owner)
 			if snowflake.IsUnprocessableEntity(ownerResp, err) {
 				// system role, skip
-			} else if err == nil && owner != nil {
+			} else if err != nil {
+				return nil, nil, wrapError(err, fmt.Sprintf("failed to get account role for table owner %q", table.Owner))
+			} else if owner != nil {
 				roleResource, err := accountRoleResource(owner)
-				if err == nil && !grantsContainPrincipal(grants, roleResource.Id, ownerEntitlementID) {
+				if err != nil {
+					return nil, nil, wrapError(err, fmt.Sprintf("failed to build resource for table owner %q", table.Owner))
+				}
+				if !grantsContainPrincipal(grants, roleResource.Id, ownerEntitlementID) {
 					grants = append(grants, grant.NewGrant(resource, ownerEntitlement, roleResource.Id, addExpandableOpts(owner.Name)...))
 				}
 			}
