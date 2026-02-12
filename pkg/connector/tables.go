@@ -332,11 +332,12 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {
 			owner, ownerResp, err := o.client.GetAccountRole(ctx, table.Owner)
-			if snowflake.IsUnprocessableEntity(ownerResp, err) {
+			switch {
+			case snowflake.IsUnprocessableEntity(ownerResp, err):
 				// system role, skip
-			} else if err != nil {
+			case err != nil:
 				return nil, nil, wrapError(err, fmt.Sprintf("failed to get account role for table owner %q", table.Owner))
-			} else if owner != nil {
+			case owner != nil:
 				roleResource, err := accountRoleResource(owner)
 				if err != nil {
 					return nil, nil, wrapError(err, fmt.Sprintf("failed to build resource for table owner %q", table.Owner))
