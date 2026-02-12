@@ -165,7 +165,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	return allForDB, &rs.SyncOpResults{}, nil
 }
 
-func parseTableResourceID(resource *v2.Resource) (databaseName, schemaName, tableName string, err error) {
+func parseTableResourceID(resource *v2.Resource) (string, string, string, error) {
 	parts := strings.Split(resource.Id.Resource, ".")
 	if len(parts) != 3 {
 		return "", "", "", wrapError(fmt.Errorf("invalid table resource ID format: %s", resource.Id.Resource), "expected format: database.schema.table")
