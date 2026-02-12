@@ -130,21 +130,12 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
 					},
 				},
-				"must_change_password": {
-					DisplayName: "Must Change Password",
-					Required:    false,
-					Description: "Whether the user must change their password on next login",
-					Order:       8,
-					Field: &v2.ConnectorAccountCreationSchema_Field_BoolField{
-						BoolField: &v2.ConnectorAccountCreationSchema_BoolField{},
-					},
-				},
 				"default_warehouse": {
 					DisplayName: "Default Warehouse",
 					Required:    false,
 					Description: "The default warehouse to use when this user starts a session",
 					Placeholder: "COMPUTE_WH",
-					Order:       9,
+					Order:       8,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
@@ -154,7 +145,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default namespace to use when this user starts a session",
 					Placeholder: "DATABASE.SCHEMA",
-					Order:       10,
+					Order:       9,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
@@ -164,7 +155,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default role to use when this user starts a session",
 					Placeholder: "PUBLIC",
-					Order:       11,
+					Order:       10,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
@@ -174,7 +165,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 					Required:    false,
 					Description: "The default secondary roles of this user to use when starting a session. Valid values: ALL or NONE. Default is ALL.",
 					Placeholder: "ALL",
-					Order:       12,
+					Order:       11,
 					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},

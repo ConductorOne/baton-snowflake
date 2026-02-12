@@ -141,10 +141,6 @@ func extractProfileFields(accountInfo *v2.AccountInfo, createReq *snowflake.Crea
 	if disabledVal, ok := pMap["disabled"].(bool); ok {
 		createReq.Disabled = disabledVal
 	}
-	// Allow must_change_password to be overridden from profile (as boolean)
-	if mustChangeVal, ok := pMap["must_change_password"].(bool); ok {
-		createReq.MustChangePassword = mustChangeVal
-	}
 	// Default warehouse, namespace, role, and secondary roles
 	if defaultWarehouseStr, ok := pMap["default_warehouse"].(string); ok && defaultWarehouseStr != "" {
 		createReq.DefaultWarehouse = defaultWarehouseStr
@@ -214,7 +210,6 @@ func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.C
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
-			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
 		},
 		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 	}, nil, nil
@@ -259,6 +254,7 @@ func (o *userBuilder) CreateAccount(
 	// Handle password generation
 	var plaintextData []*v2.PlaintextData
 	if credentialOptions != nil {
+		createReq.MustChangePassword = credentialOptions.GetForceChangeAtNextLogin()
 		// Generate password if random password is requested
 		if randomPassword := credentialOptions.GetRandomPassword(); randomPassword != nil {
 			password, err := crypto.GeneratePassword(ctx, credentialOptions)
