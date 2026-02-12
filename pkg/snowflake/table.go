@@ -245,6 +245,9 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	var response ListTablesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+			return nil, resp, nil
+		}
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
@@ -319,11 +322,15 @@ func (r *ListTableGrantsRawResponse) GetTableGrants() ([]TableGrant, error) {
 	return grants, nil
 }
 
-func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableName string) ([]TableGrant, error) {
+// ListTableGrants uses objectKind to run SHOW GRANTS ON TABLE or ON VIEW (Snowflake requires the correct type).
+func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableName, objectKind string) ([]TableGrant, error) {
 	l := ctxzap.Extract(ctx)
-
+	objectType := "TABLE"
+	if strings.EqualFold(objectKind, "VIEW") {
+		objectType = "VIEW"
+	}
 	queries := []string{
-		fmt.Sprintf("SHOW GRANTS ON TABLE \"%s\".\"%s\".\"%s\";", database, schema, tableName),
+		fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";", objectType, database, schema, tableName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

@@ -25,15 +25,17 @@ func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name": database.Name,
+		"name":                database.Name,
+		"kind":                database.Kind,
+		"origin":              database.Origin,
+		"is_shared_or_system": database.IsSharedOrSystem(),
 	}
 
 	databaseTraits := []rs.AppTraitOption{
 		rs.WithAppProfile(profile),
 	}
 
-	var opts []rs.ResourceOption
-	opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id}))
+	opts := []rs.ResourceOption{rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id})}
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
 	}
@@ -105,39 +107,27 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get database")
 	}
-
-	if database.Owner == "" {
+	if database == nil || database.Owner == "" {
 		return nil, nil, nil
 	}
 
-	owner, _, err := o.client.GetAccountRole(ctx, database.Owner)
+	owner, ownerResp, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
+		if snowflake.IsUnprocessableEntity(ownerResp, err) {
+			l.Debug("database owner role 422, skipping grants", zap.String("database", resource.Id.Resource), zap.String("owner", database.Owner))
+			return nil, nil, nil
+		}
 		return nil, nil, wrapError(err, "failed to get owner account role")
 	}
-
 	if owner == nil {
-		l.Debug("snowflake-connector: account role not found", zap.String("role", database.Owner))
 		return nil, nil, nil
 	}
-
 	roleResource, err := accountRoleResource(owner)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to create owner account role resource")
 	}
-
-	var grants = []*v2.Grant{
-		grant.NewGrant(
-			resource,
-			ownerEntitlement,
-			roleResource.Id,
-			grant.WithAnnotation(
-				&v2.GrantExpandable{
-					EntitlementIds:  []string{fmt.Sprintf("account_role:%s:%s", owner.Name, assignedEntitlement)},
-					Shallow:         true,
-					ResourceTypeIds: []string{accountRoleResourceType.Id, userResourceType.Id},
-				},
-			),
-		),
+	grants := []*v2.Grant{
+		grant.NewGrant(resource, ownerEntitlement, roleResource.Id, addExpandableOpts(owner.Name)...),
 	}
 
 	return grants, nil, nil
