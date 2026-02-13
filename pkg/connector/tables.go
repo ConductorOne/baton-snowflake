@@ -10,8 +10,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 )
 
 const (
@@ -143,32 +141,39 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	}
 	isSharedOrSystemDB := parentDB != nil && parentDB.IsSharedOrSystem()
 
-	// SHOW TABLES IN ACCOUNT returns tables from all DBs; we paginate, filter to this database, and return only its tables.
-	var allForDB []*v2.Resource
-	cursor := opts.PageToken.Token
-	const accountPageSize = 200
-	for {
-		tables, nextCursor, _, err := o.client.ListTablesInAccount(ctx, cursor, accountPageSize)
-		if err != nil {
-			return nil, nil, wrapError(err, "failed to list tables in account")
-		}
-		for i := range tables {
-			t := &tables[i]
-			if strings.EqualFold(t.DatabaseName, databaseName) {
-				resource, err := tableResource(ctx, t, parentResourceID, isSharedOrSystemDB)
-				if err != nil {
-					return nil, nil, wrapError(err, "failed to create table resource")
-				}
-				allForDB = append(allForDB, resource)
-			}
-		}
-		if nextCursor == "" {
-			break
-		}
-		cursor = nextCursor
+	// Paginate at List boundary: fetch one page from SHOW TABLES IN ACCOUNT, filter to this database, return page + next token.
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: tableResourceType.Id, Resource: parentResourceID.Resource})
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to get next page cursor")
 	}
 
-	return allForDB, &rs.SyncOpResults{}, nil
+	const accountPageSize = 200
+	tables, nextCursor, _, err := o.client.ListTablesInAccount(ctx, cursor, accountPageSize)
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to list tables in account")
+	}
+
+	var resources []*v2.Resource
+	for i := range tables {
+		t := &tables[i]
+		if strings.EqualFold(t.DatabaseName, databaseName) {
+			resource, err := tableResource(ctx, t, parentResourceID, isSharedOrSystemDB)
+			if err != nil {
+				return nil, nil, wrapError(err, "failed to create table resource")
+			}
+			resources = append(resources, resource)
+		}
+	}
+
+	if nextCursor != "" {
+		nextToken, err := bag.NextToken(nextCursor)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to create next page cursor")
+		}
+		return resources, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+	}
+
+	return resources, &rs.SyncOpResults{}, nil
 }
 
 func parseTableResourceID(resource *v2.Resource) (string, string, string, error) {
@@ -218,8 +223,7 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	objectKind := getObjectKind(resource)
 	tableGrants, err := o.client.ListTableGrants(ctx, databaseName, schemaName, tableName, objectKind)
 	if err != nil {
-		ctxzap.Extract(ctx).Debug("list table grants failed, returning owner entitlement only", zap.String("table", resource.Id.Resource), zap.Error(err))
-		return append(rv, ownerEntitlementOnly(resource)...), &rs.SyncOpResults{}, nil
+		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
 
 	privileges := make(map[string]bool)
@@ -288,6 +292,8 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 						ownerPrincipalID = principalId
 						ownerExpandableRoleName = tg.GranteeName
 					}
+				} else {
+					return nil, nil, wrapError(err, fmt.Sprintf("failed to get account role %q for table grants", tg.GranteeName))
 				}
 				continue
 			}
@@ -296,7 +302,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 			}
 			principalResource, err = accountRoleResource(role)
 			if err != nil {
-				continue
+				return nil, nil, wrapError(err, fmt.Sprintf("failed to build resource for role %q", tg.GranteeName))
 			}
 			roleNameForExpandable = role.Name
 			if entitlementID == privilegeOwner {
@@ -305,12 +311,15 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 			}
 		case grantedToUser:
 			user, _, err := o.client.GetUser(ctx, tg.GranteeName)
-			if err != nil || user == nil {
+			if err != nil {
+				return nil, nil, wrapError(err, fmt.Sprintf("failed to get user %q for table grants", tg.GranteeName))
+			}
+			if user == nil {
 				continue
 			}
 			principalResource, err = userResource(ctx, user, false)
 			if err != nil {
-				continue
+				return nil, nil, wrapError(err, fmt.Sprintf("failed to build resource for user %q", tg.GranteeName))
 			}
 		default:
 			continue

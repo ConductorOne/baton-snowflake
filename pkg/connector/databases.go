@@ -9,8 +9,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 )
 
 type databaseBuilder struct {
@@ -102,7 +100,6 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 }
 
 func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	l := ctxzap.Extract(ctx)
 	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get database")
@@ -114,8 +111,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	owner, ownerResp, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
 		if snowflake.IsUnprocessableEntity(ownerResp, err) {
-			l.Debug("database owner role 422, skipping grants", zap.String("database", resource.Id.Resource), zap.String("owner", database.Owner))
-			return nil, nil, nil
+			return nil, nil, wrapError(err, fmt.Sprintf("insufficient privileges for database owner role %q (database %q)", database.Owner, resource.Id.Resource))
 		}
 		return nil, nil, wrapError(err, "failed to get owner account role")
 	}
