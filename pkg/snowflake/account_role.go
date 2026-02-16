@@ -138,33 +138,37 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 	return accountRoleGrantees, nil
 }
 
-func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, error) {
+func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, int, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", roleName),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var response ListAccountRolesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, err
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
+		}
+		return nil, statusCode, err
 	}
 
 	accountRoles, err := response.GetAccountRoles()
 	if err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
 
 	if len(accountRoles) == 0 {
-		return nil, nil
+		return nil, resp.StatusCode, nil
 	}
 
-	return &accountRoles[0], nil
+	return &accountRoles[0], resp.StatusCode, nil
 }
 
 func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) error {
