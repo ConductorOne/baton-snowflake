@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -11,14 +12,18 @@ import (
 )
 
 var databaseStructFieldToColumnMap = map[string]string{
-	"Name":  "name",
-	"Owner": "owner",
+	"Name":   "name",
+	"Owner":  "owner",
+	"Kind":   "kind",
+	"Origin": "origin",
 }
 
 type (
 	Database struct {
-		Name  string
-		Owner string
+		Name   string
+		Owner  string
+		Kind   string // STANDARD, SHARED, APPLICATION, etc.
+		Origin string // empty for normal DBs, "<account>.<share>" for shared/system DBs
 	}
 	ListDatabasesRawResponse struct {
 		StatementsApiResponseBase
@@ -27,6 +32,19 @@ type (
 
 func (d *Database) GetColumnName(fieldName string) string {
 	return databaseStructFieldToColumnMap[fieldName]
+}
+
+// IsSharedOrSystem returns true if the database is shared, imported, or a system database.
+// Snowflake returns 422 on SHOW GRANTS for objects in these databases.
+func (d *Database) IsSharedOrSystem() bool {
+	if d.Origin != "" {
+		return true
+	}
+	if d.Owner == "" || strings.EqualFold(d.Owner, "SNOWFLAKE") {
+		return true
+	}
+	kind := strings.ToUpper(strings.TrimSpace(d.Kind))
+	return kind == "SHARED" || kind == "APPLICATION" || kind == "IMPORTED DATABASE"
 }
 
 func (r *ListDatabasesRawResponse) GetDatabases() ([]Database, error) {
@@ -95,7 +113,10 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http
 	var response ListDatabasesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
-		return nil, nil, err
+		if IsUnprocessableEntity(resp, err) {
+			return nil, resp, nil
+		}
+		return nil, resp, err
 	}
 
 	databases, err := response.GetDatabases()

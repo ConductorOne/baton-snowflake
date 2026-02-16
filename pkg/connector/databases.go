@@ -8,9 +8,10 @@ import (
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 )
 
 type databaseBuilder struct {
@@ -25,14 +26,17 @@ func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name": database.Name,
+		"name":                database.Name,
+		"kind":                database.Kind,
+		"origin":              database.Origin,
+		"is_shared_or_system": database.IsSharedOrSystem(),
 	}
 
 	databaseTraits := []rs.AppTraitOption{
 		rs.WithAppProfile(profile),
 	}
 
-	var opts []rs.ResourceOption
+	opts := []rs.ResourceOption{rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id})}
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
 	}
@@ -99,44 +103,31 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 }
 
 func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	l := ctxzap.Extract(ctx)
 	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get database")
 	}
-
-	if database.Owner == "" {
+	if database == nil || database.Owner == "" {
 		return nil, nil, nil
 	}
 
-	owner, _, err := o.client.GetAccountRole(ctx, database.Owner)
+	owner, ownerResp, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
+		if snowflake.IsUnprocessableEntity(ownerResp, err) {
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for database owner role %q (database %q): %w", database.Owner, resource.Id.Resource, err)
+			return nil, nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+		}
 		return nil, nil, wrapError(err, "failed to get owner account role")
 	}
-
 	if owner == nil {
-		l.Warn("snowflake-connector: account role not found", zap.String("role", database.Owner))
 		return nil, nil, nil
 	}
-
 	roleResource, err := accountRoleResource(owner)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to create owner account role resource")
 	}
-
-	var grants = []*v2.Grant{
-		grant.NewGrant(
-			resource,
-			ownerEntitlement,
-			roleResource.Id,
-			grant.WithAnnotation(
-				&v2.GrantExpandable{
-					EntitlementIds:  []string{fmt.Sprintf("account_role:%s:%s", owner.Name, assignedEntitlement)},
-					Shallow:         true,
-					ResourceTypeIds: []string{accountRoleResourceType.Id, userResourceType.Id},
-				},
-			),
-		),
+	grants := []*v2.Grant{
+		grant.NewGrant(resource, ownerEntitlement, roleResource.Id, addExpandableOpts(owner.Name)...),
 	}
 
 	return grants, nil, nil
