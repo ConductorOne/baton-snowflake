@@ -143,10 +143,16 @@ func escapeLikePattern(s string) string {
 	return s
 }
 
+// escapeDoubleQuotedIdentifier escapes a string for use inside Snowflake double-quoted identifiers.
+// Double quotes inside the identifier must be escaped by doubling them ("").
+func escapeDoubleQuotedIdentifier(s string) string {
+	return strings.ReplaceAll(s, `"`, `""`)
+}
+
 func (c *Client) GetTable(ctx context.Context, database, schema, tableName string) (*Table, *http.Response, error) {
 	likePattern := escapeLikePattern(tableName)
 	queries := []string{
-		fmt.Sprintf("SHOW TABLES LIKE '%s' ESCAPE '\\' IN SCHEMA \"%s\".\"%s\" LIMIT 1;", likePattern, database, schema),
+		fmt.Sprintf("SHOW TABLES LIKE '%s' ESCAPE '\\' IN SCHEMA \"%s\".\"%s\" LIMIT 1;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -246,7 +252,7 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 		objectType = "VIEW"
 	}
 	queries := []string{
-		fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";", objectType, database, schema, tableName),
+		fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";", objectType, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), escapeDoubleQuotedIdentifier(tableName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
