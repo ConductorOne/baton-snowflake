@@ -132,19 +132,16 @@ func (c *Client) doRequest(
 		}
 	}()
 	if err != nil {
-		return nil, &rateLimitData, 0, fmt.Errorf("baton-snowflake: request failed: %w", err)
-	}
-
-	statusCode := response.StatusCode
-	if statusCode >= 300 {
-		// Try to extract error message from response
-		if errorResponse.Code != "" || errorResponse.ErrMsg != "" {
-			return &response.Header, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: snowflake API error: %s - %s", errorResponse.Code, errorResponse.Message())
+		statusCode := 0
+		if response != nil {
+			statusCode = response.StatusCode
 		}
-		return &response.Header, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: unexpected status code %d", statusCode)
+		return nil, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: request failed: %w", err)
 	}
 
-	return &response.Header, &rateLimitData, statusCode, nil
+	// WithErrorResponse ensures c.Do() returns an error for status >= 300,
+	// so if we reach here, statusCode is guaranteed to be < 300
+	return &response.Header, &rateLimitData, response.StatusCode, nil
 }
 
 // CreateUserREST creates a new Snowflake user using the REST API.

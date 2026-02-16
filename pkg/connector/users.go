@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -210,6 +211,7 @@ func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.C
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
 		},
 		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 	}, nil, nil
@@ -256,23 +258,19 @@ func (o *userBuilder) CreateAccount(
 	if credentialOptions != nil {
 		createReq.MustChangePassword = credentialOptions.GetForceChangeAtNextLogin()
 		// Generate password if random password is requested
-		if randomPassword := credentialOptions.GetRandomPassword(); randomPassword != nil {
-			password, err := crypto.GeneratePassword(ctx, credentialOptions)
-			if err != nil {
-				return nil, nil, nil, wrapError(err, "failed to generate random password")
-			}
-			createReq.Password = password
-
-			// Return the plaintext password so it can be encrypted and returned to the caller
-			plaintextData = append(plaintextData, v2.PlaintextData_builder{
-				Name:        "password",
-				Description: "Generated password for Snowflake user",
-				Bytes:       []byte(password),
-			}.Build())
-		} else if plaintextPassword := credentialOptions.GetPlaintextPassword(); plaintextPassword != nil {
-			// Use provided plaintext password
-			createReq.Password = plaintextPassword.GetPlaintextPassword()
+		if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil {
+			return nil, nil, nil, errors.New("unsupported credential option")
 		}
+		plaintextPassword, err := crypto.GeneratePassword(ctx, credentialOptions)
+		if err != nil {
+			return nil, nil, nil, wrapError(err, "failed to generate password")
+		}
+		createReq.Password = plaintextPassword
+		plaintextData = append(plaintextData, &v2.PlaintextData{
+			Name:        "password",
+			Description: "Password for the user",
+			Bytes:       []byte(plaintextPassword),
+		})
 	}
 
 	// Create user via REST API
@@ -400,9 +398,11 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, par
 	// Quote the username to match the case-sensitive identifier created with quotes
 	// This ensures we delete the exact case-sensitive identifier
 	quotedUserName := fmt.Sprintf("\"%s\"", userName)
+	options := &snowflake.DeleteUserOptions{
+		IfExists: true,
+	}
 	// Delete user via REST API
-	// Using default options (ifExists=false)
-	_, err := o.client.DeleteUserREST(ctx, quotedUserName, nil)
+	_, err := o.client.DeleteUserREST(ctx, quotedUserName, options)
 	if err != nil {
 		l.Error("failed to delete user",
 			zap.String("user_name", userName),

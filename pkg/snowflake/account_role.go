@@ -79,8 +79,8 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	}
 
 	var response ListAccountRolesRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp)
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +92,8 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	if err != nil {
 		return nil, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp)
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, err
 	}
@@ -117,8 +117,8 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 	}
 
 	var response ListAccountRoleGranteesRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp)
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +127,8 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 	if err != nil {
 		return nil, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp)
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, err
 	}
