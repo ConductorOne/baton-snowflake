@@ -10,6 +10,8 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
@@ -87,7 +89,7 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN ACCOUNT")
-			return nil, "", nil, fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT: %w", err)
+			return nil, "", nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT: %v", err)
 		}
 		return nil, "", nil, err
 	}
@@ -103,7 +105,7 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN ACCOUNT (statement result)")
-			return nil, "", nil, fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT (statement result): %w", err)
+			return nil, "", nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT (statement result): %v", err)
 		}
 		return nil, "", resp, err
 	}
@@ -273,7 +275,7 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 				l.Error(errMsg.Message, zap.String("table", tableRef))
 			}
 
-			return nil, fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
+			return nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
 		}
 
 		return nil, err
@@ -290,7 +292,7 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
-			return nil, fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %w", database, schema, tableName, err)
+			return nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %v", database, schema, tableName, err)
 		}
 		return nil, err
 	}

@@ -8,6 +8,9 @@ import (
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
 
@@ -111,7 +114,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	owner, ownerResp, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
 		if snowflake.IsUnprocessableEntity(ownerResp, err) {
-			return nil, nil, wrapError(err, fmt.Sprintf("insufficient privileges for database owner role %q (database %q)", database.Owner, resource.Id.Resource))
+			return nil, nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges for database owner role %q (database %q): %v", database.Owner, resource.Id.Resource, err)
 		}
 		return nil, nil, wrapError(err, "failed to get owner account role")
 	}
