@@ -114,7 +114,8 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	owner, ownerResp, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
 		if snowflake.IsUnprocessableEntity(ownerResp, err) {
-			return nil, nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges for database owner role %q (database %q): %v", database.Owner, resource.Id.Resource, err)
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for database owner role %q (database %q): %w", database.Owner, resource.Id.Resource, err)
+			return nil, nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
 		return nil, nil, wrapError(err, "failed to get owner account role")
 	}

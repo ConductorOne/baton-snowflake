@@ -89,7 +89,8 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN ACCOUNT")
-			return nil, "", nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT: %v", err)
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT: %w", err)
+			return nil, "", nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
 		return nil, "", nil, err
 	}
@@ -105,7 +106,8 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN ACCOUNT (statement result)")
-			return nil, "", nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT (statement result): %v", err)
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT (statement result): %w", err)
+			return nil, "", nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
 		return nil, "", resp, err
 	}
@@ -261,9 +263,9 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 				Message string `json:"message"`
 			}
 
-			err := json.NewDecoder(resp.Body).Decode(&errMsg)
-			if err != nil {
-				return nil, err
+			decodeErr := json.NewDecoder(resp.Body).Decode(&errMsg)
+			if decodeErr != nil {
+				return nil, fmt.Errorf("received 422 but failed to decode response body: %w (request error: %s)", decodeErr, err.Error())
 			}
 
 			// code: 003001
@@ -292,7 +294,8 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
-			return nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %v", database, schema, tableName, err)
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %w", database, schema, tableName, err)
+			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
 		return nil, err
 	}
