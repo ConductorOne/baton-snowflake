@@ -22,7 +22,7 @@ type CreateUserRequest struct {
 	LastName              string `json:"lastName,omitempty"`
 	Email                 string `json:"email,omitempty"`
 	Comment               string `json:"comment,omitempty"`
-	Password              string `json:"password,omitempty"`
+	Password              string `json:"password,omitempty"` // #nosec G117: used for Snowflake API request body
 	MustChangePassword    bool   `json:"mustChangePassword,omitempty"`
 	Disabled              bool   `json:"disabled,omitempty"`
 	DefaultWarehouse      string `json:"defaultWarehouse,omitempty"`
