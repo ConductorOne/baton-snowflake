@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 
@@ -93,6 +92,7 @@ func (c *Client) doRequest(
 	body interface{},
 	opts ...uhttp.RequestOption,
 ) (*http.Header, *v2.RateLimitDescription, int, error) {
+	l := ctxzap.Extract(ctx)
 	var requestOptions []uhttp.RequestOption
 	requestOptions = append(requestOptions,
 		uhttp.WithAcceptJSONHeader(),
@@ -128,7 +128,7 @@ func (c *Client) doRequest(
 		_, _ = io.Copy(io.Discard, response.Body)
 		closeErr := response.Body.Close()
 		if closeErr != nil {
-			log.Printf("baton-snowflake: warning: failed to close response body: %v", closeErr)
+			l.Debug("baton-snowflake: warning: failed to close response body", zap.Error(closeErr))
 		}
 	}()
 	if err != nil {
