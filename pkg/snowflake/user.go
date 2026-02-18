@@ -221,8 +221,10 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 }
 
 func (c *Client) GetUser(ctx context.Context, username string) (*User, int, error) {
+	// Escape double quotes in username by doubling them before quoting
+	escapedUsername := escapeDoubleQuotedIdentifier(username)
 	queries := []string{
-		fmt.Sprintf("DESCRIBE USER \"%s\";", username),
+		fmt.Sprintf("DESCRIBE USER \"%s\";", escapedUsername),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

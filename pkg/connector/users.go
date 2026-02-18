@@ -226,26 +226,23 @@ func (o *userBuilder) CreateAccount(
 	l := ctxzap.Extract(ctx)
 
 	// Extract user name from accountInfo
-	// The user name should come from profile.name first (required in schema), then fall back to Login
+	// The user name must be provided in profile.name (required in schema)
 	userName := ""
 	if profile := accountInfo.GetProfile(); profile != nil {
 		if nameStr, ok := rs.GetProfileStringValue(profile, "name"); ok && nameStr != "" {
 			userName = nameStr
 		}
 	}
-	// Fall back to login if profile name is not available
-	if userName == "" {
-		userName = accountInfo.GetLogin()
-	}
 
 	if userName == "" {
-		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user name is required (provide via profile.name or login)")
+		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user name is required (provide via profile.name)")
 	}
 
 	// Build create user request
 	// name is the only required field for the create user request
 	// Quote the username to preserve case sensitivity (Snowflake stores unquoted identifiers in uppercase)
-	quotedUserName := fmt.Sprintf("\"%s\"", userName)
+	// Escape any double quotes in the username by doubling them
+	quotedUserName := quoteSnowflakeIdentifier(userName)
 	createReq := &snowflake.CreateUserRequest{
 		Name: quotedUserName,
 	}
@@ -397,7 +394,8 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, par
 
 	// Quote the username to match the case-sensitive identifier created with quotes
 	// This ensures we delete the exact case-sensitive identifier
-	quotedUserName := fmt.Sprintf("\"%s\"", userName)
+	// Escape any double quotes in the username by doubling them
+	quotedUserName := quoteSnowflakeIdentifier(userName)
 	options := &snowflake.DeleteUserOptions{
 		IfExists: true,
 	}
