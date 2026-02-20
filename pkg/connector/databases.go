@@ -61,7 +61,7 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
-	databases, _, err := o.client.ListDatabases(ctx, cursor, resourcePageSize)
+	databases, err := o.client.ListDatabases(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list databases")
 	}
@@ -111,9 +111,9 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 		return nil, nil, nil
 	}
 
-	owner, ownerResp, err := o.client.GetAccountRole(ctx, database.Owner)
+	owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, database.Owner)
 	if err != nil {
-		if snowflake.IsUnprocessableEntity(ownerResp, err) {
+		if snowflake.IsUnprocessableEntity(ownerStatusCode, err) {
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for database owner role %q (database %q): %w", database.Owner, resource.Id.Resource, err)
 			return nil, nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}

@@ -69,8 +69,8 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 			return val == "true" || val == "1", nil
 		}
 	}
-	db, resp, err := o.client.GetDatabase(ctx, databaseName)
-	if snowflake.IsUnprocessableEntity(resp, err) {
+	db, statusCode, err := o.client.GetDatabase(ctx, databaseName)
+	if snowflake.IsUnprocessableEntity(statusCode, err) {
 		return true, nil
 	}
 	if err != nil {
@@ -148,7 +148,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	}
 
 	const accountPageSize = 200
-	tables, nextCursor, _, err := o.client.ListTablesInAccount(ctx, cursor, accountPageSize)
+	tables, nextCursor, err := o.client.ListTablesInAccount(ctx, cursor, accountPageSize)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list tables in account")
 	}
@@ -280,9 +280,9 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 
 		switch tg.GrantedTo {
 		case grantedToRole:
-			role, resp, err := o.client.GetAccountRole(ctx, tg.GranteeName)
+			role, statusCode, err := o.client.GetAccountRole(ctx, tg.GranteeName)
 			if err != nil {
-				if snowflake.IsUnprocessableEntity(resp, err) {
+				if snowflake.IsUnprocessableEntity(statusCode, err) {
 					principalId, idErr := rs.NewResourceID(accountRoleResourceType, tg.GranteeName)
 					if idErr != nil {
 						continue
@@ -335,14 +335,14 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	}
 
 	if ownerPrincipalID == nil {
-		table, _, err := o.client.GetTable(ctx, databaseName, schemaName, tableName)
+		table, err := o.client.GetTable(ctx, databaseName, schemaName, tableName)
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
 		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {
-			owner, ownerResp, err := o.client.GetAccountRole(ctx, table.Owner)
+			owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, table.Owner)
 			switch {
-			case snowflake.IsUnprocessableEntity(ownerResp, err):
+			case snowflake.IsUnprocessableEntity(ownerStatusCode, err):
 				// system role, skip
 			case err != nil:
 				return nil, nil, wrapError(err, fmt.Sprintf("failed to get account role for table owner %q", table.Owner))

@@ -61,7 +61,7 @@ func (r *ListTablesRawResponse) ListTables() ([]Table, error) {
 
 const tableListCursorSep = "\x00"
 
-func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit int) ([]Table, string, *http.Response, error) {
+func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit int) ([]Table, string, error) {
 	l := ctxzap.Extract(ctx)
 
 	var q string
@@ -81,43 +81,39 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", err
 	}
 
 	var response ListTablesRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN ACCOUNT")
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT: %w", err)
-			return nil, "", nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, "", nil, err
-	}
-	if resp != nil {
-		defer resp.Body.Close()
+		return nil, "", err
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, "", resp, err
+		return nil, "", err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp2)
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN ACCOUNT (statement result)")
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN ACCOUNT (statement result): %w", err)
-			return nil, "", nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, "", resp, err
-	}
-	if resp != nil {
-		defer resp.Body.Close()
+		return nil, "", err
 	}
 
 	tables, err := response.ListTables()
 	if err != nil {
-		return nil, "", resp, err
+		return nil, "", err
 	}
 
 	var nextCursor string
@@ -125,7 +121,7 @@ func (c *Client) ListTablesInAccount(ctx context.Context, cursor string, limit i
 		last := tables[len(tables)-1]
 		nextCursor = last.DatabaseName + tableListCursorSep + last.SchemaName + tableListCursorSep + last.Name
 	}
-	return tables, nextCursor, resp, nil
+	return tables, nextCursor, nil
 }
 
 // escapeSingleQuote doubles single quotes for use inside SQL string literals.
@@ -149,7 +145,7 @@ func escapeDoubleQuotedIdentifier(s string) string {
 	return strings.ReplaceAll(s, `"`, `""`)
 }
 
-func (c *Client) GetTable(ctx context.Context, database, schema, tableName string) (*Table, *http.Response, error) {
+func (c *Client) GetTable(ctx context.Context, database, schema, tableName string) (*Table, error) {
 	likePattern := escapeLikePattern(tableName)
 	queries := []string{
 		fmt.Sprintf("SHOW TABLES LIKE '%s' ESCAPE '\\' IN SCHEMA \"%s\".\"%s\" LIMIT 1;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema)),
@@ -157,46 +153,42 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListTablesRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
-			return nil, resp, nil
+		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
+			return nil, nil
 		}
-		return nil, nil, err
-	}
-	if resp != nil {
-		defer resp.Body.Close()
+		return nil, err
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, resp, err
-	}
-	if resp != nil {
-		defer resp.Body.Close()
+		return nil, err
 	}
 
 	tables, err := response.ListTables()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
 	// Filter by exact match (database, schema, and name)
 	for _, table := range tables {
 		if table.DatabaseName == database && table.SchemaName == schema && table.Name == tableName {
-			return &table, resp, nil
+			return &table, nil
 		}
 	}
 
-	return nil, resp, fmt.Errorf("table %s.%s.%s not found", database, schema, tableName)
+	return nil, fmt.Errorf("table %s.%s.%s not found", database, schema, tableName)
 }
 
 var tableGrantStructFieldToColumnMap = map[string]string{

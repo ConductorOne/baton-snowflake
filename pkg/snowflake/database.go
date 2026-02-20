@@ -3,7 +3,6 @@ package snowflake
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -60,7 +59,7 @@ func (r *ListDatabasesRawResponse) GetDatabases() ([]Database, error) {
 	return databases, nil
 }
 
-func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([]Database, *http.Response, error) {
+func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([]Database, error) {
 	var queries []string
 
 	if cursor != "" {
@@ -71,13 +70,14 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListDatabasesRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	l := ctxzap.Extract(ctx)
@@ -85,49 +85,53 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
 	dbs, err := response.GetDatabases()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
-	return dbs, resp, nil
+	return dbs, nil
 }
 
-func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, *http.Response, error) {
+func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
 	queries := []string{
 		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", name),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
 
 	var response ListDatabasesRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
-		if IsUnprocessableEntity(resp, err) {
-			return nil, resp, nil
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
 		}
-		return nil, resp, err
+		return nil, statusCode, err
 	}
 
 	databases, err := response.GetDatabases()
 	if err != nil {
-		return nil, resp, err
-	}
-	if len(databases) == 0 {
-		return nil, resp, fmt.Errorf("database with name %s not found", name)
-	} else if len(databases) > 1 {
-		return nil, resp, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
+		return nil, resp.StatusCode, err
 	}
 
-	return &databases[0], resp, nil
+	if len(databases) == 0 {
+		return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
+	} else if len(databases) > 1 {
+		return nil, resp.StatusCode, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
+	}
+
+	return &databases[0], resp.StatusCode, nil
 }
