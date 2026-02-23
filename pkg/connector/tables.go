@@ -149,8 +149,8 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	// Encoding isSharedOrSystemDB in ResourceTypeID avoids re-querying the
 	// database on every subsequent page.
 	if bag.Current() == nil {
-		parentDB, _, err := o.client.GetDatabase(ctx, databaseName)
-		if err != nil {
+		parentDB, statusCode, err := o.client.GetDatabase(ctx, databaseName)
+		if err != nil && !snowflake.IsUnprocessableEntity(statusCode, err) {
 			return nil, nil, wrapError(err, "failed to get parent database")
 		}
 
@@ -160,7 +160,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		}
 
 		sharedFlag := ""
-		if parentDB != nil && parentDB.IsSharedOrSystem() {
+		if snowflake.IsUnprocessableEntity(statusCode, nil) || (parentDB != nil && parentDB.IsSharedOrSystem()) {
 			sharedFlag = "shared"
 		}
 
