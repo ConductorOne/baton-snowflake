@@ -8,6 +8,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
+	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
@@ -141,39 +142,60 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	}
 	isSharedOrSystemDB := parentDB != nil && parentDB.IsSharedOrSystem()
 
-	// Paginate at List boundary: fetch one page from SHOW TABLES IN ACCOUNT, filter to this database, return page + next token.
-	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: tableResourceType.Id, Resource: parentResourceID.Resource})
-	if err != nil {
-		return nil, nil, wrapError(err, "failed to get next page cursor")
+	bag := &pagination.Bag{}
+	if err := bag.Unmarshal(opts.PageToken.Token); err != nil {
+		return nil, nil, wrapError(err, "failed to parse page token")
 	}
 
-	const accountPageSize = 200
-	tables, nextCursor, err := o.client.ListTablesInAccount(ctx, cursor, accountPageSize)
+	// On first call, enumerate all schemas and push them onto the bag stack.
+	// Each schema becomes a PageState (ResourceID=schemaName, Token=tableCursor).
+	// The LIFO stack naturally moves to the next schema when one is exhausted.
+	if bag.Current() == nil {
+		schemas, err := o.client.ListSchemasInDatabase(ctx, databaseName)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to list schemas in database")
+		}
+		if len(schemas) == 0 {
+			return nil, &rs.SyncOpResults{}, nil
+		}
+		// Push in reverse order so the first schema is processed first (LIFO).
+		for i := len(schemas) - 1; i >= 0; i-- {
+			bag.Push(pagination.PageState{
+				ResourceTypeID: tableResourceType.Id,
+				ResourceID:     schemas[i].Name,
+			})
+		}
+	}
+
+	schemaName := bag.ResourceID()
+	tableCursor := bag.PageToken()
+
+	const pageSize = 200
+	tables, nextTableCursor, err := o.client.ListTablesInSchema(ctx, databaseName, schemaName, tableCursor, pageSize)
 	if err != nil {
-		return nil, nil, wrapError(err, "failed to list tables in account")
+		return nil, nil, wrapError(err, "failed to list tables in schema")
 	}
 
 	var resources []*v2.Resource
 	for i := range tables {
 		t := &tables[i]
-		if strings.EqualFold(t.DatabaseName, databaseName) {
-			resource, err := tableResource(ctx, t, parentResourceID, isSharedOrSystemDB)
-			if err != nil {
-				return nil, nil, wrapError(err, "failed to create table resource")
-			}
-			resources = append(resources, resource)
-		}
-	}
-
-	if nextCursor != "" {
-		nextToken, err := bag.NextToken(nextCursor)
+		resource, err := tableResource(ctx, t, parentResourceID, isSharedOrSystemDB)
 		if err != nil {
-			return nil, nil, wrapError(err, "failed to create next page cursor")
+			return nil, nil, wrapError(err, "failed to create table resource")
 		}
-		return resources, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+		resources = append(resources, resource)
 	}
 
-	return resources, &rs.SyncOpResults{}, nil
+	// NextToken("") pops the current schema without re-pushing it, advancing to
+	// the next schema. NextToken(cursor) updates the current schema's cursor for
+	// the next page within this schema. When the bag is empty, Marshal returns ""
+	// and the SDK stops calling List.
+	nextToken, err := bag.NextToken(nextTableCursor)
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to create next page token")
+	}
+
+	return resources, &rs.SyncOpResults{NextPageToken: nextToken}, nil
 }
 
 func parseTableResourceID(resource *v2.Resource) (string, string, string, error) {
