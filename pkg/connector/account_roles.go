@@ -46,7 +46,7 @@ func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
-	accountRoles, _, err := o.client.ListAccountRoles(ctx, cursor, resourcePageSize)
+	accountRoles, err := o.client.ListAccountRoles(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list account roles")
 	}
@@ -95,7 +95,7 @@ func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resour
 }
 
 func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	accountRoleGrantees, _, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName)
+	accountRoleGrantees, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list account role grantees")
 	}
@@ -138,7 +138,7 @@ func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, 
 		return nil, err
 	}
 
-	_, err := o.client.GrantAccountRole(ctx, entitlement.Resource.Id.Resource, principal.Id.Resource)
+	err := o.client.GrantAccountRole(ctx, entitlement.Resource.Id.Resource, principal.Id.Resource)
 	if err != nil {
 		err = wrapError(err, "failed to grant account role")
 
@@ -167,7 +167,7 @@ func (o *accountRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annot
 		return nil, err
 	}
 
-	_, err := o.client.RevokeAccountRole(ctx, grant.Entitlement.Resource.Id.Resource, grant.Principal.Id.Resource)
+	err := o.client.RevokeAccountRole(ctx, grant.Entitlement.Resource.Id.Resource, grant.Principal.Id.Resource)
 	if err != nil {
 		err = wrapError(err, "failed to revoke account role")
 

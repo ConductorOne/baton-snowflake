@@ -29,6 +29,7 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 
 	var response ListSecretsRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			var errMsg struct {
@@ -55,7 +56,6 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	secrets, err := response.ListSecrets()
 	if err != nil {
@@ -77,10 +77,10 @@ func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error)
 
 	var response RsaGetUserRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	secrets, err := response.GetUserRsa(ctx)
 	if err != nil {

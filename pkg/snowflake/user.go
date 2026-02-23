@@ -3,7 +3,6 @@ package snowflake
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"reflect"
 	"strings"
 	"time"
@@ -31,9 +30,11 @@ var (
 	}
 
 	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
+	// These fields are ignored when parsing DESCRIBE USER output.
 	ignoredUserStructFieldsForDescribeOperation = []string{
 		"HasRSAPublicKey",
 		"HasPassword",
+		"LastSuccessLogin", // May not be present for newly created users
 	}
 
 	secretStructFieldToColumnMap = map[string]string{
@@ -181,7 +182,7 @@ func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bo
 	return "", false
 }
 
-func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, *http.Response, error) {
+func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, error) {
 	var queries []string
 	if cursor != "" {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, cursor))
@@ -191,54 +192,63 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var response ListUsersRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
 	users, err := response.GetUsers()
 	if err != nil {
-		return nil, resp, err
+		return nil, err
 	}
 
-	return users, resp, nil
+	return users, nil
 }
 
-func (c *Client) GetUser(ctx context.Context, username string) (*User, *http.Response, error) {
+func (c *Client) GetUser(ctx context.Context, username string) (*User, int, error) {
+	// Escape double quotes in username by doubling them before quoting
+	escapedUsername := escapeDoubleQuotedIdentifier(username)
 	queries := []string{
-		fmt.Sprintf("DESCRIBE USER \"%s\";", username),
+		fmt.Sprintf("DESCRIBE USER \"%s\";", escapedUsername),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
 
 	var response GetUserRawResponse
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, resp, err
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
+		}
+		return nil, statusCode, err
 	}
 
 	user, err := response.GetUser()
 	if err != nil {
-		return nil, resp, err
+		return nil, resp.StatusCode, err
 	}
 
-	return user, resp, nil
+	return user, resp.StatusCode, nil
 }
 
 func (r *ListSecretsRawResponse) ListSecrets() ([]Secret, error) {
