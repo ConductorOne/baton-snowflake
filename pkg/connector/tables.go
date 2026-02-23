@@ -164,16 +164,15 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 			sharedFlag = "shared"
 		}
 
-		// Push in reverse order so the first schema is processed first (LIFO).
 		// Skip INFORMATION_SCHEMA — it contains system views with no manageable grants.
 		pushed := 0
-		for i := len(schemas) - 1; i >= 0; i-- {
-			if strings.EqualFold(schemas[i].Name, "INFORMATION_SCHEMA") {
+		for _, schema := range schemas {
+			if strings.EqualFold(schema.Name, "INFORMATION_SCHEMA") {
 				continue
 			}
 			bag.Push(pagination.PageState{
 				ResourceTypeID: sharedFlag,
-				ResourceID:     schemas[i].Name,
+				ResourceID:     schema.Name,
 			})
 			pushed++
 		}
