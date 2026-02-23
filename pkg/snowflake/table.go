@@ -49,6 +49,8 @@ func (r *ListSchemasRawResponse) ListSchemas() ([]Schema, error) {
 }
 
 func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string) ([]Schema, error) {
+	l := ctxzap.Extract(ctx)
+
 	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
 	queries := []string{
 		fmt.Sprintf("SHOW SCHEMAS IN DATABASE \"%s\";", escapedDB),
@@ -63,6 +65,11 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	defer closeResponseBody(resp1)
 	if err != nil {
+		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
+			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s: %w", databaseName, err)
+			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+		}
 		return nil, err
 	}
 
@@ -73,6 +80,11 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	defer closeResponseBody(resp2)
 	if err != nil {
+		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
+			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
+			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result): %w", databaseName, err)
+			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+		}
 		return nil, err
 	}
 
