@@ -136,37 +136,53 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 
 	databaseName := parentResourceID.Resource
 
-	parentDB, _, err := o.client.GetDatabase(ctx, databaseName)
-	if err != nil {
-		return nil, nil, wrapError(err, "failed to get parent database")
-	}
-	isSharedOrSystemDB := parentDB != nil && parentDB.IsSharedOrSystem()
-
 	bag := &pagination.Bag{}
 	if err := bag.Unmarshal(opts.PageToken.Token); err != nil {
 		return nil, nil, wrapError(err, "failed to parse page token")
 	}
 
 	// On first call, enumerate all schemas and push them onto the bag stack.
-	// Each schema becomes a PageState (ResourceID=schemaName, Token=tableCursor).
-	// The LIFO stack naturally moves to the next schema when one is exhausted.
+	// Each schema becomes a PageState:
+	//   ResourceID     = schema name
+	//   ResourceTypeID = "shared" if the DB is shared/system, "" otherwise
+	//   Token          = table name cursor within the schema
+	// Encoding isSharedOrSystemDB in ResourceTypeID avoids re-querying the
+	// database on every subsequent page.
 	if bag.Current() == nil {
+		parentDB, _, err := o.client.GetDatabase(ctx, databaseName)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to get parent database")
+		}
+
 		schemas, err := o.client.ListSchemasInDatabase(ctx, databaseName)
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to list schemas in database")
 		}
-		if len(schemas) == 0 {
-			return nil, &rs.SyncOpResults{}, nil
+
+		sharedFlag := ""
+		if parentDB != nil && parentDB.IsSharedOrSystem() {
+			sharedFlag = "shared"
 		}
+
 		// Push in reverse order so the first schema is processed first (LIFO).
+		// Skip INFORMATION_SCHEMA — it contains system views with no manageable grants.
+		pushed := 0
 		for i := len(schemas) - 1; i >= 0; i-- {
+			if strings.EqualFold(schemas[i].Name, "INFORMATION_SCHEMA") {
+				continue
+			}
 			bag.Push(pagination.PageState{
-				ResourceTypeID: tableResourceType.Id,
+				ResourceTypeID: sharedFlag,
 				ResourceID:     schemas[i].Name,
 			})
+			pushed++
+		}
+		if pushed == 0 {
+			return nil, &rs.SyncOpResults{}, nil
 		}
 	}
 
+	isSharedOrSystemDB := bag.ResourceTypeID() == "shared"
 	schemaName := bag.ResourceID()
 	tableCursor := bag.PageToken()
 

@@ -187,7 +187,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	}
 
 	var nextCursor string
-	if len(tables) >= limit {
+	if limit > 0 && len(tables) >= limit {
 		last := tables[len(tables)-1]
 		nextCursor = last.Name
 	}
