@@ -16,19 +16,19 @@ import (
 // CreateUserRequest represents the request body for creating a user via REST API.
 type CreateUserRequest struct {
 	Name                  string `json:"name"`
-	LoginName             string `json:"loginName,omitempty"`
-	DisplayName           string `json:"displayName,omitempty"`
-	FirstName             string `json:"firstName,omitempty"`
-	LastName              string `json:"lastName,omitempty"`
+	LoginName             string `json:"login_name,omitempty"`
+	DisplayName           string `json:"display_name,omitempty"`
+	FirstName             string `json:"first_name,omitempty"`
+	LastName              string `json:"last_name,omitempty"`
 	Email                 string `json:"email,omitempty"`
 	Comment               string `json:"comment,omitempty"`
 	Password              string `json:"password,omitempty"` // #nosec G117: used for Snowflake API request body
-	MustChangePassword    bool   `json:"mustChangePassword,omitempty"`
+	MustChangePassword    bool   `json:"must_change_password,omitempty"`
 	Disabled              bool   `json:"disabled,omitempty"`
-	DefaultWarehouse      string `json:"defaultWarehouse,omitempty"`
-	DefaultNamespace      string `json:"defaultNamespace,omitempty"`
-	DefaultRole           string `json:"defaultRole,omitempty"`
-	DefaultSecondaryRoles string `json:"defaultSecondaryRoles,omitempty"` // ALL or NONE
+	DefaultWarehouse      string `json:"default_warehouse,omitempty"`
+	DefaultNamespace      string `json:"default_namespace,omitempty"`
+	DefaultRole           string `json:"default_role,omitempty"`
+	DefaultSecondaryRoles string `json:"default_secondary_roles,omitempty"` // ALL or NONE
 }
 
 // CreateUserResponse represents the response from creating a user.
