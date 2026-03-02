@@ -94,7 +94,7 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 	rv = append(rv, ent.NewAssignmentEntitlement(
 		resource,
 		ownerEntitlement,
-		ent.WithGrantableTo(userResourceType),
+		ent.WithGrantableTo(accountRoleResourceType),
 		ent.WithDescription(fmt.Sprintf("Is owned by %s", resource.DisplayName)),
 		ent.WithDisplayName(fmt.Sprintf("Is owner of %s", resource.DisplayName)),
 	))
