@@ -92,7 +92,7 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 		if status.Code(err) == codes.Unknown {
 			// Ignore user that don't have permission to describe user
 			// TODO: api return 422 when user doesn't have permission to describe user
-			l.Warn("UserRsa failed", zap.String("username", userName), zap.Error(err))
+			l.Debug("UserRsa failed", zap.String("username", userName), zap.Error(err))
 			return nil, nil, nil
 		}
 		return nil, nil, err

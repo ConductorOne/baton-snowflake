@@ -45,7 +45,7 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 			// code: 003001
 			// message: SQL access control error:\nInsufficient privileges to operate on database 'DB'
 			if errMsg.Code == "003001" {
-				l.Warn("Insufficient privileges to operate on database", zap.String("database", database))
+				l.Debug("Insufficient privileges to operate on database", zap.String("database", database))
 			} else {
 				l.Error(errMsg.Message, zap.String("database", database))
 			}
