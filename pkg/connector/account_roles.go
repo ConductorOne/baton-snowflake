@@ -114,7 +114,7 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 			if err != nil {
 				return nil, nil, wrapError(err, "unable to create role resource id")
 			}
-			g := grant.NewGrant(resource, assignedEntitlement, rsId)
+			g := grant.NewGrant(resource, assignedEntitlement, rsId, addExpandableOpts(grantee.GranteeName)...)
 			grants = append(grants, g)
 		}
 	}
@@ -128,7 +128,7 @@ func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, 
 	if principal.Id.ResourceType != userResourceType.Id {
 		err := fmt.Errorf("baton-snowflake: account roles can only be granted to users")
 
-		l.Warn(
+		l.Debug(
 			"failed to grant account role to principal",
 			zap.Error(err),
 			zap.String("principal_type", principal.Id.ResourceType),
@@ -158,7 +158,7 @@ func (o *accountRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annot
 	if grant.Principal.Id.ResourceType != userResourceType.Id {
 		err := fmt.Errorf("baton-snowflake: only users can be revoked from account roles")
 
-		l.Warn(
+		l.Debug(
 			err.Error(),
 			zap.String("principal_type", grant.Principal.Id.ResourceType),
 			zap.String("principal_id", grant.Principal.Id.Resource),
@@ -183,7 +183,7 @@ func (o *accountRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annot
 
 func newAccountRoleBuilder(client *snowflake.Client) *accountRoleBuilder {
 	return &accountRoleBuilder{
-		resourceType: userResourceType,
+		resourceType: accountRoleResourceType,
 		client:       client,
 	}
 }
