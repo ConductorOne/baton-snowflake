@@ -11,6 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/oauth2"
 )
 
 var (
@@ -42,30 +43,26 @@ func TestUserBuilderList(t *testing.T) {
 }
 
 func getCientForTesting(ctx context.Context) (*snowflake.Client, error) {
-	var jwtConfig = snowflake.JWTConfig{
-		AccountIdentifier: accountIdentifier,
-		UserIdentifier:    userIdentifier,
-	}
 	privateKeyValue, err := snowflake.ReadPrivateKey(privateKeyPath)
 	if err != nil {
 		return nil, err
 	}
 
-	jwtConfig.PrivateKeyValue = privateKeyValue
-	token, err := jwtConfig.GenerateBearerToken()
+	jwtConfig := snowflake.JWTConfig{
+		AccountIdentifier: accountIdentifier,
+		UserIdentifier:    userIdentifier,
+		PrivateKeyValue:   privateKeyValue,
+	}
+
+	noAuth := uhttp.NoAuth{}
+	baseHttpClient, err := noAuth.GetClient(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	httpClient, err := uhttp.NewBearerAuth(token).GetClient(ctx)
-	if err != nil {
-		return nil, err
-	}
+	ts := snowflake.NewJWTTokenSource(&jwtConfig)
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, baseHttpClient)
+	httpClient := oauth2.NewClient(ctx, ts)
 
-	client, err := snowflake.New(accountUrl, jwtConfig, httpClient)
-	if err != nil {
-		return client, err
-	}
-
-	return client, nil
+	return snowflake.New(accountUrl, jwtConfig, httpClient)
 }
