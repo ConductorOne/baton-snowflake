@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/oauth2"
 )
 
 type JWTConfig struct {
@@ -99,6 +100,33 @@ func ParsePrivateKey(key []byte) (any, error) {
 	}
 
 	return privateKey, nil
+}
+
+// JWTTokenSource implements oauth2.TokenSource for Snowflake key-pair JWT auth.
+// Use NewJWTTokenSource to construct one; it wraps itself in oauth2.ReuseTokenSource
+// so the token is cached and only regenerated when it nears expiry.
+type JWTTokenSource struct {
+	config *JWTConfig
+}
+
+// NewJWTTokenSource returns an oauth2.TokenSource that auto-refreshes the
+// Snowflake JWT when it expires. oauth2.ReuseTokenSource handles caching and
+// calls Token() again when the token has ~10 seconds of validity remaining.
+func NewJWTTokenSource(config *JWTConfig) oauth2.TokenSource {
+	return oauth2.ReuseTokenSource(nil, &JWTTokenSource{config: config})
+}
+
+// Token generates a new Snowflake JWT valid for 60 minutes.
+func (s *JWTTokenSource) Token() (*oauth2.Token, error) {
+	tokenString, err := s.config.GenerateBearerToken()
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: failed to generate JWT token: %w", err)
+	}
+	return &oauth2.Token{
+		AccessToken: tokenString,
+		TokenType:   "Bearer",
+		Expiry:      time.Now().Add(time.Minute * 60),
+	}, nil
 }
 
 func publicKeyFingerprint(privateKey interface{}) (string, error) {
