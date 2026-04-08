@@ -10,8 +10,6 @@ import (
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type RsaIndex int
@@ -89,9 +87,9 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 
 	user, err := o.client.UserRsa(ctx, userName)
 	if err != nil {
-		if status.Code(err) == codes.Unknown {
-			// Ignore user that don't have permission to describe user
-			// TODO: api return 422 when user doesn't have permission to describe user
+		if isSnowflake422(err) {
+			// Snowflake returns 422 when the connector's role doesn't have
+			// permission to DESCRIBE USER for this particular user. Skip it.
 			l.Debug("UserRsa failed", zap.String("username", userName), zap.Error(err))
 			return nil, nil, nil
 		}
