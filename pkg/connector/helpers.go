@@ -16,7 +16,7 @@ const resourcePageSize = 50
 // isSnowflake422 returns true if the error originates from a Snowflake API
 // 422 Unprocessable Entity response. The SDK maps this HTTP status into a gRPC
 // status whose message is the raw HTTP status text.
-func isSnowflake422(err error) bool {
+func isUnprocessableEntityError(err error) bool {
 	if st, ok := status.FromError(err); ok {
 		return strings.Contains(st.Message(), "422 Unprocessable Entity")
 	}

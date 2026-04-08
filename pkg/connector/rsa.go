@@ -87,9 +87,9 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 
 	user, err := o.client.UserRsa(ctx, userName)
 	if err != nil {
-		if isSnowflake422(err) {
-			// Snowflake returns 422 when the connector's role doesn't have
-			// permission to DESCRIBE USER for this particular user. Skip it.
+		if isUnprocessableEntityError(err) {
+			// Ignore user that don't have permission to describe user
+			// api returns 422 when user doesn't have permission to describe user
 			l.Debug("UserRsa failed", zap.String("username", userName), zap.Error(err))
 			return nil, nil, nil
 		}
