@@ -214,9 +214,26 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 }
 
 func parseTableResourceID(resource *v2.Resource) (string, string, string, error) {
+	// Prefer profile fields — they store the raw names without delimiter ambiguity.
+	// This correctly handles periods in database, schema, or table names.
+	appTrait, err := rs.GetAppTrait(resource)
+	if err == nil && appTrait.GetProfile() != nil {
+		profile := appTrait.GetProfile()
+		dbName, dbOk := rs.GetProfileStringValue(profile, "database_name")
+		schemaName, schemaOk := rs.GetProfileStringValue(profile, "schema_name")
+		tableName, nameOk := rs.GetProfileStringValue(profile, "name")
+		if dbOk && schemaOk && nameOk && dbName != "" && schemaName != "" && tableName != "" {
+			return dbName, schemaName, tableName, nil
+		}
+	}
+
+	// Fallback for legacy resources without profile fields.
 	parts := strings.Split(resource.Id.Resource, ".")
 	if len(parts) != 3 {
-		return "", "", "", wrapError(fmt.Errorf("invalid table resource ID format: %s", resource.Id.Resource), "expected format: database.schema.table")
+		return "", "", "", wrapError(
+			fmt.Errorf("invalid table resource ID format: %s", resource.Id.Resource),
+			"expected format: database.schema.table",
+		)
 	}
 	return parts[0], parts[1], parts[2], nil
 }
