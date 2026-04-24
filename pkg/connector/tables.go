@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
@@ -83,8 +84,47 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 	return db.IsSharedOrSystem(), nil
 }
 
+type roleCacheEntry struct {
+	role       *snowflake.AccountRole
+	statusCode int
+	err        error
+}
+
+type userCacheEntry struct {
+	user       *snowflake.User
+	statusCode int
+	err        error
+}
+
 type tableBuilder struct {
-	client *snowflake.Client
+	client           *snowflake.Client
+	tableGrantsCache sync.Map // key: "db|schema|table|kind" -> []snowflake.TableGrant
+	roleCache        sync.Map // key: roleName -> *roleCacheEntry
+	userCache        sync.Map // key: userName -> *userCacheEntry
+}
+
+func (o *tableBuilder) getCachedAccountRole(ctx context.Context, roleName string) (*snowflake.AccountRole, int, error) {
+	if entry, ok := o.roleCache.Load(roleName); ok {
+		e := entry.(*roleCacheEntry)
+		return e.role, e.statusCode, e.err
+	}
+	role, statusCode, err := o.client.GetAccountRole(ctx, roleName)
+	o.roleCache.Store(roleName, &roleCacheEntry{role: role, statusCode: statusCode, err: err})
+	return role, statusCode, err
+}
+
+func (o *tableBuilder) getCachedUser(ctx context.Context, userName string) (*snowflake.User, int, error) {
+	if entry, ok := o.userCache.Load(userName); ok {
+		e := entry.(*userCacheEntry)
+		return e.user, e.statusCode, e.err
+	}
+	user, statusCode, err := o.client.GetUser(ctx, userName)
+	o.userCache.Store(userName, &userCacheEntry{user: user, statusCode: statusCode, err: err})
+	return user, statusCode, err
+}
+
+func tableGrantsCacheKey(databaseName, schemaName, tableName, objectKind string) string {
+	return databaseName + "|" + schemaName + "|" + tableName + "|" + objectKind
 }
 
 func (o *tableBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -275,10 +315,12 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	}
 
 	objectKind := getObjectKind(resource)
+	cacheKey := tableGrantsCacheKey(databaseName, schemaName, tableName, objectKind)
 	tableGrants, err := o.client.ListTableGrants(ctx, databaseName, schemaName, tableName, objectKind)
 	if err != nil {
 		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
+	o.tableGrantsCache.Store(cacheKey, tableGrants)
 
 	privileges := make(map[string]bool)
 	for _, tg := range tableGrants {
@@ -315,9 +357,17 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	}
 
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, databaseName, schemaName, tableName, objectKind)
-	if err != nil {
-		return nil, nil, wrapError(err, "failed to list table grants")
+	cacheKey := tableGrantsCacheKey(databaseName, schemaName, tableName, objectKind)
+
+	var tableGrants []snowflake.TableGrant
+	if cached, ok := o.tableGrantsCache.LoadAndDelete(cacheKey); ok {
+		tableGrants = cached.([]snowflake.TableGrant)
+	} else {
+		var err error
+		tableGrants, err = o.client.ListTableGrants(ctx, databaseName, schemaName, tableName, objectKind)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to list table grants")
+		}
 	}
 	if len(tableGrants) == 0 {
 		return nil, &rs.SyncOpResults{}, nil
@@ -334,7 +384,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 
 		switch tg.GrantedTo {
 		case grantedToRole:
-			role, statusCode, err := o.client.GetAccountRole(ctx, tg.GranteeName)
+			role, statusCode, err := o.getCachedAccountRole(ctx, tg.GranteeName)
 			if err != nil {
 				if snowflake.IsUnprocessableEntity(statusCode, err) {
 					principalId, idErr := rs.NewResourceID(accountRoleResourceType, tg.GranteeName)
@@ -364,7 +414,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 				ownerExpandableRoleName = role.Name
 			}
 		case grantedToUser:
-			user, _, err := o.client.GetUser(ctx, tg.GranteeName)
+			user, _, err := o.getCachedUser(ctx, tg.GranteeName)
 			if err != nil {
 				return nil, nil, wrapError(err, fmt.Sprintf("failed to get user %q for table grants", tg.GranteeName))
 			}
@@ -394,7 +444,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
 		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {
-			owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, table.Owner)
+			owner, ownerStatusCode, err := o.getCachedAccountRole(ctx, table.Owner)
 			switch {
 			case snowflake.IsUnprocessableEntity(ownerStatusCode, err):
 				// system role, skip
