@@ -138,7 +138,9 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		return nil, nil, wrapError(fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType), "invalid parent resource type")
 	}
 
+	l := ctxzap.Extract(ctx)
 	databaseName := parentResourceID.Resource
+	dbField := zap.String("database_name", databaseName)
 
 	bag := &pagination.Bag{}
 	if err := bag.Unmarshal(opts.PageToken.Token); err != nil {
@@ -153,24 +155,20 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	// Encoding isSharedOrSystemDB in ResourceTypeID avoids re-querying the
 	// database on every subsequent page.
 	if bag.Current() == nil {
-		l := ctxzap.Extract(ctx)
-
 		parentDB, statusCode, err := o.client.GetDatabase(ctx, databaseName)
 		if err != nil && !snowflake.IsUnprocessableEntity(statusCode, err) {
 			return nil, nil, wrapError(err, "failed to get parent database")
 		}
 
 		if snowflake.IsUnprocessableEntity(statusCode, err) {
-			l.Warn("Skipping database: insufficient privileges for GetDatabase",
-				zap.String("database", databaseName))
+			l.Warn("Skipping database: insufficient privileges for GetDatabase", dbField)
 			return nil, &rs.SyncOpResults{}, nil
 		}
 
 		schemas, err := o.client.ListSchemasInDatabase(ctx, databaseName)
 		if err != nil {
 			if status.Code(err) == codes.PermissionDenied {
-				l.Warn("Skipping database: insufficient privileges for ListSchemasInDatabase",
-					zap.String("database", databaseName))
+				l.Warn("Skipping database: insufficient privileges for ListSchemasInDatabase", dbField)
 				return nil, &rs.SyncOpResults{}, nil
 			}
 			return nil, nil, wrapError(err, "failed to list schemas in database")
@@ -206,9 +204,8 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	tables, nextTableCursor, err := o.client.ListTablesInSchema(ctx, databaseName, schemaName, tableCursor, pageSize)
 	if err != nil {
 		if status.Code(err) == codes.PermissionDenied {
-			l := ctxzap.Extract(ctx)
 			l.Warn("Skipping schema: insufficient privileges for ListTablesInSchema",
-				zap.String("database", databaseName), zap.String("schema", schemaName))
+				dbField, zap.String("schema_name", schemaName))
 			nextToken, tokenErr := bag.NextToken("")
 			if tokenErr != nil {
 				return nil, nil, wrapError(tokenErr, "failed to create next page token")
