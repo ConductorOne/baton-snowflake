@@ -3,10 +3,13 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
@@ -220,7 +223,13 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	return users, nil
 }
 
-func (c *Client) GetUser(ctx context.Context, username string) (*User, int, error) {
+func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username string) (*User, int, error) {
+	if ss != nil {
+		if cached, found, err := session.GetJSON[*User](ctx, ss, username, userNamespace); err == nil && found {
+			return cached, http.StatusOK, nil
+		}
+	}
+
 	// Escape double quotes in username by doubling them before quoting
 	escapedUsername := escapeDoubleQuotedIdentifier(username)
 	queries := []string{
@@ -246,6 +255,10 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, int, erro
 	user, err := response.GetUser()
 	if err != nil {
 		return nil, resp.StatusCode, err
+	}
+
+	if ss != nil {
+		_ = session.SetJSON(ctx, ss, username, user, userNamespace)
 	}
 
 	return user, resp.StatusCode, nil

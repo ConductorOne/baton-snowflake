@@ -11,7 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+)
+
+var (
+	accountRoleNamespace = sessions.WithPrefix("account_role")
+	userNamespace        = sessions.WithPrefix("user")
+	tableGrantsNamespace = sessions.WithPrefix("table_grants")
 )
 
 const (

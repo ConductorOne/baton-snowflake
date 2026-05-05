@@ -329,7 +329,7 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 	baseDelay := 500 * time.Millisecond
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		user, statusCode, err := o.client.GetUser(ctx, userName)
+		user, statusCode, err := o.client.GetUser(ctx, nil, userName)
 		if err == nil && statusCode == http.StatusOK {
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),

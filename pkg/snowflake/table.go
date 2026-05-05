@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
@@ -306,8 +308,23 @@ func (r *ListTableGrantsRawResponse) GetTableGrants() ([]TableGrant, error) {
 	return grants, nil
 }
 
+func tableGrantsCacheKey(database, schema, tableName, objectKind string) string {
+	kind := "TABLE"
+	if strings.EqualFold(objectKind, "VIEW") {
+		kind = "VIEW"
+	}
+	return fmt.Sprintf("%s|%s|%s|%s", database, schema, tableName, kind)
+}
+
 // ListTableGrants uses objectKind to run SHOW GRANTS ON TABLE or ON VIEW (Snowflake requires the correct type).
-func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableName, objectKind string) ([]TableGrant, error) {
+func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, database, schema, tableName, objectKind string) ([]TableGrant, error) {
+	cacheKey := tableGrantsCacheKey(database, schema, tableName, objectKind)
+	if ss != nil {
+		if cached, found, err := session.GetJSON[[]TableGrant](ctx, ss, cacheKey, tableGrantsNamespace); err == nil && found {
+			return cached, nil
+		}
+	}
+
 	l := ctxzap.Extract(ctx)
 	objectType := "TABLE"
 	if strings.EqualFold(objectKind, "VIEW") {
@@ -374,6 +391,10 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 	grants, err := response.GetTableGrants()
 	if err != nil {
 		return nil, err
+	}
+
+	if ss != nil {
+		_ = session.SetJSON(ctx, ss, cacheKey, grants, tableGrantsNamespace)
 	}
 
 	return grants, nil

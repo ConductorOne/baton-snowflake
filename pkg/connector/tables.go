@@ -275,7 +275,7 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	}
 
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, databaseName, schemaName, tableName, objectKind)
+	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
 	if err != nil {
 		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
@@ -315,7 +315,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	}
 
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, databaseName, schemaName, tableName, objectKind)
+	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list table grants")
 	}
@@ -334,7 +334,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 
 		switch tg.GrantedTo {
 		case grantedToRole:
-			role, statusCode, err := o.client.GetAccountRole(ctx, tg.GranteeName)
+			role, statusCode, err := o.client.GetAccountRole(ctx, opts.Session, tg.GranteeName)
 			if err != nil {
 				if snowflake.IsUnprocessableEntity(statusCode, err) {
 					principalId, idErr := rs.NewResourceID(accountRoleResourceType, tg.GranteeName)
@@ -364,7 +364,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 				ownerExpandableRoleName = role.Name
 			}
 		case grantedToUser:
-			user, _, err := o.client.GetUser(ctx, tg.GranteeName)
+			user, _, err := o.client.GetUser(ctx, opts.Session, tg.GranteeName)
 			if err != nil {
 				return nil, nil, wrapError(err, fmt.Sprintf("failed to get user %q for table grants", tg.GranteeName))
 			}
@@ -394,7 +394,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
 		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {
-			owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, table.Owner)
+			owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, opts.Session, table.Owner)
 			switch {
 			case snowflake.IsUnprocessableEntity(ownerStatusCode, err):
 				// system role, skip
