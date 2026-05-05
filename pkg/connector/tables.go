@@ -11,6 +11,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -149,18 +153,31 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	// Encoding isSharedOrSystemDB in ResourceTypeID avoids re-querying the
 	// database on every subsequent page.
 	if bag.Current() == nil {
+		l := ctxzap.Extract(ctx)
+
 		parentDB, statusCode, err := o.client.GetDatabase(ctx, databaseName)
 		if err != nil && !snowflake.IsUnprocessableEntity(statusCode, err) {
 			return nil, nil, wrapError(err, "failed to get parent database")
 		}
 
+		if snowflake.IsUnprocessableEntity(statusCode, err) {
+			l.Warn("Skipping database: insufficient privileges for GetDatabase",
+				zap.String("database", databaseName))
+			return nil, &rs.SyncOpResults{}, nil
+		}
+
 		schemas, err := o.client.ListSchemasInDatabase(ctx, databaseName)
 		if err != nil {
+			if status.Code(err) == codes.PermissionDenied {
+				l.Warn("Skipping database: insufficient privileges for ListSchemasInDatabase",
+					zap.String("database", databaseName))
+				return nil, &rs.SyncOpResults{}, nil
+			}
 			return nil, nil, wrapError(err, "failed to list schemas in database")
 		}
 
 		sharedFlag := ""
-		if snowflake.IsUnprocessableEntity(statusCode, nil) || (parentDB != nil && parentDB.IsSharedOrSystem()) {
+		if parentDB != nil && parentDB.IsSharedOrSystem() {
 			sharedFlag = "shared"
 		}
 
@@ -188,6 +205,16 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	const pageSize = 200
 	tables, nextTableCursor, err := o.client.ListTablesInSchema(ctx, databaseName, schemaName, tableCursor, pageSize)
 	if err != nil {
+		if status.Code(err) == codes.PermissionDenied {
+			l := ctxzap.Extract(ctx)
+			l.Warn("Skipping schema: insufficient privileges for ListTablesInSchema",
+				zap.String("database", databaseName), zap.String("schema", schemaName))
+			nextToken, tokenErr := bag.NextToken("")
+			if tokenErr != nil {
+				return nil, nil, wrapError(tokenErr, "failed to create next page token")
+			}
+			return nil, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+		}
 		return nil, nil, wrapError(err, "failed to list tables in schema")
 	}
 
