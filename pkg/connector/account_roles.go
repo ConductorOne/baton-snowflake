@@ -25,7 +25,7 @@ func (o *accountRoleBuilder) ResourceType(ctx context.Context) *v2.ResourceType 
 
 func accountRoleResource(accountRole *snowflake.AccountRole) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name": accountRole.Name,
+		profileKeyName: accountRole.Name,
 	}
 
 	roleTraits := []rs.RoleTraitOption{

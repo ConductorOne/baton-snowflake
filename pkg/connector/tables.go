@@ -93,11 +93,11 @@ func (o *tableBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func tableResource(_ context.Context, table *snowflake.Table, id *v2.ResourceId, isSharedOrSystemDB bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name":                      table.Name,
+		profileKeyName:              table.Name,
 		"schema_name":               table.SchemaName,
 		"database_name":             table.DatabaseName,
 		"kind":                      table.Kind,
-		"comment":                   table.Comment,
+		profileKeyComment:           table.Comment,
 		"owner":                     table.Owner,
 		"created_on":                table.CreatedOn.Format("2006-01-02 15:04:05.999"),
 		"database_is_shared_system": isSharedOrSystemDB,
@@ -221,7 +221,7 @@ func parseTableResourceID(resource *v2.Resource) (string, string, string, error)
 		profile := appTrait.GetProfile()
 		dbName, dbOk := rs.GetProfileStringValue(profile, "database_name")
 		schemaName, schemaOk := rs.GetProfileStringValue(profile, "schema_name")
-		tableName, nameOk := rs.GetProfileStringValue(profile, "name")
+		tableName, nameOk := rs.GetProfileStringValue(profile, profileKeyName)
 		if dbOk && schemaOk && nameOk && dbName != "" && schemaName != "" && tableName != "" {
 			return dbName, schemaName, tableName, nil
 		}

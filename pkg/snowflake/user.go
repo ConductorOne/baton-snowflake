@@ -15,7 +15,7 @@ import (
 
 var (
 	userStructFieldToColumnMap = map[string]string{
-		"Username":         "name",
+		"Username":         columnName,
 		"Login":            "login_name",
 		"DisplayName":      "display_name",
 		"FirstName":        "first_name",
@@ -29,7 +29,7 @@ var (
 		"LastSuccessLogin": "last_success_login",
 		"Type":             "type",
 		"HasMfa":           "has_mfa",
-		"Comment":          "comment",
+		structFieldComment: columnComment,
 	}
 
 	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
@@ -41,15 +41,15 @@ var (
 	}
 
 	secretStructFieldToColumnMap = map[string]string{
-		"CreatedOn":     "created_on",
-		"Name":          "name",
-		"SchemaName":    "schema_name",
-		"DatabaseName":  "database_name",
-		"Owner":         "owner",
-		"Comment":       "comment",
-		"SecretType":    "secret_type",
-		"OAuthScopes":   "oauth_scopes",
-		"OwnerRoleType": "owner_role_type",
+		structFieldCreatedOn:    columnCreatedOn,
+		structFieldName:         columnName,
+		"SchemaName":            "schema_name",
+		structFieldDatabaseName: columnDatabaseName,
+		structFieldOwner:        columnOwner,
+		structFieldComment:      columnComment,
+		"SecretType":            "secret_type",
+		"OAuthScopes":           "oauth_scopes",
+		"OwnerRoleType":         "owner_role_type",
 	}
 
 	userDescriptionStructFieldToColumnMap = map[string]string{

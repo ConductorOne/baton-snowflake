@@ -26,7 +26,7 @@ func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name":                database.Name,
+		profileKeyName:        database.Name,
 		"kind":                database.Kind,
 		"origin":              database.Origin,
 		"is_shared_or_system": database.IsSharedOrSystem(),

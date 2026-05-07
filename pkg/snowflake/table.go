@@ -19,8 +19,8 @@ import (
 )
 
 var schemaStructFieldToColumnMap = map[string]string{
-	"Name":         "name",
-	"DatabaseName": "database_name",
+	structFieldName:         columnName,
+	structFieldDatabaseName: columnDatabaseName,
 }
 
 type (
@@ -94,13 +94,13 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 }
 
 var tableStructFieldToColumnMap = map[string]string{
-	"CreatedOn":    "created_on",
-	"Name":         "name",
-	"SchemaName":   "schema_name",
-	"DatabaseName": "database_name",
-	"Kind":         "kind",
-	"Comment":      "comment",
-	"Owner":        "owner",
+	structFieldCreatedOn:    columnCreatedOn,
+	structFieldName:         columnName,
+	"SchemaName":            "schema_name",
+	structFieldDatabaseName: columnDatabaseName,
+	"Kind":                  "kind",
+	structFieldComment:      columnComment,
+	structFieldOwner:        columnOwner,
 }
 
 type (
@@ -264,14 +264,14 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 }
 
 var tableGrantStructFieldToColumnMap = map[string]string{
-	"CreatedOn":   "created_on",
-	"Privilege":   "privilege",
-	"GrantedOn":   "granted_on",
-	"Name":        "name",
-	"GrantedTo":   "granted_to",
-	"GranteeName": "grantee_name",
-	"GrantOption": "grant_option",
-	"GrantedBy":   "granted_by",
+	structFieldCreatedOn: columnCreatedOn,
+	"Privilege":          "privilege",
+	"GrantedOn":          "granted_on",
+	structFieldName:      columnName,
+	"GrantedTo":          "granted_to",
+	"GranteeName":        "grantee_name",
+	"GrantOption":        "grant_option",
+	"GrantedBy":          "granted_by",
 }
 
 type (

@@ -13,7 +13,7 @@ import (
 )
 
 var accountRoleStructFieldToColumnMap = map[string]string{
-	"Name": "name",
+	structFieldName: columnName,
 }
 
 type (

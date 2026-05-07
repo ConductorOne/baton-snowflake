@@ -53,7 +53,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 		Description: "Connector syncing users, databases, tables, and account roles from Snowflake.",
 		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
 			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
-				"name": {
+				profileKeyName: {
 					DisplayName: "User Name",
 					Required:    true,
 					Description: "The name of the user (required - case-sensitive)",
@@ -113,7 +113,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
 				},
-				"comment": {
+				profileKeyComment: {
 					DisplayName: "Comment",
 					Required:    false,
 					Description: "A comment or description for the user",
