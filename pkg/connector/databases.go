@@ -77,7 +77,7 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 			continue
 		}
 
-		resource, err := databaseResource(&database, o.syncSecrets) // #nosec G601
+		resource, err := databaseResource(&database, o.syncSecrets)
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to create database resource")
 		}
