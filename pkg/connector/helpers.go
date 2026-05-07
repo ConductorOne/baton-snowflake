@@ -32,3 +32,13 @@ func quoteSnowflakeIdentifier(identifier string) string {
 	// Wrap in double quotes
 	return fmt.Sprintf(`"%s"`, escaped)
 }
+
+func isDatabaseExcluded(name string, excludeDatabases []string) bool {
+	upper := strings.ToUpper(name)
+	for _, excluded := range excludeDatabases {
+		if upper == excluded {
+			return true
+		}
+	}
+	return false
+}

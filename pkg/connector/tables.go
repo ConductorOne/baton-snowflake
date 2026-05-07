@@ -139,7 +139,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 
 	databaseName := parentResourceID.Resource
 
-	if o.isDatabaseExcluded(databaseName) {
+	if isDatabaseExcluded(databaseName, o.excludeDatabases) {
 		l := ctxzap.Extract(ctx)
 		l.Info("skipping table enumeration for excluded database", zap.String("database", databaseName))
 		return nil, &rs.SyncOpResults{}, nil
@@ -422,16 +422,6 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	}
 
 	return grants, &rs.SyncOpResults{}, nil
-}
-
-func (o *tableBuilder) isDatabaseExcluded(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, excluded := range o.excludeDatabases {
-		if upper == excluded {
-			return true
-		}
-	}
-	return false
 }
 
 func newTableBuilder(client *snowflake.Client, excludeDatabases []string) *tableBuilder {

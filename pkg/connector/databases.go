@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
@@ -72,7 +71,7 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 
 	var resources []*v2.Resource
 	for _, database := range databases {
-		if o.isDatabaseExcluded(database.Name) {
+		if isDatabaseExcluded(database.Name, o.excludeDatabases) {
 			l := ctxzap.Extract(ctx)
 			l.Info("skipping excluded database", zap.String("database", database.Name))
 			continue
@@ -141,16 +140,6 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 	}
 
 	return grants, nil, nil
-}
-
-func (o *databaseBuilder) isDatabaseExcluded(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, excluded := range o.excludeDatabases {
-		if upper == excluded {
-			return true
-		}
-	}
-	return false
 }
 
 func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool, excludeDatabases []string) *databaseBuilder {
