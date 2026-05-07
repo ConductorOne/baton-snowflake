@@ -4,12 +4,13 @@ package config
 import "reflect"
 
 type Snowflake struct {
-	AccountIdentifier string `mapstructure:"account-identifier"`
-	AccountUrl        string `mapstructure:"account-url"`
-	PrivateKey        []byte `mapstructure:"private-key"`
-	PrivateKeyPath    string `mapstructure:"private-key-path"`
-	UserIdentifier    string `mapstructure:"user-identifier"`
-	SyncSecrets       bool   `mapstructure:"sync-secrets"`
+	AccountIdentifier string   `mapstructure:"account-identifier"`
+	AccountUrl        string   `mapstructure:"account-url"`
+	PrivateKey        []byte   `mapstructure:"private-key"`
+	PrivateKeyPath    string   `mapstructure:"private-key-path"`
+	UserIdentifier    string   `mapstructure:"user-identifier"`
+	SyncSecrets       bool     `mapstructure:"sync-secrets"`
+	ExcludeDatabase   []string `mapstructure:"exclude-database"`
 }
 
 func (c *Snowflake) findFieldByTag(tagValue string) (any, bool) {

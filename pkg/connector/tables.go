@@ -7,10 +7,12 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
-	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 const (
@@ -84,7 +86,8 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 }
 
 type tableBuilder struct {
-	client *snowflake.Client
+	client           *snowflake.Client
+	excludeDatabases []string
 }
 
 func (o *tableBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -135,6 +138,12 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	}
 
 	databaseName := parentResourceID.Resource
+
+	if o.isDatabaseExcluded(databaseName) {
+		l := ctxzap.Extract(ctx)
+		l.Info("skipping table enumeration for excluded database", zap.String("database", databaseName))
+		return nil, &rs.SyncOpResults{}, nil
+	}
 
 	bag := &pagination.Bag{}
 	if err := bag.Unmarshal(opts.PageToken.Token); err != nil {
@@ -415,8 +424,19 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	return grants, &rs.SyncOpResults{}, nil
 }
 
-func newTableBuilder(client *snowflake.Client) *tableBuilder {
+func (o *tableBuilder) isDatabaseExcluded(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, excluded := range o.excludeDatabases {
+		if upper == excluded {
+			return true
+		}
+	}
+	return false
+}
+
+func newTableBuilder(client *snowflake.Client, excludeDatabases []string) *tableBuilder {
 	return &tableBuilder{
-		client: client,
+		client:           client,
+		excludeDatabases: excludeDatabases,
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -15,8 +16,9 @@ import (
 )
 
 type Connector struct {
-	Client      *snowflake.Client
-	syncSecrets bool
+	Client           *snowflake.Client
+	syncSecrets      bool
+	excludeDatabases []string
 }
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
@@ -24,8 +26,8 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 	builders := []connectorbuilder.ResourceSyncerV2{
 		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client, d.syncSecrets),
-		newTableBuilder(d.Client),
+		newDatabaseBuilder(d.Client, d.syncSecrets, d.excludeDatabases),
+		newTableBuilder(d.Client, d.excludeDatabases),
 	}
 
 	if d.syncSecrets {
@@ -234,8 +236,14 @@ func New(ctx context.Context, cfg *config.Snowflake) (*Connector, error) {
 		return nil, err
 	}
 
+	excludeDatabases := make([]string, 0, len(cfg.ExcludeDatabase))
+	for _, db := range cfg.ExcludeDatabase {
+		excludeDatabases = append(excludeDatabases, strings.ToUpper(strings.TrimSpace(db)))
+	}
+
 	return &Connector{
-		Client:      client,
-		syncSecrets: cfg.SyncSecrets,
+		Client:           client,
+		syncSecrets:      cfg.SyncSecrets,
+		excludeDatabases: excludeDatabases,
 	}, nil
 }
