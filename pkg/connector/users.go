@@ -174,6 +174,10 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		return nil, nil, nil
 	}
 
+	if err := o.client.CacheUsers(ctx, opts.Session, users); err != nil {
+		return nil, nil, wrapError(err, "failed to seed user cache")
+	}
+
 	var resources []*v2.Resource
 	for _, user := range users {
 		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601

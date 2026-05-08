@@ -51,6 +51,10 @@ func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 		return nil, nil, wrapError(err, "failed to list account roles")
 	}
 
+	if err := o.client.CacheAccountRoles(ctx, opts.Session, accountRoles); err != nil {
+		return nil, nil, wrapError(err, "failed to seed account role cache")
+	}
+
 	var resources []*v2.Resource
 	for _, role := range accountRoles {
 		resource, err := accountRoleResource(&role) // #nosec G601

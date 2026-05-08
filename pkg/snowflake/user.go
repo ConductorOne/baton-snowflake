@@ -223,6 +223,22 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	return users, nil
 }
 
+// SHOW USERS returns a superset of DESCRIBE USER fields, so cached entries are safe to reuse for GetUser.
+func (c *Client) CacheUsers(ctx context.Context, ss sessions.SessionStore, users []User) error {
+	if ss == nil || len(users) == 0 {
+		return nil
+	}
+	m := make(map[string]*User, len(users))
+	for i := range users {
+		user := users[i]
+		m[user.Username] = &user
+	}
+	if err := session.SetManyJSON(ctx, ss, m, userNamespace); err != nil {
+		return fmt.Errorf("snowflake: cache users: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username string) (*User, int, error) {
 	if ss != nil {
 		if cached, found, err := session.GetJSON[*User](ctx, ss, username, userNamespace); err == nil && found {

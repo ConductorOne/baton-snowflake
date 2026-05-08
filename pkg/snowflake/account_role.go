@@ -141,6 +141,21 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 	return accountRoleGrantees, nil
 }
 
+func (c *Client) CacheAccountRoles(ctx context.Context, ss sessions.SessionStore, roles []AccountRole) error {
+	if ss == nil || len(roles) == 0 {
+		return nil
+	}
+	m := make(map[string]*AccountRole, len(roles))
+	for i := range roles {
+		role := roles[i]
+		m[role.Name] = &role
+	}
+	if err := session.SetManyJSON(ctx, ss, m, accountRoleNamespace); err != nil {
+		return fmt.Errorf("snowflake: cache account roles: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, roleName string) (*AccountRole, int, error) {
 	if ss != nil {
 		if cached, found, err := session.GetJSON[*AccountRole](ctx, ss, roleName, accountRoleNamespace); err == nil && found {
