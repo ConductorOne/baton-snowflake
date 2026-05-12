@@ -11,10 +11,10 @@ import (
 )
 
 var databaseStructFieldToColumnMap = map[string]string{
-	"Name":   "name",
-	"Owner":  "owner",
-	"Kind":   "kind",
-	"Origin": "origin",
+	structFieldName:  columnName,
+	structFieldOwner: columnOwner,
+	"Kind":           "kind",
+	"Origin":         "origin",
 }
 
 type (

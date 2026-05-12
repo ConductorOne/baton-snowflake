@@ -3,14 +3,17 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"net/http"
 
+	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 )
 
 var accountRoleStructFieldToColumnMap = map[string]string{
-	"Name": "name",
+	structFieldName: columnName,
 }
 
 type (
@@ -138,7 +141,28 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 	return accountRoleGrantees, nil
 }
 
-func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountRole, int, error) {
+func (c *Client) CacheAccountRoles(ctx context.Context, ss sessions.SessionStore, roles []AccountRole) error {
+	if ss == nil || len(roles) == 0 {
+		return nil
+	}
+	m := make(map[string]*AccountRole, len(roles))
+	for i := range roles {
+		role := roles[i]
+		m[role.Name] = &role
+	}
+	if err := session.SetManyJSON(ctx, ss, m, accountRoleNamespace); err != nil {
+		return fmt.Errorf("snowflake: cache account roles: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, roleName string) (*AccountRole, int, error) {
+	if ss != nil {
+		if cached, found, err := session.GetJSON[*AccountRole](ctx, ss, roleName, accountRoleNamespace); err == nil && found {
+			return cached, http.StatusOK, nil
+		}
+	}
+
 	queries := []string{
 		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", roleName),
 	}
@@ -164,11 +188,16 @@ func (c *Client) GetAccountRole(ctx context.Context, roleName string) (*AccountR
 		return nil, resp.StatusCode, err
 	}
 
-	if len(accountRoles) == 0 {
-		return nil, resp.StatusCode, nil
+	var role *AccountRole
+	if len(accountRoles) > 0 {
+		role = &accountRoles[0]
 	}
 
-	return &accountRoles[0], resp.StatusCode, nil
+	if ss != nil {
+		_ = session.SetJSON(ctx, ss, roleName, role, accountRoleNamespace)
+	}
+
+	return role, resp.StatusCode, nil
 }
 
 func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) error {

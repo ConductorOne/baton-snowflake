@@ -26,7 +26,7 @@ func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name":                database.Name,
+		profileKeyName:        database.Name,
 		"kind":                database.Kind,
 		"origin":              database.Origin,
 		"is_shared_or_system": database.IsSharedOrSystem(),
@@ -102,7 +102,7 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 	return rv, nil, nil
 }
 
-func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get database")
@@ -111,7 +111,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, _ r
 		return nil, nil, nil
 	}
 
-	owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, database.Owner)
+	owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, opts.Session, database.Owner)
 	if err != nil {
 		if snowflake.IsUnprocessableEntity(ownerStatusCode, err) {
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for database owner role %q (database %q): %w", database.Owner, resource.Id.Resource, err)

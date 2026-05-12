@@ -3,16 +3,19 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
 var (
 	userStructFieldToColumnMap = map[string]string{
-		"Username":         "name",
+		"Username":         columnName,
 		"Login":            "login_name",
 		"DisplayName":      "display_name",
 		"FirstName":        "first_name",
@@ -26,7 +29,7 @@ var (
 		"LastSuccessLogin": "last_success_login",
 		"Type":             "type",
 		"HasMfa":           "has_mfa",
-		"Comment":          "comment",
+		structFieldComment: columnComment,
 	}
 
 	// Sadly snowflake is inconsistent and returns different set of columns for DESC USER.
@@ -38,15 +41,15 @@ var (
 	}
 
 	secretStructFieldToColumnMap = map[string]string{
-		"CreatedOn":     "created_on",
-		"Name":          "name",
-		"SchemaName":    "schema_name",
-		"DatabaseName":  "database_name",
-		"Owner":         "owner",
-		"Comment":       "comment",
-		"SecretType":    "secret_type",
-		"OAuthScopes":   "oauth_scopes",
-		"OwnerRoleType": "owner_role_type",
+		structFieldCreatedOn:    columnCreatedOn,
+		structFieldName:         columnName,
+		"SchemaName":            "schema_name",
+		structFieldDatabaseName: columnDatabaseName,
+		structFieldOwner:        columnOwner,
+		structFieldComment:      columnComment,
+		"SecretType":            "secret_type",
+		"OAuthScopes":           "oauth_scopes",
+		"OwnerRoleType":         "owner_role_type",
 	}
 
 	userDescriptionStructFieldToColumnMap = map[string]string{
@@ -220,7 +223,29 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	return users, nil
 }
 
-func (c *Client) GetUser(ctx context.Context, username string) (*User, int, error) {
+// SHOW USERS returns a superset of DESCRIBE USER fields, so cached entries are safe to reuse for GetUser.
+func (c *Client) CacheUsers(ctx context.Context, ss sessions.SessionStore, users []User) error {
+	if ss == nil || len(users) == 0 {
+		return nil
+	}
+	m := make(map[string]*User, len(users))
+	for i := range users {
+		user := users[i]
+		m[user.Username] = &user
+	}
+	if err := session.SetManyJSON(ctx, ss, m, userNamespace); err != nil {
+		return fmt.Errorf("snowflake: cache users: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username string) (*User, int, error) {
+	if ss != nil {
+		if cached, found, err := session.GetJSON[*User](ctx, ss, username, userNamespace); err == nil && found {
+			return cached, http.StatusOK, nil
+		}
+	}
+
 	// Escape double quotes in username by doubling them before quoting
 	escapedUsername := escapeDoubleQuotedIdentifier(username)
 	queries := []string{
@@ -246,6 +271,10 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, int, erro
 	user, err := response.GetUser()
 	if err != nil {
 		return nil, resp.StatusCode, err
+	}
+
+	if ss != nil {
+		_ = session.SetJSON(ctx, ss, username, user, userNamespace)
 	}
 
 	return user, resp.StatusCode, nil

@@ -7,6 +7,7 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/conductorone/baton-snowflake/pkg/config"
@@ -52,7 +53,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 		Description: "Connector syncing users, databases, tables, and account roles from Snowflake.",
 		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
 			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
-				"name": {
+				profileKeyName: {
 					DisplayName: "User Name",
 					Required:    true,
 					Description: "The name of the user (required - case-sensitive)",
@@ -112,7 +113,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
 					},
 				},
-				"comment": {
+				profileKeyComment: {
 					DisplayName: "Comment",
 					Required:    false,
 					Description: "A comment or description for the user",
@@ -192,26 +193,26 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 }
 
 // New returns a new instance of the connector.
-func New(ctx context.Context, cfg *config.Snowflake) (*Connector, error) {
+func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error) {
 	if cfg.PrivateKeyPath == "" && len(cfg.PrivateKey) == 0 {
-		return nil, fmt.Errorf("private-key or private-key-path is required")
+		return nil, nil, fmt.Errorf("private-key or private-key-path is required")
 	}
 	if cfg.PrivateKeyPath != "" && len(cfg.PrivateKey) > 0 {
-		return nil, fmt.Errorf("only one of private-key or private-key-path can be provided")
+		return nil, nil, fmt.Errorf("only one of private-key or private-key-path can be provided")
 	}
 	var privateKeyValue any
 	if cfg.PrivateKeyPath != "" {
 		var err error
 		privateKeyValue, err = snowflake.ReadPrivateKey(cfg.PrivateKeyPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if len(cfg.PrivateKey) > 0 {
 		var err error
 		privateKeyValue, err = snowflake.ParsePrivateKey(cfg.PrivateKey)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -223,7 +224,7 @@ func New(ctx context.Context, cfg *config.Snowflake) (*Connector, error) {
 	noAuth := uhttp.NoAuth{}
 	baseHttpClient, err := noAuth.GetClient(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ts := snowflake.NewJWTTokenSource(&jwtConfig)
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, baseHttpClient)
@@ -231,11 +232,11 @@ func New(ctx context.Context, cfg *config.Snowflake) (*Connector, error) {
 
 	client, err := snowflake.New(cfg.AccountUrl, jwtConfig, httpClient)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	return &Connector{
 		Client:      client,
 		syncSecrets: cfg.SyncSecrets,
-	}, nil
+	}, nil, nil
 }

@@ -25,7 +25,7 @@ func (o *accountRoleBuilder) ResourceType(ctx context.Context) *v2.ResourceType 
 
 func accountRoleResource(accountRole *snowflake.AccountRole) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"name": accountRole.Name,
+		profileKeyName: accountRole.Name,
 	}
 
 	roleTraits := []rs.RoleTraitOption{
@@ -49,6 +49,10 @@ func (o *accountRoleBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 	accountRoles, err := o.client.ListAccountRoles(ctx, cursor, resourcePageSize)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list account roles")
+	}
+
+	if err := o.client.CacheAccountRoles(ctx, opts.Session, accountRoles); err != nil {
+		return nil, nil, wrapError(err, "failed to seed account role cache")
 	}
 
 	var resources []*v2.Resource

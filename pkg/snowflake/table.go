@@ -13,12 +13,14 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
 var schemaStructFieldToColumnMap = map[string]string{
-	"Name":         "name",
-	"DatabaseName": "database_name",
+	structFieldName:         columnName,
+	structFieldDatabaseName: columnDatabaseName,
 }
 
 type (
@@ -92,13 +94,13 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 }
 
 var tableStructFieldToColumnMap = map[string]string{
-	"CreatedOn":    "created_on",
-	"Name":         "name",
-	"SchemaName":   "schema_name",
-	"DatabaseName": "database_name",
-	"Kind":         "kind",
-	"Comment":      "comment",
-	"Owner":        "owner",
+	structFieldCreatedOn:    columnCreatedOn,
+	structFieldName:         columnName,
+	"SchemaName":            "schema_name",
+	structFieldDatabaseName: columnDatabaseName,
+	"Kind":                  "kind",
+	structFieldComment:      columnComment,
+	structFieldOwner:        columnOwner,
 }
 
 type (
@@ -262,14 +264,14 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 }
 
 var tableGrantStructFieldToColumnMap = map[string]string{
-	"CreatedOn":   "created_on",
-	"Privilege":   "privilege",
-	"GrantedOn":   "granted_on",
-	"Name":        "name",
-	"GrantedTo":   "granted_to",
-	"GranteeName": "grantee_name",
-	"GrantOption": "grant_option",
-	"GrantedBy":   "granted_by",
+	structFieldCreatedOn: columnCreatedOn,
+	"Privilege":          "privilege",
+	"GrantedOn":          "granted_on",
+	structFieldName:      columnName,
+	"GrantedTo":          "granted_to",
+	"GranteeName":        "grantee_name",
+	"GrantOption":        "grant_option",
+	"GrantedBy":          "granted_by",
 }
 
 type (
@@ -306,8 +308,23 @@ func (r *ListTableGrantsRawResponse) GetTableGrants() ([]TableGrant, error) {
 	return grants, nil
 }
 
+func tableGrantsCacheKey(database, schema, tableName, objectKind string) string {
+	kind := "TABLE"
+	if strings.EqualFold(objectKind, "VIEW") {
+		kind = "VIEW"
+	}
+	return fmt.Sprintf("%s|%s|%s|%s", database, schema, tableName, kind)
+}
+
 // ListTableGrants uses objectKind to run SHOW GRANTS ON TABLE or ON VIEW (Snowflake requires the correct type).
-func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableName, objectKind string) ([]TableGrant, error) {
+func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, database, schema, tableName, objectKind string) ([]TableGrant, error) {
+	cacheKey := tableGrantsCacheKey(database, schema, tableName, objectKind)
+	if ss != nil {
+		if cached, found, err := session.GetJSON[[]TableGrant](ctx, ss, cacheKey, tableGrantsNamespace); err == nil && found {
+			return cached, nil
+		}
+	}
+
 	l := ctxzap.Extract(ctx)
 	objectType := "TABLE"
 	if strings.EqualFold(objectKind, "VIEW") {
@@ -374,6 +391,10 @@ func (c *Client) ListTableGrants(ctx context.Context, database, schema, tableNam
 	grants, err := response.GetTableGrants()
 	if err != nil {
 		return nil, err
+	}
+
+	if ss != nil {
+		_ = session.SetJSON(ctx, ss, cacheKey, grants, tableGrantsNamespace)
 	}
 
 	return grants, nil

@@ -32,12 +32,12 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"email":        user.Email,
-		"login":        user.Login,
-		"display_name": user.DisplayName,
-		"first_name":   user.FirstName,
-		"last_name":    user.LastName,
-		"comment":      user.Comment,
+		"email":           user.Email,
+		"login":           user.Login,
+		"display_name":    user.DisplayName,
+		"first_name":      user.FirstName,
+		"last_name":       user.LastName,
+		profileKeyComment: user.Comment,
 	}
 
 	userTraits := []rs.UserTraitOption{
@@ -135,7 +135,7 @@ func extractProfileFields(accountInfo *v2.AccountInfo, createReq *snowflake.Crea
 	if emailStr, ok := pMap["email"].(string); ok && emailStr != "" {
 		createReq.Email = emailStr
 	}
-	if commentStr, ok := pMap["comment"].(string); ok && commentStr != "" {
+	if commentStr, ok := pMap[profileKeyComment].(string); ok && commentStr != "" {
 		createReq.Comment = commentStr
 	}
 	// Handle disabled as boolean
@@ -172,6 +172,10 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	if len(users) == 0 {
 		return nil, nil, nil
+	}
+
+	if err := o.client.CacheUsers(ctx, opts.Session, users); err != nil {
+		return nil, nil, wrapError(err, "failed to seed user cache")
 	}
 
 	var resources []*v2.Resource
@@ -229,7 +233,7 @@ func (o *userBuilder) CreateAccount(
 	// The user name must be provided in profile.name (required in schema)
 	userName := ""
 	if profile := accountInfo.GetProfile(); profile != nil {
-		if nameStr, ok := rs.GetProfileStringValue(profile, "name"); ok && nameStr != "" {
+		if nameStr, ok := rs.GetProfileStringValue(profile, profileKeyName); ok && nameStr != "" {
 			userName = nameStr
 		}
 	}
@@ -329,7 +333,7 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 	baseDelay := 500 * time.Millisecond
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		user, statusCode, err := o.client.GetUser(ctx, userName)
+		user, statusCode, err := o.client.GetUser(ctx, nil, userName)
 		if err == nil && statusCode == http.StatusOK {
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),
