@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
@@ -15,9 +16,10 @@ import (
 )
 
 type databaseBuilder struct {
-	resourceType *v2.ResourceType
-	client       *snowflake.Client
-	syncSecrets  bool
+	resourceType      *v2.ResourceType
+	client            *snowflake.Client
+	syncSecrets       bool
+	excludedDatabases map[string]struct{} // uppercase-normalised names to exclude
 }
 
 func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -68,6 +70,9 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 
 	var resources []*v2.Resource
 	for _, database := range databases {
+		if _, excluded := o.excludedDatabases[strings.ToUpper(database.Name)]; excluded {
+			continue
+		}
 		resource, err := databaseResource(&database, o.syncSecrets) // #nosec G601
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to create database resource")
@@ -133,10 +138,15 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, opt
 	return grants, nil, nil
 }
 
-func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool) *databaseBuilder {
+func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool, excludedDatabases []string) *databaseBuilder {
+	excluded := make(map[string]struct{}, len(excludedDatabases))
+	for _, name := range excludedDatabases {
+		excluded[strings.ToUpper(name)] = struct{}{}
+	}
 	return &databaseBuilder{
-		resourceType: databaseResourceType,
-		client:       client,
-		syncSecrets:  syncSecrets,
+		resourceType:      databaseResourceType,
+		client:            client,
+		syncSecrets:       syncSecrets,
+		excludedDatabases: excluded,
 	}
 }
