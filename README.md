@@ -21,10 +21,11 @@ The connector must be passed both the path to the **UNENCRYPTED PRIVATE KEY in
 PEM format** or the raw value by . They can be passed as either CLI
 flags or as environment variables via the following variable names:
 
-| As Environment Variables | As CLI flags         | Description           |
-|--------------------------|----------------------|-----------------------|
-| `BATON_PRIVATE_KEY_PATH` | `--private-key-path` | Path to private Key   |
-| `BATON_PRIVATE_KEY`      | `--private-key`      | Raw private key value |
+| As Environment Variables    | As CLI flags              | Description                                      |
+|-----------------------------|---------------------------|--------------------------------------------------|
+| `BATON_PRIVATE_KEY_PATH`    | `--private-key-path`      | Path to private key                              |
+| `BATON_PRIVATE_KEY`         | `--private-key`           | Raw private key value                            |
+| `BATON_EXCLUDED_DATABASES`  | `--excluded-databases`    | Database names to skip during sync (repeatable)  |
 
 # Getting Started
 
@@ -155,6 +156,22 @@ Compare both outputs. If both outputs match, the user correctly configured their
 To sync secrets the account needs this role
 permission https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-control-requirements
 
+### Excluding Databases from Sync
+
+Use `--excluded-databases` (or `BATON_EXCLUDED_DATABASES`) to skip one or more databases entirely. Excluded databases and all of their tables are omitted from every sync. Matching is case-insensitive.
+
+**CLI flag** (repeatable):
+```bash
+baton-snowflake \
+  --excluded-databases "MY_INTERNAL_DB" \
+  --excluded-databases "ANOTHER_DB"
+```
+
+**Environment variable** (comma-separated):
+```bash
+BATON_EXCLUDED_DATABASES="MY_INTERNAL_DB,ANOTHER_DB" baton-snowflake
+```
+
 ## brew
 
 ```
@@ -231,21 +248,23 @@ completion Generate the autocompletion script for the specified shell
 help Help about any command
 
 Flags:
---account-identifier string required: Account Identifier. ($BATON_ACCOUNT_IDENTIFIER)
+--account-identifier string   required: Account Identifier. ($BATON_ACCOUNT_IDENTIFIER)
 --account-url string          required: Account URL. ($BATON_ACCOUNT_URL)
---client-id string The client ID used to authenticate with ConductorOne ($BATON_CLIENT_ID)
+--client-id string            The client ID used to authenticate with ConductorOne ($BATON_CLIENT_ID)
 --client-secret string        The client secret used to authenticate with ConductorOne ($BATON_CLIENT_SECRET)
--f, --file string The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
--h, --help                        help for baton-snowflake
+--excluded-databases strings  Database names to exclude from sync, case-insensitive. Can be specified multiple times. ($BATON_EXCLUDED_DATABASES)
+-f, --file string             The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
+-h, --help                    help for baton-snowflake
 --log-format string           The output format for logs: json, console ($BATON_LOG_FORMAT) (default "json")
---log-level string The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
+--log-level string            The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
 --private-key string          Private Key (PEM format). ($BATON_PRIVATE_KEY)
---private-key-path string Private Key Path. ($BATON_PRIVATE_KEY_PATH)
--p, --provisioning                This must be set in order for provisioning actions to be enabled ($BATON_PROVISIONING)
---skip-full-sync This must be set to skip a full sync ($BATON_SKIP_FULL_SYNC)
+--private-key-path string     Private Key Path. ($BATON_PRIVATE_KEY_PATH)
+-p, --provisioning            This must be set in order for provisioning actions to be enabled ($BATON_PROVISIONING)
+--skip-full-sync              This must be set to skip a full sync ($BATON_SKIP_FULL_SYNC)
+--sync-secrets                Enable synchronization of Snowflake secrets. ($BATON_SYNC_SECRETS)
 --ticketing                   This must be set to enable ticketing support ($BATON_TICKETING)
---user-identifier string required: User Identifier. ($BATON_USER_IDENTIFIER)
--v, --version version for baton-snowflake
+--user-identifier string      required: User Identifier. ($BATON_USER_IDENTIFIER)
+-v, --version                 version for baton-snowflake
 
 Use "baton-snowflake [command] --help" for more information about a command.
 
