@@ -11,13 +11,14 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/conductorone/baton-snowflake/pkg/config"
-	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"golang.org/x/oauth2"
 )
 
 type Connector struct {
-	Client      *snowflake.Client
-	syncSecrets bool
+	Client            *snowflake.Client
+	syncSecrets       bool
+	excludedDatabases []string
 }
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
@@ -25,7 +26,7 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 	builders := []connectorbuilder.ResourceSyncerV2{
 		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client, d.syncSecrets),
+		newDatabaseBuilder(d.Client, d.syncSecrets, d.excludedDatabases),
 		newTableBuilder(d.Client),
 	}
 
@@ -236,7 +237,8 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 	}
 
 	return &Connector{
-		Client:      client,
-		syncSecrets: cfg.SyncSecrets,
+		Client:            client,
+		syncSecrets:       cfg.SyncSecrets,
+		excludedDatabases: cfg.ExcludedDatabases,
 	}, nil, nil
 }

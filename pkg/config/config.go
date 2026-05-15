@@ -45,6 +45,11 @@ var (
 		field.WithDescription("Enable synchronization of Snowflake secrets. When enabled, the connector will sync secrets from your Snowflake account."),
 		field.WithDefaultValue(false),
 	)
+	ExcludedDatabases = field.StringSliceField(
+		"excluded-databases",
+		field.WithDisplayName("Excluded Databases"),
+		field.WithDescription("Database names to exclude from sync (case-insensitive). Can be specified multiple times. When set, matching databases and all their tables are skipped entirely."),
+	)
 
 	fieldRelationships = []field.SchemaFieldRelationship{
 		field.FieldsMutuallyExclusive(
@@ -64,6 +69,7 @@ var (
 		PrivateKeyPathField,
 		UserIdentifierField,
 		SyncSecrets,
+		ExcludedDatabases,
 	}
 
 	Configuration = field.NewConfiguration(
