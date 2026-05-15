@@ -144,6 +144,12 @@
       "displayName": "Sync Secrets",
       "description": "Enable synchronization of Snowflake secrets. When enabled, the connector will sync secrets from your Snowflake account.",
       "boolField": {}
+    },
+    {
+      "name": "excluded-databases",
+      "displayName": "Excluded Databases",
+      "description": "Database names to exclude from sync (case-insensitive). Can be specified multiple times. When set, matching databases and all their tables are skipped entirely.",
+      "stringSliceField": {}
     }
   ],
   "displayName": "Snowflake",
