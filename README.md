@@ -26,6 +26,7 @@ flags or as environment variables via the following variable names:
 | `BATON_PRIVATE_KEY_PATH`    | `--private-key-path`      | Path to private key                              |
 | `BATON_PRIVATE_KEY`         | `--private-key`           | Raw private key value                            |
 | `BATON_EXCLUDED_DATABASES`  | `--excluded-databases`    | Database names to skip during sync (repeatable)  |
+| `BATON_SYNC_TABLES`         | `--sync-tables`           | Set to `false` to skip table sync (default: `true`) |
 
 # Getting Started
 
@@ -172,6 +173,20 @@ baton-snowflake \
 BATON_EXCLUDED_DATABASES="MY_INTERNAL_DB,ANOTHER_DB" baton-snowflake
 ```
 
+### Skipping Table Sync
+
+Use `--sync-tables=false` (or `BATON_SYNC_TABLES=false`) to skip syncing tables entirely. This significantly reduces sync size and duration for accounts with large numbers of tables. Tables are synced by default.
+
+**CLI flag:**
+```bash
+baton-snowflake --sync-tables=false
+```
+
+**Environment variable:**
+```bash
+BATON_SYNC_TABLES=false baton-snowflake
+```
+
 ## brew
 
 ```
@@ -262,6 +277,7 @@ Flags:
 -p, --provisioning            This must be set in order for provisioning actions to be enabled ($BATON_PROVISIONING)
 --skip-full-sync              This must be set to skip a full sync ($BATON_SKIP_FULL_SYNC)
 --sync-secrets                Enable synchronization of Snowflake secrets. ($BATON_SYNC_SECRETS)
+--sync-tables                 Enable synchronization of Snowflake tables. Set to false to skip. ($BATON_SYNC_TABLES) (default true)
 --ticketing                   This must be set to enable ticketing support ($BATON_TICKETING)
 --user-identifier string      required: User Identifier. ($BATON_USER_IDENTIFIER)
 -v, --version                 version for baton-snowflake

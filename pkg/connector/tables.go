@@ -2,14 +2,19 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
 
@@ -59,7 +64,7 @@ func getObjectKind(resource *v2.Resource) string {
 	return defaultObjectKind
 }
 
-func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Resource, databaseName string) (bool, error) {
+func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, ss sessions.SessionStore, resource *v2.Resource, databaseName string) (bool, error) {
 	if v := getTableProfileField(resource, "database_is_shared_system"); v != nil {
 		switch val := v.(type) {
 		case bool:
@@ -70,7 +75,7 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 			return val == "true" || val == "1", nil
 		}
 	}
-	db, statusCode, err := o.client.GetDatabase(ctx, databaseName)
+	db, statusCode, err := o.client.GetDatabase(ctx, ss, databaseName)
 	if snowflake.IsUnprocessableEntity(statusCode, err) {
 		return true, nil
 	}
@@ -84,7 +89,8 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 }
 
 type tableBuilder struct {
-	client *snowflake.Client
+	client     *snowflake.Client
+	syncTables bool
 }
 
 func (o *tableBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -129,6 +135,9 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	if parentResourceID == nil {
 		return nil, &rs.SyncOpResults{}, nil
 	}
+	if !o.syncTables {
+		return nil, &rs.SyncOpResults{}, nil
+	}
 
 	if parentResourceID.ResourceType != databaseResourceType.Id {
 		return nil, nil, wrapError(fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType), "invalid parent resource type")
@@ -149,7 +158,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	// Encoding isSharedOrSystemDB in ResourceTypeID avoids re-querying the
 	// database on every subsequent page.
 	if bag.Current() == nil {
-		parentDB, statusCode, err := o.client.GetDatabase(ctx, databaseName)
+		parentDB, statusCode, err := o.client.GetDatabase(ctx, opts.Session, databaseName)
 		if err != nil && !snowflake.IsUnprocessableEntity(statusCode, err) {
 			return nil, nil, wrapError(err, "failed to get parent database")
 		}
@@ -260,13 +269,16 @@ func grantsContainPrincipal(grants []*v2.Grant, principalID *v2.ResourceId, enti
 }
 
 func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	// No syncTables guard here: the SDK calls Entitlements from the C1Z store (persistent
+	// across syncs), not just from the current List return. Skipping would silently leave
+	// stale grants if syncTables was enabled on a previous run.
 	databaseName, schemaName, tableName, err := parseTableResourceID(resource)
 	if err != nil {
 		return nil, nil, err
 	}
 	var rv []*v2.Entitlement
 
-	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, resource, databaseName)
+	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, opts.Session, resource, databaseName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -306,12 +318,14 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 }
 
 func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	// No syncTables guard here: same reasoning as Entitlements — the SDK iterates from
+	// the persistent C1Z store, so a guard would silently leave stale grants from prior syncs.
 	databaseName, schemaName, tableName, err := parseTableResourceID(resource)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, resource, databaseName)
+	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, opts.Session, resource, databaseName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -430,8 +444,9 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	return grants, &rs.SyncOpResults{}, nil
 }
 
-func newTableBuilder(client *snowflake.Client) *tableBuilder {
+func newTableBuilder(client *snowflake.Client, syncTables bool) *tableBuilder {
 	return &tableBuilder{
-		client: client,
+		client:     client,
+		syncTables: syncTables,
 	}
 }

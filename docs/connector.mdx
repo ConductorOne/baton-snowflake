@@ -135,6 +135,9 @@ In the **RSA Private Key (PEM Format)** field, upload the private key file.
 **Optional.** In the **Excluded Databases** field, enter the names of any Snowflake databases you want to skip during sync. You can add multiple names. Matching is case-insensitive. Excluded databases and all their tables are omitted from every sync.
 </Step>
 <Step>
+**Optional.** Disable **Sync Tables** to skip syncing Snowflake tables entirely. This significantly reduces sync size and duration for accounts with large numbers of tables. Tables are synced by default.
+</Step>
+<Step>
 Click **Save**.
 </Step>
 <Step>
@@ -216,6 +219,9 @@ stringData:
 
   # Optional: comma-separated list of database names to exclude from sync (case-insensitive)
   # BATON_EXCLUDED_DATABASES: "MY_DB,ANOTHER_DB"
+
+  # Optional: set to false to skip syncing tables (reduces sync size significantly)
+  # BATON_SYNC_TABLES: false
 ```
 
 See the connector's README or run `--help` to see all available configuration flags and environment variables.

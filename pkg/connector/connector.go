@@ -18,6 +18,7 @@ import (
 type Connector struct {
 	Client            *snowflake.Client
 	syncSecrets       bool
+	syncTables        bool
 	excludedDatabases []string
 }
 
@@ -26,16 +27,12 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 	builders := []connectorbuilder.ResourceSyncerV2{
 		newUserBuilder(d.Client, d.syncSecrets),
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client, d.syncSecrets, d.excludedDatabases),
-		newTableBuilder(d.Client),
+		newDatabaseBuilder(d.Client, d.syncSecrets, d.syncTables, d.excludedDatabases),
+		newTableBuilder(d.Client, d.syncTables),
 	}
 
 	if d.syncSecrets {
-		builders = append(
-			builders,
-			newSecretBuilder(d.Client),
-			newRsaBuilder(d.Client),
-		)
+		builders = append(builders, newSecretBuilder(d.Client), newRsaBuilder(d.Client))
 	}
 
 	return builders
@@ -239,6 +236,7 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 	return &Connector{
 		Client:            client,
 		syncSecrets:       cfg.SyncSecrets,
+		syncTables:        cfg.SyncTables,
 		excludedDatabases: cfg.ExcludedDatabases,
 	}, nil, nil
 }
