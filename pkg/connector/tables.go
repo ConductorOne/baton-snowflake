@@ -277,6 +277,11 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	objectKind := getObjectKind(resource)
 	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
 	if err != nil {
+		if errors.Is(err, snowflake.ErrObjectNotFound) {
+			ctxzap.Extract(ctx).Warn("table no longer exists during entitlements phase, skipping",
+				zap.String("table", resource.Id.Resource))
+			return nil, &rs.SyncOpResults{}, nil
+		}
 		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
 
@@ -317,6 +322,11 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	objectKind := getObjectKind(resource)
 	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
 	if err != nil {
+		if errors.Is(err, snowflake.ErrObjectNotFound) {
+			ctxzap.Extract(ctx).Warn("table no longer exists during grants phase, skipping",
+				zap.String("table", resource.Id.Resource))
+			return nil, &rs.SyncOpResults{}, nil
+		}
 		return nil, nil, wrapError(err, "failed to list table grants")
 	}
 	if len(tableGrants) == 0 {
@@ -391,6 +401,11 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	if ownerPrincipalID == nil {
 		table, err := o.client.GetTable(ctx, databaseName, schemaName, tableName)
 		if err != nil {
+			if errors.Is(err, snowflake.ErrObjectNotFound) {
+				ctxzap.Extract(ctx).Warn("table disappeared before owner fallback, returning partial grants",
+					zap.String("table", resource.Id.Resource))
+				return grants, &rs.SyncOpResults{}, nil
+			}
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
 		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {

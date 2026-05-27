@@ -17,6 +17,7 @@ import (
 
 var (
 	accountRoleNamespace = sessions.WithPrefix("account_role")
+	databaseNamespace    = sessions.WithPrefix("database")
 	userNamespace        = sessions.WithPrefix("user")
 	tableGrantsNamespace = sessions.WithPrefix("table_grants")
 )
@@ -249,6 +250,22 @@ func Contains[T comparable](ts []T, val T) bool {
 		}
 	}
 	return false
+}
+
+// fetchStatementResultIfAsync fires the GET poll only when Snowflake returned 202
+// (query still running). On 200 the full result is already in target from the POST body.
+// defer closeResponseBody is used consistently with all other call sites in this package.
+func (c *Client) fetchStatementResultIfAsync(ctx context.Context, postResp *http.Response, handle string, target any) error {
+	if postResp == nil || postResp.StatusCode != http.StatusAccepted {
+		return nil
+	}
+	req, err := c.GetStatementResponse(ctx, handle)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req, uhttp.WithJSONResponse(target))
+	defer closeResponseBody(resp)
+	return err
 }
 
 // closeResponseBody drains and closes the response body if it exists.

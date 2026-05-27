@@ -11,6 +11,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/session"
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 var (
@@ -205,13 +207,7 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 		return nil, err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
+	if err := c.fetchStatementResultIfAsync(ctx, resp1, response.StatementHandle, &response); err != nil {
 		return nil, err
 	}
 
@@ -241,7 +237,11 @@ func (c *Client) CacheUsers(ctx context.Context, ss sessions.SessionStore, users
 
 func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username string) (*User, int, error) {
 	if ss != nil {
-		if cached, found, err := session.GetJSON[*User](ctx, ss, username, userNamespace); err == nil && found {
+		cached, found, err := session.GetJSON[*User](ctx, ss, username, userNamespace)
+		if err != nil {
+			ctxzap.Extract(ctx).Debug("user cache lookup error, falling through to API",
+				zap.String("username", username), zap.Error(err))
+		} else if found {
 			return cached, http.StatusOK, nil
 		}
 	}
