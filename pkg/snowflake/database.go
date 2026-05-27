@@ -3,8 +3,11 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
+	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -43,7 +46,7 @@ func (d *Database) IsSharedOrSystem() bool {
 		return true
 	}
 	kind := strings.ToUpper(strings.TrimSpace(d.Kind))
-	return kind == "SHARED" || kind == "APPLICATION" || kind == "IMPORTED DATABASE"
+	return kind == "SHARED" || kind == "APPLICATION" || kind == "IMPORTED DATABASE" || kind == "CATALOG-LINKED DATABASE"
 }
 
 func (r *ListDatabasesRawResponse) GetDatabases() ([]Database, error) {
@@ -83,13 +86,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListDatabases", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
+	if err := c.fetchStatementResultIfAsync(ctx, resp1, response.StatementHandle, &response); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +98,28 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	return dbs, nil
 }
 
-func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
+func (c *Client) CacheDatabases(ctx context.Context, ss sessions.SessionStore, databases []Database) error {
+	if ss == nil || len(databases) == 0 {
+		return nil
+	}
+	for i := range databases {
+		if err := session.SetJSON(ctx, ss, databases[i].Name, &databases[i], databaseNamespace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) GetDatabase(ctx context.Context, ss sessions.SessionStore, name string) (*Database, int, error) {
+	if ss != nil {
+		cached, found, err := session.GetJSON[*Database](ctx, ss, name, databaseNamespace)
+		if err != nil {
+			ctxzap.Extract(ctx).Debug("database cache lookup error, falling through to API",
+				zap.String("name", name), zap.Error(err))
+		} else if found {
+			return cached, http.StatusOK, nil
+		}
+	}
 	queries := []string{
 		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", name),
 	}
@@ -122,16 +140,36 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 		return nil, statusCode, err
 	}
 
+	pollStatusCode := resp.StatusCode
+	if resp.StatusCode == http.StatusAccepted {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, 0, err
+		}
+		pollResp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+		defer closeResponseBody(pollResp)
+		if err != nil {
+			return nil, 0, err
+		}
+		if pollResp != nil {
+			pollStatusCode = pollResp.StatusCode
+		}
+	}
+
 	databases, err := response.GetDatabases()
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, pollStatusCode, err
 	}
 
 	if len(databases) == 0 {
-		return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
+		return nil, pollStatusCode, fmt.Errorf("database with name %s not found", name)
 	} else if len(databases) > 1 {
-		return nil, resp.StatusCode, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
+		return nil, pollStatusCode, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
 	}
 
-	return &databases[0], resp.StatusCode, nil
+	if ss != nil {
+		// Write-back is best-effort: a cache miss on a subsequent call just falls through to the API.
+		_ = session.SetJSON(ctx, ss, name, &databases[0], databaseNamespace)
+	}
+	return &databases[0], pollStatusCode, nil
 }

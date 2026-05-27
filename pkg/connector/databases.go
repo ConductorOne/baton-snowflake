@@ -19,6 +19,7 @@ type databaseBuilder struct {
 	resourceType      *v2.ResourceType
 	client            *snowflake.Client
 	syncSecrets       bool
+	syncTables        bool
 	excludedDatabases map[string]struct{} // uppercase-normalised names to exclude
 }
 
@@ -26,7 +27,7 @@ func (o *databaseBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return databaseResourceType
 }
 
-func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resource, error) {
+func databaseResource(database *snowflake.Database, syncSecrets bool, syncTables bool) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		profileKeyName:        database.Name,
 		"kind":                database.Kind,
@@ -38,7 +39,10 @@ func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resou
 		rs.WithAppProfile(profile),
 	}
 
-	opts := []rs.ResourceOption{rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id})}
+	var opts []rs.ResourceOption
+	if syncTables {
+		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id}))
+	}
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
 	}
@@ -68,12 +72,19 @@ func (o *databaseBuilder) List(ctx context.Context, parentResourceID *v2.Resourc
 		return nil, nil, wrapError(err, "failed to list databases")
 	}
 
+	// Seed database cache for both databaseBuilder.Grants and tableBuilder.isDBSharedOrSystem
+	// (via GetDatabase), both of which run regardless of syncTables.
+	// Do not guard this with syncTables.
+	if err := o.client.CacheDatabases(ctx, opts.Session, databases); err != nil {
+		return nil, nil, wrapError(err, "failed to seed database cache")
+	}
+
 	var resources []*v2.Resource
 	for _, database := range databases {
 		if _, excluded := o.excludedDatabases[strings.ToUpper(database.Name)]; excluded {
 			continue
 		}
-		resource, err := databaseResource(&database, o.syncSecrets) // #nosec G601
+		resource, err := databaseResource(&database, o.syncSecrets, o.syncTables) // #nosec G601
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to create database resource")
 		}
@@ -108,7 +119,8 @@ func (o *databaseBuilder) Entitlements(_ context.Context, resource *v2.Resource,
 }
 
 func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	database, _, err := o.client.GetDatabase(ctx, resource.Id.Resource)
+	// Uses the database cache seeded during List to avoid a redundant Snowflake query.
+	database, _, err := o.client.GetDatabase(ctx, opts.Session, resource.Id.Resource)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get database")
 	}
@@ -138,7 +150,7 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, opt
 	return grants, nil, nil
 }
 
-func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool, excludedDatabases []string) *databaseBuilder {
+func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool, syncTables bool, excludedDatabases []string) *databaseBuilder {
 	excluded := make(map[string]struct{}, len(excludedDatabases))
 	for _, name := range excludedDatabases {
 		excluded[strings.ToUpper(name)] = struct{}{}
@@ -147,6 +159,7 @@ func newDatabaseBuilder(client *snowflake.Client, syncSecrets bool, excludedData
 		resourceType:      databaseResourceType,
 		client:            client,
 		syncSecrets:       syncSecrets,
+		syncTables:        syncTables,
 		excludedDatabases: excluded,
 	}
 }
