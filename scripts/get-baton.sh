@@ -2,18 +2,18 @@
 
 set -euxo pipefail
 
+# conductorone/baton is archived and its releases/latest is frozen at v0.4.5,
+# which cannot resolve the NonHumanIdentityTrait proto this connector now emits.
+# Pull the baton CLI from baton-sdk instead, which ships the NHI-aware protos.
+BATON_VERSION=v0.11.0
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 if [ "${ARCH}" = "x86_64" ]; then
   ARCH="amd64"
 fi
 
-RELEASES_URL="https://api.github.com/repos/conductorone/baton/releases/latest"
-BASE_URL="https://github.com/conductorone/baton/releases/download"
+FILENAME="baton-${BATON_VERSION}-${OS}-${ARCH}.tar.gz"
 
-DOWNLOAD_URL=$(curl "${RELEASES_URL}" | jq --raw-output ".assets[].browser_download_url | match(\"${BASE_URL}/v[.0-9]+/baton-v[.0-9]+-${OS}-${ARCH}.*\"; \"i\").string")
-
-FILENAME=$(basename ${DOWNLOAD_URL})
-
-curl -LO ${DOWNLOAD_URL}
-tar xzf ${FILENAME}
+curl -fsSL -O "https://github.com/conductorone/baton-sdk/releases/download/${BATON_VERSION}/${FILENAME}"
+tar xzf "${FILENAME}"
