@@ -20,6 +20,9 @@ func (o *integrationBuilder) ResourceType(ctx context.Context) *v2.ResourceType 
 	return integrationResourceType
 }
 
+// categoryAPI is the Snowflake integration category for API integrations.
+const categoryAPI = "API"
+
 // classifyIntegration maps a Snowflake integration to its non-human-identity
 // spine value and axis-2 detail string. EXTERNAL OAUTH security integrations are
 // app registrations; STORAGE and API integrations assume a cloud IAM role. Every
@@ -34,7 +37,7 @@ func classifyIntegration(integrationType, category string) (v2.NonHumanIdentityT
 		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "snowflake.integration.external_oauth"
 	case c == "STORAGE":
 		return v2.NonHumanIdentityTrait_NHI_TYPE_ASSUMABLE_ROLE, "snowflake.integration.storage"
-	case c == "API":
+	case c == categoryAPI:
 		return v2.NonHumanIdentityTrait_NHI_TYPE_ASSUMABLE_ROLE, "snowflake.integration.api"
 	default:
 		return v2.NonHumanIdentityTrait_NHI_TYPE_UNSPECIFIED, "snowflake.integration." + normalizeDetailToken(c)

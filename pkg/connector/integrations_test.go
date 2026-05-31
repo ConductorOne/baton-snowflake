@@ -30,8 +30,8 @@ func TestClassifyIntegration(t *testing.T) {
 		},
 		{
 			name:            "api integration -> assumable role",
-			integrationType: "API",
-			category:        "API",
+			integrationType: categoryAPI,
+			category:        categoryAPI,
 			wantType:        v2.NonHumanIdentityTrait_NHI_TYPE_ASSUMABLE_ROLE,
 			wantDetail:      "snowflake.integration.api",
 		},
