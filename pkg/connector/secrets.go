@@ -26,6 +26,8 @@ func secretResource(_ context.Context, secret *snowflake.Secret, id *v2.Resource
 	secretTraits := []rs.SecretTraitOption{
 		rs.WithSecretCreatedAt(secret.CreatedOn),
 		rs.WithSecretCreatedByID(secretOwner),
+		rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_STATIC_SECRET),
+		rs.WithSecretDetail("snowflake.secret"),
 	}
 
 	secretId := fmt.Sprintf("%s-%s", secret.DatabaseName, secret.Name)
