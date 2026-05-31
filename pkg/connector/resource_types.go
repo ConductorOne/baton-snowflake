@@ -39,6 +39,12 @@ var (
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
 		Annotations: getSkipEntitlementsAnnotation(),
 	}
+	integrationResourceType = &v2.ResourceType{
+		Id:          "integration",
+		DisplayName: "Integration",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+		Annotations: getSkipEntitlementsAnnotation(),
+	}
 )
 
 func getSkipEntitlementsAnnotation() annotations.Annotations {

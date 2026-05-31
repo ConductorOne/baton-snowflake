@@ -28,6 +28,7 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 		newAccountRoleBuilder(d.Client),
 		newDatabaseBuilder(d.Client, d.syncSecrets, d.excludedDatabases),
 		newTableBuilder(d.Client),
+		newIntegrationBuilder(d.Client),
 	}
 
 	if d.syncSecrets {

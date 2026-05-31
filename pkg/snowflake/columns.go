@@ -6,6 +6,8 @@ const (
 	structFieldComment      = "Comment"
 	structFieldCreatedOn    = "CreatedOn"
 	structFieldDatabaseName = "DatabaseName"
+	structFieldType         = "Type"
+	structFieldCategory     = "Category"
 )
 
 const (
@@ -14,4 +16,6 @@ const (
 	columnComment      = "comment"
 	columnCreatedOn    = "created_on"
 	columnDatabaseName = "database_name"
+	columnType         = "type"
+	columnCategory     = "category"
 )
