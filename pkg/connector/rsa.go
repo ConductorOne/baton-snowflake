@@ -50,6 +50,8 @@ func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id
 	secretTraits := []rs.SecretTraitOption{
 		rs.WithSecretLastUsedAt(*rsaTime),
 		rs.WithSecretCreatedByID(id),
+		rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_ASYMMETRIC_KEY),
+		rs.WithSecretDetail("snowflake.rsa_key_pair"),
 	}
 
 	rsaId := fmt.Sprintf("%s-%s", user.Username, rsaIdx.String())
