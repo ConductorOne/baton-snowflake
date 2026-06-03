@@ -50,6 +50,12 @@ var (
 		field.WithDisplayName("Excluded Databases"),
 		field.WithDescription("Database names to exclude from sync (case-insensitive). Can be specified multiple times. When set, matching databases and all their tables are skipped entirely."),
 	)
+	SyncTables = field.BoolField(
+		"sync-tables",
+		field.WithDisplayName("Sync Tables"),
+		field.WithDescription("Enable synchronization of Snowflake tables. Set to false to skip table syncing and significantly reduce sync size. Defaults to true."),
+		field.WithDefaultValue(true),
+	)
 
 	fieldRelationships = []field.SchemaFieldRelationship{
 		field.FieldsMutuallyExclusive(
@@ -69,6 +75,7 @@ var (
 		PrivateKeyPathField,
 		UserIdentifierField,
 		SyncSecrets,
+		SyncTables,
 		ExcludedDatabases,
 	}
 

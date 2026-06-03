@@ -91,13 +91,7 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListAccountRoles", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
+	if err := c.fetchStatementResultIfAsync(ctx, resp1, response.StatementHandle, &response); err != nil {
 		return nil, err
 	}
 
@@ -126,13 +120,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 		return nil, err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
+	if err := c.fetchStatementResultIfAsync(ctx, resp1, response.StatementHandle, &response); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +146,11 @@ func (c *Client) CacheAccountRoles(ctx context.Context, ss sessions.SessionStore
 
 func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, roleName string) (*AccountRole, int, error) {
 	if ss != nil {
-		if cached, found, err := session.GetJSON[*AccountRole](ctx, ss, roleName, accountRoleNamespace); err == nil && found {
+		cached, found, err := session.GetJSON[*AccountRole](ctx, ss, roleName, accountRoleNamespace)
+		if err != nil {
+			ctxzap.Extract(ctx).Debug("account role cache lookup error, falling through to API",
+				zap.String("role_name", roleName), zap.Error(err))
+		} else if found {
 			return cached, http.StatusOK, nil
 		}
 	}

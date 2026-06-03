@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,6 +18,11 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
+
+// ErrObjectNotFound is returned when Snowflake reports a target object does not
+// exist or cannot be seen, and the cause is not an RBAC privilege error (code
+// 003001). Callers should treat this as a soft-skip condition.
+var ErrObjectNotFound = errors.New("baton-snowflake: object does not exist or not authorized")
 
 var schemaStructFieldToColumnMap = map[string]string{
 	structFieldName:         columnName,
@@ -67,6 +73,9 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	defer closeResponseBody(resp1)
 	if err != nil {
+		// All 422s returned as PermissionDenied. Callers in tables.go propagate this
+		// error via wrapError — there is no soft-skip at the List level, so returning
+		// ErrObjectNotFound here would have no observable effect on sync behavior.
 		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s: %w", databaseName, err)
@@ -75,19 +84,27 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		return nil, err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
-			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result): %w", databaseName, err)
-			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+	// Inline async poll: unlike fetchStatementResultIfAsync, this path also wraps 422 as
+	// PermissionDenied. That extra error handling is why this function does not call the
+	// shared helper.
+	if resp1.StatusCode == http.StatusAccepted {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			// All 422s returned as PermissionDenied. Callers in tables.go propagate this
+			// error via wrapError — there is no soft-skip at the List level, so returning
+			// ErrObjectNotFound here would have no observable effect on sync behavior.
+			if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
+				l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
+				wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result): %w", databaseName, err)
+				return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+			}
+			return nil, err
+		}
 	}
 
 	return response.ListSchemas()
@@ -158,6 +175,9 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
 	defer closeResponseBody(resp1)
 	if err != nil {
+		// All 422s returned as PermissionDenied. Callers in tables.go propagate this
+		// error via wrapError — there is no soft-skip at the List level, so returning
+		// ErrObjectNotFound here would have no observable effect on sync behavior.
 		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
@@ -167,20 +187,26 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 		return nil, "", err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, "", err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
-			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA (statement result)",
-				zap.String("database", databaseName), zap.String("schema", schemaName))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s (statement result): %w", databaseName, schemaName, err)
-			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
+	// Inline async poll: see ListSchemasInDatabase for why this does not use fetchStatementResultIfAsync.
+	if resp1.StatusCode == http.StatusAccepted {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, "", err
 		}
-		return nil, "", err
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			// All 422s returned as PermissionDenied. Callers in tables.go propagate this
+			// error via wrapError — there is no soft-skip at the List level, so returning
+			// ErrObjectNotFound here would have no observable effect on sync behavior.
+			if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
+				l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA (statement result)",
+					zap.String("database", databaseName), zap.String("schema", schemaName))
+				wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s (statement result): %w", databaseName, schemaName, err)
+				return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
+			}
+			return nil, "", err
+		}
 	}
 
 	tables, err := response.ListTables()
@@ -189,6 +215,8 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	}
 
 	var nextCursor string
+	// >= not >: if exactly limit rows returned, there may be more beyond the cursor.
+	// Fewer than limit means this is definitively the last page.
 	if limit > 0 && len(tables) >= limit {
 		last := tables[len(tables)-1]
 		nextCursor = last.Name
@@ -233,18 +261,19 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	defer closeResponseBody(resp1)
 	if err != nil {
 		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
-			return nil, nil
+			// Any 422 is treated as object-not-found rather than decoding for code 003001.
+			// GetTable is only called as an owner fallback after ListTableGrants already succeeded,
+			// so a genuine RBAC denial here is extremely unlikely within the same request cycle.
+			// Even if it occurred, ErrObjectNotFound causes the caller to return partial grants
+			// with a Warn log — a tolerable degradation, not a silent failure.
+			// Note: the async path via fetchStatementResultIfAsync also has no 422 handling;
+			// both paths uniformly soft-skip on any 422 here.
+			return nil, ErrObjectNotFound
 		}
 		return nil, err
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
-	defer closeResponseBody(resp2)
-	if err != nil {
+	if err := c.fetchStatementResultIfAsync(ctx, resp1, response.StatementHandle, &response); err != nil {
 		return nil, err
 	}
 
@@ -260,7 +289,7 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 		}
 	}
 
-	return nil, fmt.Errorf("table %s.%s.%s not found", database, schema, tableName)
+	return nil, fmt.Errorf("%w: %s.%s.%s", ErrObjectNotFound, database, schema, tableName)
 }
 
 var tableGrantStructFieldToColumnMap = map[string]string{
@@ -320,7 +349,11 @@ func tableGrantsCacheKey(database, schema, tableName, objectKind string) string 
 func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, database, schema, tableName, objectKind string) ([]TableGrant, error) {
 	cacheKey := tableGrantsCacheKey(database, schema, tableName, objectKind)
 	if ss != nil {
-		if cached, found, err := session.GetJSON[[]TableGrant](ctx, ss, cacheKey, tableGrantsNamespace); err == nil && found {
+		cached, found, err := session.GetJSON[[]TableGrant](ctx, ss, cacheKey, tableGrantsNamespace)
+		if err != nil {
+			ctxzap.Extract(ctx).Debug("table grants cache lookup error, falling through to API",
+				zap.String("cache_key", cacheKey), zap.Error(err))
+		} else if found {
 			return cached, nil
 		}
 	}
@@ -353,39 +386,56 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 				return nil, fmt.Errorf("received 422 but failed to decode response body: %w (request error: %s)", decodeErr, err.Error())
 			}
 
-			// code: 003001
-			// message: SQL access control error:\nInsufficient privileges
 			tableRef := fmt.Sprintf("%s.%s.%s", database, schema, tableName)
 			if errMsg.Code == "003001" {
+				// Genuine RBAC/privilege problem — keep as PermissionDenied so sync fails loudly
 				l.Debug("Insufficient privileges to show grants on table", zap.String("table", tableRef))
-			} else {
-				l.Error(errMsg.Message, zap.String("table", tableRef))
+				return nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
 			}
-
-			return nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
+			// Any other 422: object dropped mid-sync or otherwise no longer accessible
+			l.Warn("Table no longer exists or not accessible (will soft-skip)",
+				zap.String("table", tableRef),
+				zap.String("snowflake_code", errMsg.Code),
+				zap.String("message", errMsg.Message))
+			return nil, ErrObjectNotFound
 		}
 
 		return nil, err
 	}
-	if resp != nil {
-		defer resp.Body.Close()
-	}
+	// Close POST response body explicitly — resp is reassigned below for the GET.
+	closeResponseBody(resp)
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
-			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %w", database, schema, tableName, err)
-			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+	// closeResponseBody drains the body but does not nil resp; StatusCode is still readable.
+	if resp != nil && resp.StatusCode == http.StatusAccepted {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
-	}
-	if resp != nil {
-		defer resp.Body.Close()
+		resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+		defer closeResponseBody(resp)
+		if err != nil {
+			if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+				tableRef := fmt.Sprintf("%s.%s.%s", database, schema, tableName)
+				var errMsg struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}
+				// resp.Body is safe to read: uhttp.Do replaces the raw stream with
+				// bytes.NewBuffer(body) before returning, so WithJSONResponse and this
+				// decode draw from independent copies of the same bytes.
+				decodeErr := json.NewDecoder(resp.Body).Decode(&errMsg)
+				if decodeErr != nil {
+					l.Warn("Failed to decode 422 response body on async poll, treating as object-not-found",
+						zap.String("table", tableRef), zap.Error(decodeErr))
+				} else if errMsg.Code == "003001" {
+					l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", tableRef))
+					return nil, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
+				}
+				l.Warn("Table no longer exists during statement result fetch (will soft-skip)", zap.String("table", tableRef))
+				return nil, ErrObjectNotFound
+			}
+			return nil, err
+		}
 	}
 
 	grants, err := response.GetTableGrants()
