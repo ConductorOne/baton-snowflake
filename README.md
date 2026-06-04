@@ -223,6 +223,19 @@ baton resources
 - Users
 - Account Roles
 - Databases
+- Integrations
+
+## Integrations
+
+`baton-snowflake` syncs account-level integrations via `SHOW INTEGRATIONS` and marks them as
+non-human identities by integration type: EXTERNAL OAUTH security integrations are tagged as app
+registrations, while STORAGE and API integrations are tagged as assumable roles (they assume a
+cloud IAM role).
+
+`SHOW INTEGRATIONS` returns only the integrations the connector's current role has been granted at
+least one privilege on. A role holding `MANAGE GRANTS` (e.g. `ACCOUNTADMIN` or `SECURITYADMIN`)
+sees every integration in the account; a more restricted role simply sees a smaller set. No
+integrations are returned (and the sync is unaffected) if the role can see none.
 
 # Contributing, Support and Issues
 
