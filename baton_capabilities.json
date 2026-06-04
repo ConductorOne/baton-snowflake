@@ -30,6 +30,24 @@
     },
     {
       "resourceType": {
+        "id": "integration",
+        "displayName": "Integration",
+        "traits": [
+          "TRAIT_APP"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
         "id": "rsa_public_key",
         "displayName": "RSA Public Key",
         "traits": [

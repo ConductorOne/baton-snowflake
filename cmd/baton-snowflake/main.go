@@ -16,5 +16,13 @@ const (
 
 func main() {
 	ctx := context.Background()
-	config.RunConnector(ctx, connectorName, version, cfg.ConfigurationSchema(), connector.New, connectorrunner.WithSessionStoreEnabled())
+	config.RunConnector(
+		ctx,
+		connectorName,
+		version,
+		cfg.ConfigurationSchema(),
+		connector.New,
+		connectorrunner.WithSessionStoreEnabled(),
+		connectorrunner.WithDefaultCapabilitiesConnectorBuilderV2(&connector.Connector{SyncSecrets: true}),
+	)
 }

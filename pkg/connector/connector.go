@@ -17,21 +17,21 @@ import (
 
 type Connector struct {
 	Client            *snowflake.Client
-	syncSecrets       bool
+	SyncSecrets       bool
 	excludedDatabases []string
 }
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
 	builders := []connectorbuilder.ResourceSyncerV2{
-		newUserBuilder(d.Client, d.syncSecrets),
+		newUserBuilder(d.Client, d.SyncSecrets),
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client, d.syncSecrets, d.excludedDatabases),
+		newDatabaseBuilder(d.Client, d.SyncSecrets, d.excludedDatabases),
 		newTableBuilder(d.Client),
 		newIntegrationBuilder(d.Client),
 	}
 
-	if d.syncSecrets {
+	if d.SyncSecrets {
 		builders = append(
 			builders,
 			newSecretBuilder(d.Client),
