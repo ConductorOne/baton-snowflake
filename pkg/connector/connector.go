@@ -239,7 +239,7 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 
 	return &Connector{
 		Client:            client,
-		syncSecrets:       cfg.SyncSecrets,
+		SyncSecrets:       cfg.SyncSecrets,
 		excludedDatabases: cfg.ExcludedDatabases,
 	}, nil, nil
 }
