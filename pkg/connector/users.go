@@ -66,7 +66,10 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 
 	var opts []rs.ResourceOption
 	if syncSecrets {
-		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+		opts = append(opts,
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: programmaticAccessTokenResourceType.Id}),
+		)
 	}
 
 	resource, err := rs.NewUserResource(
