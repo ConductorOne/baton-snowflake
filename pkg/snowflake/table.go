@@ -393,6 +393,24 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 		return nil, err
 	}
 
+	for i := 1; i < len(response.ResultSetMetadata.PartitionInfo); i++ {
+		req, err = c.GetStatementPartition(ctx, response.StatementHandle, i)
+		if err != nil {
+			return nil, err
+		}
+		var partitionResponse ListTableGrantsRawResponse
+		partResp, err := c.Do(req, uhttp.WithJSONResponse(&partitionResponse))
+		defer closeResponseBody(partResp)
+		if err != nil {
+			return nil, err
+		}
+		partGrants, err := partitionResponse.GetTableGrants()
+		if err != nil {
+			return nil, err
+		}
+		grants = append(grants, partGrants...)
+	}
+
 	if ss != nil {
 		_ = session.SetJSON(ctx, ss, cacheKey, grants, tableGrantsNamespace)
 	}
