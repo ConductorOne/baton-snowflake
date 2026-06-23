@@ -48,6 +48,24 @@
     },
     {
       "resourceType": {
+        "id": "programmatic_access_token",
+        "displayName": "Programmatic Access Token",
+        "traits": [
+          "TRAIT_SECRET"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
         "id": "rsa_public_key",
         "displayName": "RSA Public Key",
         "traits": [
