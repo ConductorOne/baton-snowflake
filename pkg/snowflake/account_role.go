@@ -138,6 +138,20 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string) (
 
 	accountRoleGrantees := response.GetAccountRoleGrantees()
 
+	for i := 1; i < len(response.ResultSetMetadata.PartitionInfo); i++ {
+		req, err = c.GetStatementPartition(ctx, response.StatementHandle, i)
+		if err != nil {
+			return nil, err
+		}
+		var partitionResponse ListAccountRoleGranteesRawResponse
+		partResp, err := c.Do(req, uhttp.WithJSONResponse(&partitionResponse))
+		defer closeResponseBody(partResp)
+		if err != nil {
+			return nil, err
+		}
+		accountRoleGrantees = append(accountRoleGrantees, partitionResponse.GetAccountRoleGrantees()...)
+	}
+
 	return accountRoleGrantees, nil
 }
 
