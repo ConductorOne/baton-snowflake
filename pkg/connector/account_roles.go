@@ -98,11 +98,17 @@ func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resour
 	return rv, &rs.SyncOpResults{}, nil
 }
 
-func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	accountRoleGrantees, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName)
+func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to get next page offset")
+	}
+
+	accountRoleGrantees, nextCursor, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName, cursor)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list account role grantees")
 	}
+
 	var grants []*v2.Grant
 	for _, grantee := range accountRoleGrantees {
 		switch grantee.GranteeType {
@@ -123,7 +129,16 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 		}
 	}
 
-	return grants, nil, nil
+	if nextCursor == "" {
+		return grants, nil, nil
+	}
+
+	nextToken, err := bag.NextToken(nextCursor)
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to create next page cursor")
+	}
+
+	return grants, &rs.SyncOpResults{NextPageToken: nextToken}, nil
 }
 
 func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {

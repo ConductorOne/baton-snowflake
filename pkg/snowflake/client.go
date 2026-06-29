@@ -42,9 +42,13 @@ type (
 		AccountUrl       string
 		StatementsApiUrl *url.URL
 	}
+	PartitionInfo struct {
+		RowCount int `json:"rowCount"`
+	}
 	ResultSetMetadata struct {
-		NumRows  int       `json:"numRows"`
-		RowTypes []RowType `json:"rowType"`
+		NumRows       int             `json:"numRows"`
+		RowTypes      []RowType       `json:"rowType"`
+		PartitionInfo []PartitionInfo `json:"partitionInfo"`
 	}
 	StatementsApiResponseBase struct {
 		ResultSetMetadata ResultSetMetadata `json:"resultSetMetadata"`
@@ -232,6 +236,31 @@ func (c *Client) GetStatementResponse(ctx context.Context, statementHandle strin
 	if err != nil {
 		return nil, err
 	}
+
+	return c.NewRequest(
+		ctx,
+		http.MethodGet,
+		u,
+		uhttp.WithAcceptJSONHeader(),
+		uhttp.WithHeader(AuthTypeHeaderKey, AuthTypeHeaderValue),
+	)
+}
+
+// https://docs.snowflake.com/en/developer-guide/sql-api/handling-responses#getting-the-results-from-the-response.
+func (c *Client) GetStatementPartition(ctx context.Context, statementHandle string, partitionID int) (*http.Request, error) {
+	stringUrl, err := url.JoinPath(c.StatementsApiUrl.String(), statementHandle)
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(stringUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	q := u.Query()
+	q.Set("partition", strconv.Itoa(partitionID))
+	u.RawQuery = q.Encode()
 
 	return c.NewRequest(
 		ctx,
