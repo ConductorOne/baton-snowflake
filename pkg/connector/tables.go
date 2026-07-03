@@ -264,22 +264,27 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	if err != nil {
 		return nil, nil, err
 	}
-	var rv []*v2.Entitlement
 
 	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, resource, databaseName)
 	if err != nil {
 		return nil, nil, err
 	}
 	if isSharedOrSystem {
-		return append(rv, ownerEntitlementOnly(resource)...), &rs.SyncOpResults{}, nil
+		return ownerEntitlementOnly(resource), &rs.SyncOpResults{}, nil
+	}
+
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: tableResourceType.Id})
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
+	tableGrants, nextCursor, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, cursor)
 	if err != nil {
 		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
 
+	var rv []*v2.Entitlement
 	privileges := make(map[string]bool)
 	for _, tg := range tableGrants {
 		if tg.GrantedTo == grantedToRole || tg.GrantedTo == grantedToUser {
@@ -296,8 +301,16 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 		))
 	}
 
-	rv = append(rv, ownerEntitlementOnly(resource)...)
-	return rv, &rs.SyncOpResults{}, nil
+	if nextCursor == "" {
+		rv = append(rv, ownerEntitlementOnly(resource)...)
+		return rv, &rs.SyncOpResults{}, nil
+	}
+
+	nextToken, err := bag.NextToken(nextCursor)
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to create next page cursor")
+	}
+	return rv, &rs.SyncOpResults{NextPageToken: nextToken}, nil
 }
 
 func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
@@ -314,12 +327,17 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		return nil, &rs.SyncOpResults{}, nil
 	}
 
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: tableResourceType.Id})
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to get next page offset")
+	}
+
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
+	tableGrants, nextCursor, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, cursor)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list table grants")
 	}
-	if len(tableGrants) == 0 {
+	if len(tableGrants) == 0 && nextCursor == "" {
 		return nil, &rs.SyncOpResults{}, nil
 	}
 
@@ -388,7 +406,32 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		grants = append(grants, grant.NewGrant(resource, ownerEntitlement, ownerPrincipalID, addExpandableOpts(ownerExpandableRoleName)...))
 	}
 
-	if ownerPrincipalID == nil {
+	if nextCursor != "" {
+		nextToken, err := bag.NextToken(nextCursor)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to create next page cursor")
+		}
+		return grants, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+	}
+
+	// An explicit OWNERSHIP grant may have landed on an earlier page (whose ownerPrincipalID was
+	// local to that call and is gone now), so consult the complete, now fully-cached grant list -
+	// not just this page's slice - before falling back to the table's Owner column.
+	hasExplicitOwnership := ownerPrincipalID != nil
+	if !hasExplicitOwnership {
+		fullTableGrants, _, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, "")
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to load complete table grants for owner fallback")
+		}
+		for _, tg := range fullTableGrants {
+			if strings.EqualFold(tg.Privilege, privilegeOwner) && (tg.GrantedTo == grantedToRole || tg.GrantedTo == grantedToUser) {
+				hasExplicitOwnership = true
+				break
+			}
+		}
+	}
+
+	if !hasExplicitOwnership {
 		table, err := o.client.GetTable(ctx, databaseName, schemaName, tableName)
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
