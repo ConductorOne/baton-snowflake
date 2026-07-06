@@ -332,7 +332,7 @@ type tableGrantsCursor struct {
 func encodeTableGrantsCursor(cur tableGrantsCursor) (string, error) {
 	b, err := json.Marshal(cur)
 	if err != nil {
-		return "", fmt.Errorf("snowflake: failed to encode table grant page cursor: %w", err)
+		return "", fmt.Errorf("baton-snowflake: failed to encode table grant page cursor: %w", err)
 	}
 	return string(b), nil
 }
@@ -340,7 +340,7 @@ func encodeTableGrantsCursor(cur tableGrantsCursor) (string, error) {
 func decodeTableGrantsCursor(cursor string) (tableGrantsCursor, error) {
 	var cur tableGrantsCursor
 	if err := json.Unmarshal([]byte(cursor), &cur); err != nil {
-		return tableGrantsCursor{}, fmt.Errorf("snowflake: invalid table grant page cursor: %w", err)
+		return tableGrantsCursor{}, fmt.Errorf("baton-snowflake: invalid table grant page cursor: %w", err)
 	}
 	return cur, nil
 }
@@ -368,6 +368,57 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 		}
 	}
 
+	page, err := c.fetchTableGrantsFirstPage(ctx, database, schema, tableName, objectKind)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if page.NumPartitions <= 1 {
+		if ss != nil {
+			// Best-effort: a failure here just costs a future caller a cache miss (they
+			// re-run this same single-partition query), never wrong data.
+			_ = session.SetJSON(ctx, ss, cacheKey, page.Grants, tableGrantsNamespace)
+		}
+		return page.Grants, "", nil
+	}
+
+	if ss != nil {
+		// Not best-effort: partition 0's rows must survive to be stitched together with
+		// later partitions into the "complete" cache entry other callers trust unconditionally
+		// (see listTableGrantsPartition). A silent failure here would make that entry
+		// silently truncated once promoted - the exact bug class this pagination fix closes.
+		if err := session.SetJSON(ctx, ss, cacheKey, page.Grants, tableGrantsPartialNamespace); err != nil {
+			return nil, "", fmt.Errorf("baton-snowflake: failed to persist table grants pagination progress: %w", err)
+		}
+	}
+
+	nextCursor, err := encodeTableGrantsCursor(tableGrantsCursor{
+		Handle:          page.Handle,
+		PartitionID:     1,
+		TotalPartitions: page.NumPartitions,
+		RowTypes:        page.RowTypes,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return page.Grants, nextCursor, nil
+}
+
+// tableGrantsFirstPage is the result of the initial SHOW GRANTS ON TABLE/VIEW request: partition
+// 0's rows plus everything needed to page through the rest (mirrors what the cursor later carries
+// into listTableGrantsPartition).
+type tableGrantsFirstPage struct {
+	Grants        []TableGrant
+	Handle        string
+	NumPartitions int
+	RowTypes      []RowType
+}
+
+// fetchTableGrantsFirstPage executes the SHOW GRANTS ON TABLE/VIEW query (the POST-then-GET dance,
+// with 422/insufficient-privilege handling on each leg) and returns partition 0. Split out of
+// ListTableGrants so that function stays a thin cache/cursor orchestrator, the same way
+// listTableGrantsPartition is a self-contained single-partition fetch for later pages.
+func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema, tableName, objectKind string) (tableGrantsFirstPage, error) {
 	l := ctxzap.Extract(ctx)
 	objectType := "TABLE"
 	if strings.EqualFold(objectKind, "VIEW") {
@@ -379,7 +430,7 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
-		return nil, "", err
+		return tableGrantsFirstPage{}, err
 	}
 
 	var response ListTableGrantsRawResponse
@@ -393,7 +444,7 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 
 			decodeErr := json.NewDecoder(resp.Body).Decode(&errMsg)
 			if decodeErr != nil {
-				return nil, "", fmt.Errorf("received 422 but failed to decode response body: %w (request error: %s)", decodeErr, err.Error())
+				return tableGrantsFirstPage{}, fmt.Errorf("received 422 but failed to decode response body: %w (request error: %s)", decodeErr, err.Error())
 			}
 
 			// code: 003001
@@ -405,10 +456,10 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 				l.Error(errMsg.Message, zap.String("table", tableRef))
 			}
 
-			return nil, "", status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
+			return tableGrantsFirstPage{}, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
 		}
 
-		return nil, "", err
+		return tableGrantsFirstPage{}, err
 	}
 	if resp != nil {
 		defer resp.Body.Close()
@@ -418,16 +469,16 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 
 	req, err = c.GetStatementResponse(ctx, handle)
 	if err != nil {
-		return nil, "", err
+		return tableGrantsFirstPage{}, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %w", database, schema, tableName, err)
-			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return tableGrantsFirstPage{}, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, "", err
+		return tableGrantsFirstPage{}, err
 	}
 	if resp != nil {
 		defer resp.Body.Close()
@@ -435,7 +486,7 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 
 	grants, err := response.GetTableGrants()
 	if err != nil {
-		return nil, "", err
+		return tableGrantsFirstPage{}, err
 	}
 
 	numPartitions := len(response.ResultSetMetadata.PartitionInfo)
@@ -444,35 +495,12 @@ func (c *Client) ListTableGrants(ctx context.Context, ss sessions.SessionStore, 
 		zap.Int("numPartitions", numPartitions),
 		zap.Int("numRows", response.ResultSetMetadata.NumRows))
 
-	if numPartitions <= 1 {
-		if ss != nil {
-			// Best-effort: a failure here just costs a future caller a cache miss (they
-			// re-run this same single-partition query), never wrong data.
-			_ = session.SetJSON(ctx, ss, cacheKey, grants, tableGrantsNamespace)
-		}
-		return grants, "", nil
-	}
-
-	if ss != nil {
-		// Not best-effort: partition 0's rows must survive to be stitched together with
-		// later partitions into the "complete" cache entry other callers trust unconditionally
-		// (see listTableGrantsPartition). A silent failure here would make that entry
-		// silently truncated once promoted - the exact bug class this pagination fix closes.
-		if err := session.SetJSON(ctx, ss, cacheKey, grants, tableGrantsPartialNamespace); err != nil {
-			return nil, "", fmt.Errorf("snowflake: failed to persist table grants pagination progress: %w", err)
-		}
-	}
-
-	nextCursor, err := encodeTableGrantsCursor(tableGrantsCursor{
-		Handle:          handle,
-		PartitionID:     1,
-		TotalPartitions: numPartitions,
-		RowTypes:        response.ResultSetMetadata.RowTypes,
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	return grants, nextCursor, nil
+	return tableGrantsFirstPage{
+		Grants:        grants,
+		Handle:        handle,
+		NumPartitions: numPartitions,
+		RowTypes:      response.ResultSetMetadata.RowTypes,
+	}, nil
 }
 
 // listTableGrantsPartition fetches a non-first partition of a paginated ListTableGrants call.
@@ -524,7 +552,7 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 		// failure, which then gets promoted as the complete result below.
 		accumulated, _, err := session.GetJSON[[]TableGrant](ctx, ss, cacheKey, tableGrantsPartialNamespace)
 		if err != nil {
-			return nil, "", fmt.Errorf("snowflake: failed to read table grants pagination progress: %w", err)
+			return nil, "", fmt.Errorf("baton-snowflake: failed to read table grants pagination progress: %w", err)
 		}
 		accumulated = append(accumulated, grants...)
 
@@ -539,7 +567,7 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 			// Not best-effort: this page's contribution must survive for the next call's
 			// accumulation read above.
 			if err := session.SetJSON(ctx, ss, cacheKey, accumulated, tableGrantsPartialNamespace); err != nil {
-				return nil, "", fmt.Errorf("snowflake: failed to persist table grants pagination progress: %w", err)
+				return nil, "", fmt.Errorf("baton-snowflake: failed to persist table grants pagination progress: %w", err)
 			}
 		}
 	}
