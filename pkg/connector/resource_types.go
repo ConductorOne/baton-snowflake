@@ -45,6 +45,12 @@ var (
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
 		Annotations: getSkipEntitlementsAnnotation(),
 	}
+	programmaticAccessTokenResourceType = &v2.ResourceType{
+		Id:          "programmatic_access_token",
+		DisplayName: "Programmatic Access Token",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+		Annotations: getSkipEntitlementsAnnotation(),
+	}
 )
 
 func getSkipEntitlementsAnnotation() annotations.Annotations {
