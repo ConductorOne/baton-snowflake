@@ -156,6 +156,15 @@ Compare both outputs. If both outputs match, the user correctly configured their
 To sync secrets the account needs this role
 permission https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-control-requirements
 
+### License data
+
+The connector can sync a `license` resource that reports the Snowflake edition
+(Standard, Enterprise, or Business Critical) and, for single-account
+organizations, the account's user count as consumed seats. This resource type is
+opt-in and requires connecting with an account that can read organization-level
+details (`GLOBALORGADMIN` on the organization account). When that access is not
+available, license sync is skipped and the rest of the sync is unaffected.
+
 ### Excluding Databases from Sync
 
 Use `--excluded-databases` (or `BATON_EXCLUDED_DATABASES`) to skip one or more databases entirely. Excluded databases and all of their tables are omitted from every sync. Matching is case-insensitive.
