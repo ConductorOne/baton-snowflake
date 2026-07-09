@@ -27,22 +27,15 @@ func (l *licenseBuilder) List(
 ) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	logger := ctxzap.Extract(ctx)
 
-	accounts, statusCode, err := l.client.ListOrganizationAccounts(ctx)
+	accounts, _, err := l.client.ListOrganizationAccounts(ctx)
 	if err != nil {
-		if snowflake.IsUnprocessableEntity(statusCode, err) {
-			logger.Warn("insufficient privileges to list organization accounts for license data; skipping license sync",
-				zap.Error(err),
-			)
-			return nil, nil, nil
-		}
-		return nil, nil, wrapError(err, "failed to list organization accounts")
+		logger.Debug("skipping license sync: could not list organization accounts", zap.Error(err))
+		return nil, nil, nil
 	}
 
 	userCount, err := l.client.CountUsers(ctx)
 	if err != nil {
-		logger.Warn("failed to count users for license data; proceeding without user count",
-			zap.Error(err),
-		)
+		logger.Debug("proceeding without license seat count: could not count users", zap.Error(err))
 	}
 
 	var resources []*v2.Resource
@@ -57,8 +50,8 @@ func (l *licenseBuilder) List(
 		traitOpts := []rs.LicenseProfileTraitOption{
 			rs.WithLicenseName(licenseName),
 		}
-		if userCount > 0 {
-			traitOpts = append(traitOpts, rs.WithLicenseSeats(0, userCount))
+		if seats, ok := seatsForOrgAccounts(len(accounts), userCount); ok {
+			traitOpts = append(traitOpts, rs.WithLicenseSeats(0, seats))
 		}
 
 		licenseTrait, err := rs.NewLicenseProfileTrait(traitOpts...)
@@ -96,6 +89,16 @@ func (l *licenseBuilder) Grants(
 	_ rs.SyncOpAttrs,
 ) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	return nil, &rs.SyncOpResults{}, nil
+}
+
+// seatsForOrgAccounts returns the consumed-seat count to record on a license and
+// whether to record it. ACCOUNT_USAGE.USERS is scoped to the connected account, so
+// the count is only attributable when the org returns a single account.
+func seatsForOrgAccounts(accountCount int, userCount int64) (int64, bool) {
+	if accountCount == 1 && userCount > 0 {
+		return userCount, true
+	}
+	return 0, false
 }
 
 func newLicenseBuilder(client *snowflake.Client) *licenseBuilder {

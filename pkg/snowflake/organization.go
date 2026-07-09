@@ -51,7 +51,7 @@ func (r *ListOrganizationAccountsRawResponse) GetOrganizationAccounts() ([]Organ
 func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAccount, int, error) {
 	queries := []string{"SHOW ORGANIZATION ACCOUNTS;"}
 
-	req, err := c.PostStatementRequest(ctx, queries)
+	req, err := c.PostStatementRequestWithRole(ctx, queries, GlobalOrgAdminRole)
 	if err != nil {
 		return nil, 0, err
 	}
