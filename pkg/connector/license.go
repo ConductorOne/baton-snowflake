@@ -27,10 +27,13 @@ func (l *licenseBuilder) List(
 ) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	logger := ctxzap.Extract(ctx)
 
-	accounts, _, err := l.client.ListOrganizationAccounts(ctx)
+	accounts, statusCode, err := l.client.ListOrganizationAccounts(ctx)
 	if err != nil {
-		logger.Debug("skipping license sync: could not list organization accounts", zap.Error(err))
-		return nil, nil, nil
+		if isOrgAccountsUnavailable(statusCode, err) {
+			logger.Debug("skipping license sync: organization accounts unavailable for this account", zap.Error(err))
+			return nil, nil, nil
+		}
+		return nil, nil, wrapError(err, "failed to list organization accounts")
 	}
 
 	userCount, err := l.client.CountUsers(ctx)
@@ -45,7 +48,7 @@ func (l *licenseBuilder) List(
 		}
 
 		licenseName := fmt.Sprintf("Snowflake %s", account.Edition)
-		resourceID := fmt.Sprintf("%s:%s", account.AccountName, account.Edition)
+		resourceID := account.AccountLocator
 
 		traitOpts := []rs.LicenseProfileTraitOption{
 			rs.WithLicenseName(licenseName),
@@ -99,6 +102,13 @@ func seatsForOrgAccounts(accountCount int, userCount int64) (int64, bool) {
 		return userCount, true
 	}
 	return 0, false
+}
+
+// isOrgAccountsUnavailable reports whether the error is the expected
+// "not an org account / no GLOBALORGADMIN" case (Snowflake returns 422), which is
+// safe to skip. ctx cancellation and 5xx return false so the sync surfaces them.
+func isOrgAccountsUnavailable(statusCode int, err error) bool {
+	return err != nil && snowflake.IsUnprocessableEntity(statusCode, err)
 }
 
 func newLicenseBuilder(client *snowflake.Client) *licenseBuilder {
