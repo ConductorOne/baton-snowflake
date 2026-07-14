@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
@@ -105,10 +106,15 @@ func seatsForOrgAccounts(accountCount int, userCount int64) (int64, bool) {
 }
 
 // isOrgAccountsUnavailable reports whether the error is the expected
-// "not an org account / no GLOBALORGADMIN" case (Snowflake returns 422), which is
-// safe to skip. ctx cancellation and 5xx return false so the sync surfaces them.
+// "not an org account / no GLOBALORGADMIN" case, which is safe to skip. A regular
+// or trial account cannot run SHOW ORGANIZATION ACCOUNTS regardless of role and
+// Snowflake rejects it with 400; an org account without the role returns 422. Both
+// are skipped. ctx cancellation and 5xx return false so the sync surfaces them.
 func isOrgAccountsUnavailable(statusCode int, err error) bool {
-	return err != nil && snowflake.IsUnprocessableEntity(statusCode, err)
+	if err == nil {
+		return false
+	}
+	return statusCode == http.StatusBadRequest || snowflake.IsUnprocessableEntity(statusCode, err)
 }
 
 func newLicenseBuilder(client *snowflake.Client) *licenseBuilder {

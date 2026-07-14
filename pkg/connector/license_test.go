@@ -39,6 +39,7 @@ func TestIsOrgAccountsUnavailable(t *testing.T) {
 		want       bool
 	}{
 		{"no error", http.StatusOK, nil, false},
+		{"400 status code", http.StatusBadRequest, errors.New("400 Bad Request"), true},
 		{"422 status code", http.StatusUnprocessableEntity, errors.New("unprocessable entity"), true},
 		{"422 in error message", 0, errors.New("rpc error: code = Unknown desc = 422 Unprocessable Entity"), true},
 		{"500 propagates", http.StatusInternalServerError, errors.New("500 Internal Server Error"), false},
