@@ -27,7 +27,7 @@ var (
 		"HasRSAPublicKey":  "has_rsa_public_key",
 		"HasPassword":      "has_password",
 		"LastSuccessLogin": "last_success_login",
-		"Type":             "type",
+		structFieldType:    columnType,
 		"HasMfa":           "has_mfa",
 		structFieldComment: columnComment,
 	}
@@ -274,6 +274,8 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 	}
 
 	if ss != nil {
+		// Best-effort: user was already fetched above and is returned regardless; a failed
+		// cache write only costs a future GetUser call a redundant re-query.
 		_ = session.SetJSON(ctx, ss, username, user, userNamespace)
 	}
 

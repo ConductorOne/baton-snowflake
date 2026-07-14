@@ -241,6 +241,8 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	}
 
 	if ss != nil {
+		// Best-effort: role was already fetched above and is returned regardless; a failed
+		// cache write only costs a future GetAccountRole call a redundant re-query.
 		_ = session.SetJSON(ctx, ss, roleName, role, accountRoleNamespace)
 	}
 

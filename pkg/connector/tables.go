@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -259,27 +260,62 @@ func grantsContainPrincipal(grants []*v2.Grant, principalID *v2.ResourceId, enti
 	return false
 }
 
+// tableGrantsPageState is the SDK page-token payload for tableBuilder.Grants(). Alongside the
+// low-level snowflake.Client pagination cursor, it carries ownershipSeen - whether an explicit
+// OWNERSHIP grant has been found on any page walked so far - forward across successive
+// SDK-driven Grants() calls. This lets the last page know whether to fall back to the table's
+// Owner column without an internal loop or a cache re-fetch: the fact is accumulated for free
+// as a side effect of the per-page grant loop every call already does.
+type tableGrantsPageState struct {
+	Cursor        string `json:"cursor"`
+	OwnershipSeen bool   `json:"ownershipSeen"`
+}
+
+func decodeTableGrantsPageState(token string) (tableGrantsPageState, error) {
+	if token == "" {
+		return tableGrantsPageState{}, nil
+	}
+	var state tableGrantsPageState
+	if err := json.Unmarshal([]byte(token), &state); err != nil {
+		return tableGrantsPageState{}, fmt.Errorf("invalid table grants page state: %w", err)
+	}
+	return state, nil
+}
+
+func encodeTableGrantsPageState(state tableGrantsPageState) (string, error) {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode table grants page state: %w", err)
+	}
+	return string(b), nil
+}
+
 func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	databaseName, schemaName, tableName, err := parseTableResourceID(resource)
 	if err != nil {
 		return nil, nil, err
 	}
-	var rv []*v2.Entitlement
 
 	isSharedOrSystem, err := o.isDBSharedOrSystem(ctx, resource, databaseName)
 	if err != nil {
 		return nil, nil, err
 	}
 	if isSharedOrSystem {
-		return append(rv, ownerEntitlementOnly(resource)...), &rs.SyncOpResults{}, nil
+		return ownerEntitlementOnly(resource), &rs.SyncOpResults{}, nil
+	}
+
+	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: tableResourceType.Id})
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
+	tableGrants, nextCursor, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, cursor)
 	if err != nil {
 		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
 
+	var rv []*v2.Entitlement
 	privileges := make(map[string]bool)
 	for _, tg := range tableGrants {
 		if tg.GrantedTo == grantedToRole || tg.GrantedTo == grantedToUser {
@@ -296,8 +332,16 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 		))
 	}
 
-	rv = append(rv, ownerEntitlementOnly(resource)...)
-	return rv, &rs.SyncOpResults{}, nil
+	if nextCursor == "" {
+		rv = append(rv, ownerEntitlementOnly(resource)...)
+		return rv, &rs.SyncOpResults{}, nil
+	}
+
+	nextToken, err := bag.NextToken(nextCursor)
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to create next page cursor")
+	}
+	return rv, &rs.SyncOpResults{NextPageToken: nextToken}, nil
 }
 
 func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
@@ -314,12 +358,21 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		return nil, &rs.SyncOpResults{}, nil
 	}
 
+	bag, pageToken, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: tableResourceType.Id})
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to get next page offset")
+	}
+	state, err := decodeTableGrantsPageState(pageToken)
+	if err != nil {
+		return nil, nil, wrapError(err, "failed to decode table grants page state")
+	}
+
 	objectKind := getObjectKind(resource)
-	tableGrants, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind)
+	tableGrants, nextCursor, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, state.Cursor)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list table grants")
 	}
-	if len(tableGrants) == 0 {
+	if len(tableGrants) == 0 && nextCursor == "" && pageToken == "" {
 		return nil, &rs.SyncOpResults{}, nil
 	}
 
@@ -388,7 +441,25 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		grants = append(grants, grant.NewGrant(resource, ownerEntitlement, ownerPrincipalID, addExpandableOpts(ownerExpandableRoleName)...))
 	}
 
-	if ownerPrincipalID == nil {
+	// Carried forward via the SDK page token (see tableGrantsPageState) rather than recomputed by
+	// re-fetching or looping: whether THIS OR ANY EARLIER page in this table's grant list had an
+	// explicit OWNERSHIP row. That's all the last page needs to decide on the Owner-column fallback,
+	// with zero extra API calls beyond the pagination that's already happening.
+	ownershipSeen := state.OwnershipSeen || ownerPrincipalID != nil
+
+	if nextCursor != "" {
+		nextState, err := encodeTableGrantsPageState(tableGrantsPageState{Cursor: nextCursor, OwnershipSeen: ownershipSeen})
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to encode table grants page state")
+		}
+		nextToken, err := bag.NextToken(nextState)
+		if err != nil {
+			return nil, nil, wrapError(err, "failed to create next page cursor")
+		}
+		return grants, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+	}
+
+	if !ownershipSeen {
 		table, err := o.client.GetTable(ctx, databaseName, schemaName, tableName)
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
