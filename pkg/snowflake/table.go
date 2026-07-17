@@ -302,6 +302,7 @@ func (r *ListTableGrantsRawResponse) GetTableGrants() ([]TableGrant, error) {
 		if err := r.ResultSetMetadata.ParseRow(grant, row); err != nil {
 			return nil, err
 		}
+		grant.GranteeName = unquoteSnowflakeIdentifier(grant.GranteeName)
 
 		grants = append(grants, *grant)
 	}

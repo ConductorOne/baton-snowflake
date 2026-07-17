@@ -91,6 +91,107 @@ func TestListAccountRoleGrantees_SinglePartition(t *testing.T) {
 	assert.Equal(t, AccountRoleGrantee{RoleName: role, GranteeType: "ROLE", GranteeName: "SYSADMIN"}, grantees[1])
 }
 
+// TestListAccountRoleGrantees_UnquotesGranteeName verifies the CXP-784 fix: Snowflake's
+// SHOW GRANTS OF ROLE renders grantee names that require quoting (mixed case, spaces) wrapped
+// in double quotes, with any embedded double quote doubled. GranteeName must come back
+// unquoted so it matches the canonical (unquoted) ID that SHOW ROLES produces for the same
+// role - otherwise nested-role expansion and principal-ID matching silently fail.
+func TestListAccountRoleGrantees_UnquotesGranteeName(t *testing.T) {
+	const handle = "handle-quoted"
+	const role = "MYROLE"
+
+	rows := [][]string{
+		granteeRow(role, "ROLE", `"Data Engineer"`),
+		granteeRow(role, "USER", `"He said ""hi"""`),
+		granteeRow(role, "ROLE", "SYSADMIN"),
+	}
+	server := serveGrantees(t, handle, rows, nil)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	grantees, nextCursor, err := client.ListAccountRoleGrantees(context.Background(), role, "")
+	require.NoError(t, err)
+	assert.Empty(t, nextCursor)
+	require.Len(t, grantees, 3)
+	assert.Equal(t, "Data Engineer", grantees[0].GranteeName, "quoted mixed-case name should be unquoted")
+	assert.Equal(t, `He said "hi"`, grantees[1].GranteeName, "embedded escaped quotes should be unescaped")
+	assert.Equal(t, "SYSADMIN", grantees[2].GranteeName, "already-unquoted system role should be unaffected")
+}
+
+// accountRoleRowTypes matches the column layout ListAccountRoles' ParseRow expects for SHOW ROLES.
+func accountRoleRowTypes() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"name": "name", "type": "text"},
+	}
+}
+
+// serveAccountRoles returns an httptest.Server implementing the Snowflake Statements API for
+// SHOW ROLES, returning a single page of rows.
+func serveAccountRoles(t *testing.T, handle string, rows [][]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+			})
+		case http.MethodGet:
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows": len(rows),
+					"rowType": accountRoleRowTypes(),
+				},
+				"data": rows,
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// TestListAccountRoles_MatchesUnquotedGranteeID is the acceptance-criteria regression test for
+// CXP-784: for a role whose name requires quoting in SHOW GRANTS output, the resource ID Baton
+// builds from SHOW ROLES (canonical, bare name) must exactly match the principal ID built from
+// the corresponding SHOW GRANTS OF ROLE grantee entry for that same role (unquoted by this fix).
+// Before the fix, these diverged whenever the role name contained spaces/mixed case, silently
+// breaking nested-role expansion.
+func TestListAccountRoles_MatchesUnquotedGranteeID(t *testing.T) {
+	const roleName = "Data Engineer"
+
+	rolesServer := serveAccountRoles(t, "handle-roles", [][]string{{roleName}})
+	defer rolesServer.Close()
+
+	rolesClient, err := New(rolesServer.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	roles, err := rolesClient.ListAccountRoles(context.Background(), "", 100)
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	assert.Equal(t, roleName, roles[0].Name, "SHOW ROLES-derived name must remain bare/unquoted")
+
+	granteesServer := serveGrantees(t, "handle-grantees", [][]string{
+		granteeRow("PARENT_ROLE", "ROLE", `"Data Engineer"`),
+	}, nil)
+	defer granteesServer.Close()
+
+	granteesClient, err := New(granteesServer.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	grantees, _, err := granteesClient.ListAccountRoleGrantees(context.Background(), "PARENT_ROLE", "")
+	require.NoError(t, err)
+	require.Len(t, grantees, 1)
+
+	assert.Equal(t, roles[0].Name, grantees[0].GranteeName,
+		"resource ID from SHOW ROLES must byte-for-byte match the principal ID derived from SHOW GRANTS OF ROLE")
+}
+
 func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 	const handle = "handle-multi"
 	const role = "MYROLE"

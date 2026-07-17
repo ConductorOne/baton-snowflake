@@ -62,7 +62,7 @@ func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() []AccountR
 	for _, accountRoleGrantee := range r.Data {
 		accountRoleGrantees = append(accountRoleGrantees, AccountRoleGrantee{
 			RoleName:    accountRoleGrantee[1],
-			GranteeName: accountRoleGrantee[3],
+			GranteeName: unquoteSnowflakeIdentifier(accountRoleGrantee[3]),
 			GranteeType: accountRoleGrantee[2],
 		})
 	}
