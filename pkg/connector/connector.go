@@ -12,6 +12,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/conductorone/baton-snowflake/pkg/config"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 )
 
@@ -185,6 +187,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
 	users, err := d.Client.ListUsers(ctx, "", 1)
 	if err != nil {
+		ctxzap.Extract(ctx).Debug("baton-snowflake: credential validation failed", zap.Error(err))
 		return nil, err
 	}
 

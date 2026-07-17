@@ -199,7 +199,8 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	}
 
 	var response ListUsersRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr statementsAPIError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
 		return nil, err
@@ -209,7 +210,7 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	if err != nil {
 		return nil, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, err
