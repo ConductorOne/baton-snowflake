@@ -29,6 +29,7 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 		newDatabaseBuilder(d.Client, d.SyncSecrets, d.excludedDatabases),
 		newTableBuilder(d.Client),
 		newIntegrationBuilder(d.Client),
+		newLicenseBuilder(d.Client),
 	}
 
 	if d.SyncSecrets {

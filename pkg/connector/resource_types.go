@@ -45,6 +45,12 @@ var (
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
 		Annotations: getSkipEntitlementsAnnotation(),
 	}
+	licenseResourceType = &v2.ResourceType{
+		Id:          "license",
+		DisplayName: "License",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_LICENSE_PROFILE},
+		Annotations: getLicenseAnnotations(),
+	}
 )
 
 func getSkipEntitlementsAnnotation() annotations.Annotations {
@@ -52,4 +58,12 @@ func getSkipEntitlementsAnnotation() annotations.Annotations {
 	annotations.Update(&v2.SkipEntitlementsAndGrants{})
 
 	return annotations
+}
+
+func getLicenseAnnotations() annotations.Annotations {
+	annos := annotations.Annotations{}
+	annos.Update(&v2.SkipEntitlementsAndGrants{})
+	annos.Update(&v2.OptInRequired{})
+
+	return annos
 }

@@ -27,6 +27,9 @@ const (
 	AuthTypeHeaderValue = "KEYPAIR_JWT"
 	RoleHeaderKey       = "X-Snowflake-Role"
 	UserAdminRole       = "USERADMIN"
+	// GlobalOrgAdminRole is required by SHOW ORGANIZATION ACCOUNTS. The SQL API takes
+	// the role in the request body, not the RoleHeaderKey header.
+	GlobalOrgAdminRole = "GLOBALORGADMIN"
 )
 
 const (
@@ -65,6 +68,7 @@ type (
 	StatementsApiRequestBody struct {
 		Statement  string                      `json:"statement"`
 		Parameters StatementsRequestParameters `json:"parameters"`
+		Role       string                      `json:"role,omitempty"`
 	}
 	QueryParameter struct {
 		Type  string `json:"type"`
@@ -207,7 +211,11 @@ func New(accountUrl string, jwtConfig JWTConfig, httpClient *http.Client) (*Clie
 }
 
 func (c *Client) PostStatementRequest(ctx context.Context, queries []string) (*http.Request, error) {
-	body := &StatementsApiRequestBody{}
+	return c.PostStatementRequestWithRole(ctx, queries, "")
+}
+
+func (c *Client) PostStatementRequestWithRole(ctx context.Context, queries []string, role string) (*http.Request, error) {
+	body := &StatementsApiRequestBody{Role: role}
 	if len(queries) == 1 {
 		body.Statement = queries[0]
 	} else {
