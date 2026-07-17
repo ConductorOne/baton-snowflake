@@ -48,11 +48,4 @@ func TestListUsers_SurfacesAuthFailureReason(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 	assert.Contains(t, err.Error(), "JWT token is invalid")
-	assert.Contains(t, err.Error(), "390144")
-}
-
-func TestStatementsAPIError_Message(t *testing.T) {
-	assert.Equal(t, "boom (code 42)", (&statementsAPIError{Code: "42", Msg: "boom"}).Message())
-	assert.Equal(t, "boom", (&statementsAPIError{Msg: "boom"}).Message())
-	assert.Equal(t, "42", (&statementsAPIError{Code: "42"}).Message())
 }

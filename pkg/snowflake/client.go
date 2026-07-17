@@ -187,24 +187,6 @@ func (m *ResultSetMetadata) ParseRow(s Parsable, row []string) error {
 	return nil
 }
 
-// Separate from StatementsApiResponseBase because uhttp.ErrorResponse needs a
-// Message() method and that struct already has a Message field (name collision).
-type statementsAPIError struct {
-	Code string `json:"code"`
-	Msg  string `json:"message"`
-}
-
-func (e *statementsAPIError) Message() string {
-	switch {
-	case e.Msg != "" && e.Code != "":
-		return fmt.Sprintf("%s (code %s)", e.Msg, e.Code)
-	case e.Msg != "":
-		return e.Msg
-	default:
-		return e.Code
-	}
-}
-
 func createStatementsApiUrl(accountUrl string) (*url.URL, error) {
 	stringUrl, err := url.JoinPath(accountUrl, "api/v2/statements")
 	if err != nil {

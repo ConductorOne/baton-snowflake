@@ -199,7 +199,7 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	}
 
 	var response ListUsersRawResponse
-	var apiErr statementsAPIError
+	var apiErr SnowflakeError
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
