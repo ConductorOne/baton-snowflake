@@ -223,6 +223,33 @@ func TestListTableGrants_SinglePartition(t *testing.T) {
 	assert.Equal(t, "SYSADMIN", grants[1].GranteeName)
 }
 
+// TestListTableGrants_UnquotesGranteeName verifies the CXP-784 fix: Snowflake's SHOW GRANTS
+// ON TABLE/VIEW renders grantee names that require quoting wrapped in double quotes, with
+// embedded double quotes doubled. GranteeName must come back unquoted so it matches the
+// canonical (unquoted) ID that SHOW ROLES/SHOW USERS produce for the same principal.
+func TestListTableGrants_UnquotesGranteeName(t *testing.T) {
+	const handle = "handle-quoted"
+
+	rows := [][]string{
+		tableGrantRow("SELECT", "ROLE", `"Data Engineer"`),
+		tableGrantRow("SELECT", "USER", `"He said ""hi"""`),
+		tableGrantRow("SELECT", "ROLE", "SYSADMIN"),
+	}
+	server := serveTableGrants(t, handle, rows, nil)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	grants, nextCursor, err := client.ListTableGrants(context.Background(), nil, "DB", "SCHEMA", "MYTABLE", testObjectKind, "")
+	require.NoError(t, err)
+	assert.Empty(t, nextCursor)
+	require.Len(t, grants, 3)
+	assert.Equal(t, "Data Engineer", grants[0].GranteeName, "quoted mixed-case name should be unquoted")
+	assert.Equal(t, `He said "hi"`, grants[1].GranteeName, "embedded escaped quotes should be unescaped")
+	assert.Equal(t, "SYSADMIN", grants[2].GranteeName, "already-unquoted system role should be unaffected")
+}
+
 func TestListTableGrants_MultiPartition(t *testing.T) {
 	const handle = "handle-multi"
 
