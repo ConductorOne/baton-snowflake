@@ -7,25 +7,22 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
+// organizationAccountStructFieldToColumnMap maps OrganizationAccount fields to the
+// SHOW ORGANIZATION ACCOUNTS columns the connector consumes. Only columns that are
+// always present are listed: ParseRow requires every mapped column to exist in the
+// response, and several SHOW ORGANIZATION ACCOUNTS columns are conditional. In
+// particular region_group is absent for organizations that do not span multiple
+// region groups, which previously aborted the whole sync (CXH-2093). Mapping only
+// the columns actually used keeps parsing resilient to that conditional layout.
 var organizationAccountStructFieldToColumnMap = map[string]string{
-	"OrganizationName": "organization_name",
-	"AccountName":      "account_name",
-	"RegionGroup":      "region_group",
-	"SnowflakeRegion":  "snowflake_region",
-	"Edition":          "edition",
-	"AccountURL":       "account_url",
-	"AccountLocator":   "account_locator",
+	"Edition":        "edition",
+	"AccountLocator": "account_locator",
 }
 
 type (
 	OrganizationAccount struct {
-		OrganizationName string
-		AccountName      string
-		RegionGroup      string
-		SnowflakeRegion  string
-		Edition          string
-		AccountURL       string
-		AccountLocator   string
+		Edition        string
+		AccountLocator string
 	}
 	ListOrganizationAccountsRawResponse struct {
 		StatementsApiResponseBase
