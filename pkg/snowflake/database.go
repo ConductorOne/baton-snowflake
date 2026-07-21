@@ -13,7 +13,7 @@ import (
 var databaseStructFieldToColumnMap = map[string]string{
 	structFieldName:  columnName,
 	structFieldOwner: columnOwner,
-	"Kind":           "kind",
+	structFieldKind:  columnKind,
 	"Origin":         "origin",
 }
 

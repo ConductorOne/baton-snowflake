@@ -98,7 +98,7 @@ var tableStructFieldToColumnMap = map[string]string{
 	structFieldName:         columnName,
 	"SchemaName":            "schema_name",
 	structFieldDatabaseName: columnDatabaseName,
-	"Kind":                  "kind",
+	structFieldKind:         columnKind,
 	structFieldComment:      columnComment,
 	structFieldOwner:        columnOwner,
 }

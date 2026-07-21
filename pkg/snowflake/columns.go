@@ -8,6 +8,7 @@ const (
 	structFieldDatabaseName = "DatabaseName"
 	structFieldType         = "Type"
 	structFieldCategory     = "Category"
+	structFieldKind         = "Kind"
 )
 
 const (
@@ -18,4 +19,5 @@ const (
 	columnDatabaseName = "database_name"
 	columnType         = "type"
 	columnCategory     = "category"
+	columnKind         = "kind"
 )
