@@ -181,9 +181,15 @@ func namedKeyPairResource(identityID *v2.ResourceId, keyPair *snowflake.NamedKey
 	resourceID := fmt.Sprintf("%s:%s", keyPair.UserName, keyPair.Name)
 	secretOptions := []rs.SecretTraitOption{
 		rs.WithSecretIdentityID(identityID),
-		rs.WithSecretCreatedAt(keyPair.CreatedOn),
 		rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_ASYMMETRIC_KEY),
 		rs.WithSecretDetail("snowflake.named_key_pair"),
+	}
+	resourceOptions := []rs.ResourceOption{
+		rs.WithParentResourceID(identityID),
+		rs.WithDescription("Snowflake key pair " + keyPair.Fingerprint),
+	}
+	if !keyPair.CreatedOn.IsZero() {
+		resourceOptions = append(resourceOptions, rs.WithResourceCreatedAt(keyPair.CreatedOn))
 	}
 	if !keyPair.LastUsedOn.IsZero() {
 		secretOptions = append(secretOptions, rs.WithSecretLastUsedAt(keyPair.LastUsedOn))
@@ -196,7 +202,6 @@ func namedKeyPairResource(identityID *v2.ResourceId, keyPair *snowflake.NamedKey
 		namedKeyPairResourceType,
 		resourceID,
 		secretOptions,
-		rs.WithParentResourceID(identityID),
-		rs.WithDescription("Snowflake key pair "+keyPair.Fingerprint),
+		resourceOptions...,
 	)
 }
