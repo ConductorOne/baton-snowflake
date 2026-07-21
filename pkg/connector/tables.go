@@ -40,29 +40,16 @@ func addExpandableOpts(roleName string) []grant.GrantOption {
 	}
 }
 
-func getTableProfileField(resource *v2.Resource, field string) interface{} {
-	appTrait, err := rs.GetAppTrait(resource)
-	if err != nil || appTrait.GetProfile() == nil {
-		return nil
-	}
-	if f := appTrait.GetProfile().GetFields()[field]; f != nil {
-		return f.AsInterface()
-	}
-	return nil
-}
-
 func getObjectKind(resource *v2.Resource) string {
-	if v := getTableProfileField(resource, "kind"); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			return s
-		}
+	if kind, ok := rs.GetProfileStringValue(rs.GetProfile(resource), "kind"); ok && kind != "" {
+		return kind
 	}
 	return defaultObjectKind
 }
 
 func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Resource, databaseName string) (bool, error) {
-	if v := getTableProfileField(resource, "database_is_shared_system"); v != nil {
-		switch val := v.(type) {
+	if f := rs.GetProfile(resource).GetFields()["database_is_shared_system"]; f != nil {
+		switch val := f.AsInterface().(type) {
 		case bool:
 			return val, nil
 		case float64:
@@ -104,10 +91,6 @@ func tableResource(_ context.Context, table *snowflake.Table, id *v2.ResourceId,
 		"database_is_shared_system": isSharedOrSystemDB,
 	}
 
-	tableTraits := []rs.AppTraitOption{
-		rs.WithAppProfile(profile),
-	}
-
 	// Use a unique identifier that includes database and schema
 	tableId := fmt.Sprintf("%s.%s.%s", table.DatabaseName, table.SchemaName, table.Name)
 
@@ -115,8 +98,9 @@ func tableResource(_ context.Context, table *snowflake.Table, id *v2.ResourceId,
 		table.Name,
 		tableResourceType,
 		tableId,
-		tableTraits,
+		nil,
 		rs.WithParentResourceID(id),
+		rs.WithResourceProfile(profile),
 	)
 
 	if err != nil {
@@ -217,9 +201,8 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 func parseTableResourceID(resource *v2.Resource) (string, string, string, error) {
 	// Prefer profile fields — they store the raw names without delimiter ambiguity.
 	// This correctly handles periods in database, schema, or table names.
-	appTrait, err := rs.GetAppTrait(resource)
-	if err == nil && appTrait.GetProfile() != nil {
-		profile := appTrait.GetProfile()
+	profile := rs.GetProfile(resource)
+	if profile != nil {
 		dbName, dbOk := rs.GetProfileStringValue(profile, "database_name")
 		schemaName, schemaOk := rs.GetProfileStringValue(profile, "schema_name")
 		tableName, nameOk := rs.GetProfileStringValue(profile, profileKeyName)

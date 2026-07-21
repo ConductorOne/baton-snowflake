@@ -370,15 +370,13 @@ func makePartialProfileResource(t *testing.T, dbName, schemaName, tableName stri
 		"schema_name":   schemaName,
 		// "name" intentionally omitted
 	}
-	tableTraits := []rs.AppTraitOption{
-		rs.WithAppProfile(profile),
-	}
 	tableId := fmt.Sprintf("%s.%s.%s", dbName, schemaName, tableName)
 	resource, err := rs.NewAppResource(
 		tableName,
 		tableResourceType,
 		tableId,
-		tableTraits,
+		nil,
+		rs.WithResourceProfile(profile),
 	)
 	require.NoError(t, err)
 	return resource

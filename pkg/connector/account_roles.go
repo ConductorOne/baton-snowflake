@@ -28,11 +28,7 @@ func accountRoleResource(accountRole *snowflake.AccountRole) (*v2.Resource, erro
 		profileKeyName: accountRole.Name,
 	}
 
-	roleTraits := []rs.RoleTraitOption{
-		rs.WithRoleProfile(profile),
-	}
-
-	resource, err := rs.NewRoleResource(accountRole.Name, accountRoleResourceType, accountRole.Name, roleTraits)
+	resource, err := rs.NewRoleResource(accountRole.Name, accountRoleResourceType, accountRole.Name, nil, rs.WithResourceProfile(profile))
 	if err != nil {
 		return nil, err
 	}

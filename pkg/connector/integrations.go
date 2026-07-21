@@ -75,16 +75,13 @@ func integrationResource(integration *snowflake.Integration) (*v2.Resource, erro
 
 	nhiType, nhiDetail := classifyIntegration(integration.Type, integration.Category)
 
-	integrationTraits := []rs.AppTraitOption{
-		rs.WithAppProfile(profile),
-	}
-
 	resource, err := rs.NewAppResource(
 		integration.Name,
 		integrationResourceType,
 		integration.Name,
-		integrationTraits,
+		nil,
 		rs.WithNHIType(nhiType, nhiDetail),
+		rs.WithResourceProfile(profile),
 	)
 	if err != nil {
 		return nil, err

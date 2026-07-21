@@ -34,11 +34,10 @@ func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resou
 		"is_shared_or_system": database.IsSharedOrSystem(),
 	}
 
-	databaseTraits := []rs.AppTraitOption{
-		rs.WithAppProfile(profile),
+	opts := []rs.ResourceOption{
+		rs.WithResourceProfile(profile),
+		rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id}),
 	}
-
-	opts := []rs.ResourceOption{rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: tableResourceType.Id})}
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: secretResourceType.Id}))
 	}
@@ -47,7 +46,7 @@ func databaseResource(database *snowflake.Database, syncSecrets bool) (*v2.Resou
 		database.Name,
 		databaseResourceType,
 		database.Name,
-		databaseTraits,
+		nil,
 		opts...,
 	)
 	if err != nil {
