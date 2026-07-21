@@ -211,7 +211,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	}
 
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", escapeLikePattern(roleName)),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' ESCAPE '\\\\' LIMIT 1;", escapeLikePattern(roleName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

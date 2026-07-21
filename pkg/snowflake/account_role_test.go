@@ -293,7 +293,29 @@ func TestGetAccountRole_EscapesRoleName(t *testing.T) {
 
 	_, _, err = client.GetAccountRole(context.Background(), nil, role)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW ROLES LIKE 'o''brien' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW ROLES LIKE 'o''brien' ESCAPE '\\' LIMIT 1;`, capturedSQL)
+}
+
+// TestGetAccountRole_EscapesLikeWildcards verifies that a role name containing an
+// underscore or percent sign - both special LIKE wildcards, and both extremely common in
+// real role names (e.g. DATA_ENGINEER) - is backslash-escaped in the pattern AND that the
+// statement declares ESCAPE '\\', so the backslash is honored as an escape character
+// instead of being treated as a literal character with no special meaning (Snowflake LIKE
+// has no default escape char). Without the ESCAPE clause, this exact name would fail to
+// match at all.
+func TestGetAccountRole_EscapesLikeWildcards(t *testing.T) {
+	const role = `DATA_ENGINEER%1`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIKE 'DATA\_ENGINEER\%1' ESCAPE '\\' LIMIT 1;`, capturedSQL)
 }
 
 // TestGrantAccountRole_EscapesIdentifiers verifies that role and user names containing
