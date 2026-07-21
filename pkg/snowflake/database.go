@@ -103,7 +103,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' ESCAPE '\\\\' LIMIT 1;", escapeLikePattern(name)),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' ESCAPE '\\' LIMIT 1;", escapeLikePattern(name)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

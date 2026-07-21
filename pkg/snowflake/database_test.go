@@ -58,14 +58,14 @@ func TestGetDatabase_EscapesName(t *testing.T) {
 
 	db, _, err := client.GetDatabase(context.Background(), database)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW DATABASES LIKE 'o''brien' ESCAPE '\\' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW DATABASES LIKE 'o''brien' ESCAPE '\' LIMIT 1;`, capturedSQL)
 	assert.Equal(t, database, db.Name)
 }
 
 // TestGetDatabase_EscapesLikeWildcards verifies that a database name containing an
 // underscore or percent sign - both special LIKE wildcards, and both extremely common in
 // real database names (e.g. PROD_DB) - is backslash-escaped in the pattern AND that the
-// statement declares ESCAPE '\\', so the backslash is honored as an escape character
+// statement declares ESCAPE '\', so the backslash is honored as an escape character
 // instead of being treated as a literal character with no special meaning (Snowflake LIKE
 // has no default escape char). Without the ESCAPE clause, this exact name would fail to
 // match at all.
@@ -81,7 +81,7 @@ func TestGetDatabase_EscapesLikeWildcards(t *testing.T) {
 
 	db, _, err := client.GetDatabase(context.Background(), database)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW DATABASES LIKE 'PROD\_DB\%1' ESCAPE '\\' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW DATABASES LIKE 'PROD\_DB\%1' ESCAPE '\' LIMIT 1;`, capturedSQL)
 	assert.Equal(t, database, db.Name)
 }
 
