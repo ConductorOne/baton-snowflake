@@ -67,7 +67,10 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 		rs.WithResourceStatus(getUserStatus(user), getUserDetailedStatus(user)),
 	}
 	if syncSecrets {
-		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+		opts = append(opts,
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: namedKeyPairResourceType.Id}),
+		)
 	}
 
 	resource, err := rs.NewUserResource(
@@ -421,10 +424,14 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, par
 	return nil, nil
 }
 
-func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {
-	return &userBuilder{
+func newUserBuilder(client *snowflake.Client, syncSecrets bool) connectorbuilder.ResourceSyncerV2 {
+	base := &userBuilder{
 		resourceType: userResourceType,
 		client:       client,
 		syncSecrets:  syncSecrets,
 	}
+	if !syncSecrets {
+		return base
+	}
+	return newCredentialIssuingUserBuilder(base)
 }

@@ -58,6 +58,20 @@ var (
 		"Default":     "default",
 		"Description": "description",
 	}
+
+	namedKeyPairStructFieldToColumnMap = map[string]string{
+		"Name":        "name",
+		"UserName":    "user_name",
+		"Fingerprint": "fingerprint",
+		"RoleScope":   "role_scope",
+		"Status":      "status",
+		"Comment":     "comment",
+		"CreatedOn":   "created_on",
+		"CreatedBy":   "created_by",
+		"LastUsedOn":  "last_used_on",
+		"ExpiresAt":   "expires_at",
+		"RotatedTo":   "rotated_to",
+	}
 )
 
 type (
@@ -108,6 +122,24 @@ type (
 		StatementsApiResponseBase
 	}
 
+	ListNamedKeyPairsRawResponse struct {
+		StatementsApiResponseBase
+	}
+
+	NamedKeyPair struct {
+		Name        string
+		UserName    string
+		Fingerprint string
+		RoleScope   string
+		Status      string
+		Comment     string
+		CreatedOn   time.Time
+		CreatedBy   string
+		LastUsedOn  time.Time
+		ExpiresAt   time.Time
+		RotatedTo   string
+	}
+
 	Secret struct {
 		CreatedOn     time.Time
 		Name          string
@@ -120,6 +152,61 @@ type (
 		OwnerRoleType string
 	}
 )
+
+func (k *NamedKeyPair) GetColumnName(fieldName string) string {
+	return namedKeyPairStructFieldToColumnMap[fieldName]
+}
+
+func (r *ListNamedKeyPairsRawResponse) GetKeyPairs() ([]NamedKeyPair, error) {
+	keyPairs := make([]NamedKeyPair, 0, len(r.Data))
+	for _, row := range r.Data {
+		keyPair := &NamedKeyPair{}
+		if err := r.ResultSetMetadata.ParseRow(keyPair, row); err != nil {
+			return nil, err
+		}
+		keyPairs = append(keyPairs, *keyPair)
+	}
+	return keyPairs, nil
+}
+
+func (c *Client) AddUserKeyPair(ctx context.Context, username, keyPairName, publicKey string, daysToExpiry int) error {
+	statement := fmt.Sprintf(
+		"ALTER USER IF EXISTS \"%s\" ADD KEY PAIR \"%s\" PUBLIC_KEY = '%s'",
+		escapeDoubleQuotedIdentifier(username),
+		escapeDoubleQuotedIdentifier(keyPairName),
+		publicKey,
+	)
+	if daysToExpiry > 0 {
+		statement += fmt.Sprintf(" DAYS_TO_EXPIRY = %d", daysToExpiry)
+	}
+	return c.ExecuteStatement(ctx, statement+";")
+}
+
+func (c *Client) ListUserKeyPairs(ctx context.Context, username string) ([]NamedKeyPair, error) {
+	statement := fmt.Sprintf("SHOW USER KEY PAIRS FOR USER \"%s\";", escapeDoubleQuotedIdentifier(username))
+	req, err := c.PostStatementRequest(ctx, []string{statement})
+	if err != nil {
+		return nil, err
+	}
+	var response ListNamedKeyPairsRawResponse
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp1)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatementHandle != "" {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, err
+		}
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return response.GetKeyPairs()
+}
 
 func (u *Secret) GetColumnName(fieldName string) string {
 	return secretStructFieldToColumnMap[fieldName]

@@ -39,6 +39,12 @@ var (
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
 		Annotations: getSkipEntitlementsAnnotation(),
 	}
+	namedKeyPairResourceType = &v2.ResourceType{
+		Id:          "named_key_pair",
+		DisplayName: "Named Key Pair",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+		Annotations: getSkipEntitlementsAnnotation(),
+	}
 	integrationResourceType = &v2.ResourceType{
 		Id:          "integration",
 		DisplayName: "Integration",
