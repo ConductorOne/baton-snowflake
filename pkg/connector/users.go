@@ -41,11 +41,9 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 	}
 
 	userTraits := []rs.UserTraitOption{
-		rs.WithUserProfile(profile),
 		rs.WithUserLogin(user.Login),
 		rs.WithMFAStatus(&v2.UserTrait_MFAStatus{MfaEnabled: user.HasMfa}),
 		rs.WithAccountType(getUserAccountType(user)),
-		rs.WithDetailedStatus(getUserStatus(user), getUserDetailedStatus(user)),
 	}
 
 	if user.Email != "" {
@@ -64,7 +62,10 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 		}
 	}
 
-	var opts []rs.ResourceOption
+	opts := []rs.ResourceOption{
+		rs.WithResourceProfile(profile),
+		rs.WithResourceStatus(getUserStatus(user), getUserDetailedStatus(user)),
+	}
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
 	}
@@ -93,12 +94,12 @@ func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
 }
 
-func getUserStatus(user *snowflake.User) v2.UserTrait_Status_Status {
+func getUserStatus(user *snowflake.User) v2.Status_ResourceStatus {
 	if user.Disabled || user.Locked {
-		return v2.UserTrait_Status_STATUS_DISABLED
+		return v2.Status_RESOURCE_STATUS_DISABLED
 	}
 
-	return v2.UserTrait_Status_STATUS_ENABLED
+	return v2.Status_RESOURCE_STATUS_ENABLED
 }
 
 func getUserDetailedStatus(user *snowflake.User) string {
