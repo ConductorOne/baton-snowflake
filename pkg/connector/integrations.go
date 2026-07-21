@@ -53,12 +53,12 @@ func normalizeDetailToken(s string) string {
 	lastUnderscore := false
 	for _, r := range s {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
+			_, _ = b.WriteRune(r)
 			lastUnderscore = false
 			continue
 		}
 		if !lastUnderscore {
-			b.WriteRune('_')
+			_, _ = b.WriteRune('_')
 			lastUnderscore = true
 		}
 	}
