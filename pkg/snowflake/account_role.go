@@ -73,7 +73,7 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	var queries []string
 
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, cursor))
+		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, escapeSingleQuote(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d;", limit))
 	}
@@ -119,7 +119,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 	var response ListAccountRoleGranteesRawResponse
 
 	if cursor == "" {
-		queries := []string{fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", roleName)}
+		queries := []string{fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", escapeDoubleQuotedIdentifier(roleName))}
 
 		req, err := c.PostStatementRequest(ctx, queries)
 		if err != nil {
@@ -211,7 +211,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	}
 
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", roleName),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", escapeLikePattern(roleName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -251,7 +251,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 
 func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) error {
 	queries := []string{
-		fmt.Sprintf("GRANT ROLE \"%s\" TO USER \"%s\";", roleName, userName),
+		fmt.Sprintf("GRANT ROLE \"%s\" TO USER \"%s\";", escapeDoubleQuotedIdentifier(roleName), escapeDoubleQuotedIdentifier(userName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -270,7 +270,7 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 
 func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) error {
 	queries := []string{
-		fmt.Sprintf("REVOKE ROLE \"%s\" FROM USER \"%s\";", roleName, userName),
+		fmt.Sprintf("REVOKE ROLE \"%s\" FROM USER \"%s\";", escapeDoubleQuotedIdentifier(roleName), escapeDoubleQuotedIdentifier(userName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

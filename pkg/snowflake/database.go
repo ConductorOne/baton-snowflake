@@ -63,7 +63,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	var queries []string
 
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, cursor))
+		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, escapeSingleQuote(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d;", limit))
 	}
@@ -103,7 +103,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", name),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", escapeLikePattern(name)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

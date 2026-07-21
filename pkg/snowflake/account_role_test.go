@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureStatement returns an httptest.Server that records the "statement" field of
+// the initial POST body it receives (the SQL text sent to the Statements API) into
+// capturedSQL, then replies with a minimal valid response - including to any follow-up
+// GET made to fetch the statement result - so the client's read path doesn't error.
+func captureStatement(t *testing.T, capturedSQL *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var req StatementsApiRequestBody
+			require.NoError(t, json.Unmarshal(body, &req))
+			*capturedSQL = req.Statement
+		}
+
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": 0,
+			},
+			"data": [][]string{},
+		})
+	}))
+}
 
 // serveGrantees returns an httptest.Server that implements the Snowflake Statements
 // API for SHOW GRANTS OF ROLE. partition0Rows is returned on the initial GET
@@ -228,4 +258,97 @@ func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 	assert.Equal(t, "bob", page2[0].GranteeName)
 	assert.Equal(t, "USER", page2[0].GranteeType)
 	assert.Empty(t, cursor2, "last partition should return empty cursor")
+}
+
+// TestListAccountRoleGrantees_EscapesRoleName verifies that a role name containing an
+// embedded double quote (legal in Snowflake via a quoted identifier, e.g.
+// CREATE ROLE "weird""role") is escaped before being interpolated into the
+// SHOW GRANTS OF ROLE "..."; statement, rather than breaking out of the quoted identifier.
+func TestListAccountRoleGrantees_EscapesRoleName(t *testing.T) {
+	const role = `weird"role`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.ListAccountRoleGrantees(context.Background(), role, "")
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW GRANTS OF ROLE "weird""role";`, capturedSQL)
+}
+
+// TestGetAccountRole_EscapesRoleName verifies that a role name containing a single quote
+// is escaped before being interpolated into the SHOW ROLES LIKE '...' statement.
+func TestGetAccountRole_EscapesRoleName(t *testing.T) {
+	const role = `o'brien`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIKE 'o''brien' LIMIT 1;`, capturedSQL)
+}
+
+// TestGrantAccountRole_EscapesIdentifiers verifies that role and user names containing
+// embedded double quotes are escaped before being interpolated into the
+// GRANT ROLE "..." TO USER "..."; statement.
+func TestGrantAccountRole_EscapesIdentifiers(t *testing.T) {
+	const role = `weird"role`
+	const user = `weird"user`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	err = client.GrantAccountRole(context.Background(), role, user)
+	require.NoError(t, err)
+	assert.Equal(t, `GRANT ROLE "weird""role" TO USER "weird""user";`, capturedSQL)
+}
+
+// TestRevokeAccountRole_EscapesIdentifiers verifies that role and user names containing
+// embedded double quotes are escaped before being interpolated into the
+// REVOKE ROLE "..." FROM USER "..."; statement.
+func TestRevokeAccountRole_EscapesIdentifiers(t *testing.T) {
+	const role = `weird"role`
+	const user = `weird"user`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	err = client.RevokeAccountRole(context.Background(), role, user)
+	require.NoError(t, err)
+	assert.Equal(t, `REVOKE ROLE "weird""role" FROM USER "weird""user";`, capturedSQL)
+}
+
+// TestListAccountRoles_EscapesCursor verifies that the pagination cursor - which is the
+// bare name of the last role from a previous page, and so can itself contain a single
+// quote (e.g. a role created as CREATE ROLE "o'brien") - is escaped before being
+// interpolated into the SHOW ROLES LIMIT ... FROM '...' statement.
+func TestListAccountRoles_EscapesCursor(t *testing.T) {
+	const cursor = `o'brien`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, err = client.ListAccountRoles(context.Background(), cursor, 100)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIMIT 100 FROM 'o''brien';`, capturedSQL)
 }

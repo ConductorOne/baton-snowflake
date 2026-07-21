@@ -188,7 +188,7 @@ func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bo
 func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]User, error) {
 	var queries []string
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, cursor))
+		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d FROM '%s';", limit, escapeSingleQuote(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW USERS LIMIT %d;", limit))
 	}
