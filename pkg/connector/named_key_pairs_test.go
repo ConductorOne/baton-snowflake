@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
@@ -39,15 +40,20 @@ func TestCredentialIssuingUserBuilderIssueNamedKeyPair(t *testing.T) {
 		newKeyName: func() string { return "c1_test_key" },
 		now:        func() time.Time { return now },
 	}
-	keypair := &v2.LocalCredentialOptions_Keypair{}
-	keypair.SetAlgorithm("RSA")
-	keypair.SetBits(2048)
-	keypair.SetTtl(durationpb.New(90 * 24 * time.Hour))
+	bits := uint32(2048)
+	keypair := v2.LocalCredentialOptions_Keypair_builder{
+		Profile: v2.KeyGenerationProfile_builder{Kty: "RSA", RsaModulusBits: &bits}.Build(),
+	}.Build()
 	options := &v2.LocalCredentialOptions{}
 	options.SetKeypair(keypair)
 
-	secret, plaintext, _, err := builder.Issue(ctx, identityID, options)
+	output, err := builder.Issue(ctx, &connectorbuilder.CredentialIssueInput{
+		IdentityID:          identityID,
+		CredentialOptions:   options,
+		IssuanceConstraints: v2.CredentialIssuanceConstraints_builder{Lifetime: durationpb.New(90 * 24 * time.Hour)}.Build(),
+	})
 	require.NoError(t, err)
+	secret, plaintext := output.Secret, output.PlaintextData
 	require.Equal(t, "svc_automation", registeredUser)
 	require.Equal(t, "c1_test_key", registeredName)
 	require.Equal(t, 90, registeredDays)
@@ -84,7 +90,7 @@ func TestCredentialIssuingUserBuilderRejectsHumanUser(t *testing.T) {
 	options := &v2.LocalCredentialOptions{}
 	options.SetKeypair(&v2.LocalCredentialOptions_Keypair{})
 
-	_, _, _, err = builder.Issue(context.Background(), identityID, options)
+	_, err = builder.Issue(context.Background(), &connectorbuilder.CredentialIssueInput{IdentityID: identityID, CredentialOptions: options})
 	require.ErrorContains(t, err, "only be issued for service users")
 }
 
@@ -97,11 +103,17 @@ func TestCredentialIssuingUserBuilderRejectsFractionalDayTTL(t *testing.T) {
 			return &snowflake.User{Username: "svc_automation", Type: "SERVICE"}, nil
 		},
 	}
-	keypair := &v2.LocalCredentialOptions_Keypair{}
-	keypair.SetTtl(durationpb.New(36 * time.Hour))
+	bits := uint32(2048)
+	keypair := v2.LocalCredentialOptions_Keypair_builder{
+		Profile: v2.KeyGenerationProfile_builder{Kty: "RSA", RsaModulusBits: &bits}.Build(),
+	}.Build()
 	options := &v2.LocalCredentialOptions{}
 	options.SetKeypair(keypair)
 
-	_, _, _, err = builder.Issue(context.Background(), identityID, options)
+	_, err = builder.Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+		IdentityID:          identityID,
+		CredentialOptions:   options,
+		IssuanceConstraints: v2.CredentialIssuanceConstraints_builder{Lifetime: durationpb.New(36 * time.Hour)}.Build(),
+	})
 	require.ErrorContains(t, err, "positive whole number of days")
 }

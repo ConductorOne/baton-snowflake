@@ -99,7 +99,9 @@ func (m *ResultSetMetadata) GetTimeValueFromRow(row []string, key string) (time.
 		return time.Time{}, fmt.Errorf("row type %s not found", key)
 	}
 
-	if rowType.Type != rowTypeTimestampLtz {
+	// SHOW-family statements are not fully stable across Snowflake releases and
+	// may report timestamp values as text. Parse either representation.
+	if rowType.Type != rowTypeTimestampLtz && rowType.Type != rowTypeString {
 		return time.Time{}, fmt.Errorf("column %s is not a timestamp ltz (row type is '%s')", key, rowType.Type)
 	}
 
@@ -177,6 +179,12 @@ func (m *ResultSetMetadata) ParseRow(s Parsable, row []string) error {
 	for i := 0; i < reflected.NumField(); i++ {
 		field := reflected.Type().Field(i)
 		columnName := s.GetColumnName(field.Name)
+		if found, _, _ := m.FindRowTypeByName(columnName); !found {
+			if optional, ok := s.(interface{ IsOptionalField(string) bool }); ok && optional.IsOptionalField(field.Name) {
+				continue
+			}
+			return fmt.Errorf("row type %s not found", columnName)
+		}
 
 		switch field.Type.Kind() {
 		case reflect.String:

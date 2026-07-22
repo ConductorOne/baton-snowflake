@@ -157,6 +157,15 @@ func (k *NamedKeyPair) GetColumnName(fieldName string) string {
 	return namedKeyPairStructFieldToColumnMap[fieldName]
 }
 
+func (k *NamedKeyPair) IsOptionalField(fieldName string) bool {
+	switch fieldName {
+	case "RoleScope", "Comment", "CreatedBy", "LastUsedOn", "ExpiresAt", "RotatedTo":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *ListNamedKeyPairsRawResponse) GetKeyPairs() ([]NamedKeyPair, error) {
 	keyPairs := make([]NamedKeyPair, 0, len(r.Data))
 	for _, row := range r.Data {

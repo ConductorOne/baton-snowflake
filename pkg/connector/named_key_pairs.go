@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
-	"strings"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -18,6 +17,7 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/segmentio/ksuid"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type namedKeyPairBuilder struct {
@@ -84,64 +84,61 @@ func newCredentialIssuingUserBuilder(base *userBuilder) *credentialIssuingUserBu
 
 func (b *credentialIssuingUserBuilder) Issue(
 	ctx context.Context,
-	identityID *v2.ResourceId,
-	credentialOptions *v2.LocalCredentialOptions,
-) (*v2.Resource, []*v2.PlaintextData, annotations.Annotations, error) {
+	input *connectorbuilder.CredentialIssueInput,
+) (*connectorbuilder.CredentialIssueOutput, error) {
+	identityID := input.IdentityID
 	if identityID == nil || identityID.GetResourceType() != userResourceType.Id {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: invalid service user identity")
+		return nil, fmt.Errorf("baton-snowflake: invalid service user identity")
 	}
 	user, err := b.getUser(ctx, identityID.GetResource())
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: get credential target: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: get credential target: %w", err)
 	}
 	if user.Type != "SERVICE" && user.Type != "LEGACY_SERVICE" {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: key pairs may only be issued for service users")
+		return nil, fmt.Errorf("baton-snowflake: key pairs may only be issued for service users")
 	}
 
-	if credentialOptions == nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: credential options are required")
+	if input.CredentialOptions == nil {
+		return nil, fmt.Errorf("baton-snowflake: credential options are required")
 	}
-	keypair := credentialOptions.GetKeypair()
+	keypair := input.CredentialOptions.GetKeypair()
 	if keypair == nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: only keypair credentials are supported")
+		return nil, fmt.Errorf("baton-snowflake: only keypair credentials are supported")
 	}
-	if algorithm := strings.ToUpper(keypair.GetAlgorithm()); algorithm != "" && algorithm != "RSA" {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: unsupported key algorithm %q", keypair.GetAlgorithm())
+	if keypair.GetProfile().GetKty() != "RSA" {
+		return nil, fmt.Errorf("baton-snowflake: only RSA key pairs are supported")
 	}
-	bits := int(keypair.GetBits())
-	if bits == 0 {
-		bits = 2048
-	}
+	bits := int(keypair.GetProfile().GetRsaModulusBits())
 	if bits != 2048 && bits != 3072 && bits != 4096 {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: unsupported RSA key size %d", bits)
+		return nil, fmt.Errorf("baton-snowflake: unsupported RSA key size %d", bits)
 	}
 
 	daysToExpiry := 0
-	if ttl := keypair.GetTtl(); ttl != nil {
+	if ttl := input.IssuanceConstraints.GetLifetime(); ttl != nil {
 		if err := ttl.CheckValid(); err != nil || ttl.AsDuration() <= 0 || ttl.AsDuration()%(24*time.Hour) != 0 {
-			return nil, nil, nil, fmt.Errorf("baton-snowflake: keypair TTL must be a positive whole number of days")
+			return nil, fmt.Errorf("baton-snowflake: keypair lifetime must be a positive whole number of days")
 		}
 		daysToExpiry = int(ttl.AsDuration() / (24 * time.Hour))
 	}
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: generate RSA key: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: generate RSA key: %w", err)
 	}
 	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: marshal private key: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: marshal private key: %w", err)
 	}
 	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})
 	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: marshal public key: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: marshal public key: %w", err)
 	}
 	publicKey := base64.StdEncoding.EncodeToString(publicDER)
 
 	keyName := b.newKeyName()
 	if err := b.addKeyPair(ctx, identityID.GetResource(), keyName, publicKey, daysToExpiry); err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: register named key pair: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: register named key pair: %w", err)
 	}
 
 	now := b.now().UTC()
@@ -158,23 +155,56 @@ func (b *credentialIssuingUserBuilder) Issue(
 	}
 	secret, err := namedKeyPairResource(identityID, metadata)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	return secret, []*v2.PlaintextData{{
-		Name:        "private_key.pem",
-		Description: "Snowflake named key-pair private key",
-		Schema:      "application/x-pem-file",
-		Bytes:       privatePEM,
-	}}, nil, nil
+	return &connectorbuilder.CredentialIssueOutput{
+		Secret: secret,
+		PlaintextData: []*v2.PlaintextData{{
+			Name:        "private_key.pem",
+			Description: "Snowflake named key-pair private key",
+			Schema:      "application/x-pem-file",
+			Bytes:       privatePEM,
+		}},
+	}, nil
 }
 
 func (*credentialIssuingUserBuilder) IssueCapabilityDetails(context.Context) (*v2.CredentialDetailsCredentialIssue, annotations.Annotations, error) {
-	return &v2.CredentialDetailsCredentialIssue{
-		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
-			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR,
+	profiles := make([]*v2.KeyGenerationProfile, 0, 3)
+	for _, size := range []uint32{2048, 3072, 4096} {
+		bits := size
+		profiles = append(profiles, v2.KeyGenerationProfile_builder{Kty: "RSA", RsaModulusBits: &bits}.Build())
+	}
+	return v2.CredentialDetailsCredentialIssue_builder{
+		Options: []*v2.CredentialIssueOptionDescriptor{
+			v2.CredentialIssueOptionDescriptor_builder{
+				Option:      v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR,
+				KeyProfiles: profiles,
+				Lifetime: v2.IssuanceLifetimeCapability_builder{
+					Min:         durationpb.New(24 * time.Hour),
+					Granularity: durationpb.New(24 * time.Hour),
+				}.Build(),
+			}.Build(),
 		},
-		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR,
-	}, nil, nil
+		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR,
+	}.Build(), nil, nil
+}
+
+func (b *credentialIssuingUserBuilder) GetCredentialIssueEligibility(ctx context.Context, identityID *v2.ResourceId, _ v2.CapabilityDetailCredentialOption) (*v2.GetCredentialIssueEligibilityResponse, error) {
+	if identityID == nil || identityID.GetResourceType() != userResourceType.Id {
+		return v2.GetCredentialIssueEligibilityResponse_builder{Status: v2.GetCredentialIssueEligibilityResponse_STATUS_INELIGIBLE, ReasonCode: "invalid_identity"}.Build(), nil
+	}
+	user, err := b.getUser(ctx, identityID.GetResource())
+	if err != nil {
+		return nil, err
+	}
+	if user.Type == "SERVICE" || user.Type == "LEGACY_SERVICE" {
+		return v2.GetCredentialIssueEligibilityResponse_builder{Status: v2.GetCredentialIssueEligibilityResponse_STATUS_ELIGIBLE}.Build(), nil
+	}
+	return v2.GetCredentialIssueEligibilityResponse_builder{
+		Status:      v2.GetCredentialIssueEligibilityResponse_STATUS_INELIGIBLE,
+		ReasonCode:  "not_service_user",
+		Explanation: "Snowflake named key pairs may only be issued for service users",
+	}.Build(), nil
 }
 
 func namedKeyPairResource(identityID *v2.ResourceId, keyPair *snowflake.NamedKeyPair) (*v2.Resource, error) {
