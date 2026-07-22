@@ -70,6 +70,24 @@
     },
     {
       "resourceType": {
+        "id": "named_key_pair",
+        "displayName": "Named Key Pair",
+        "traits": [
+          "TRAIT_SECRET"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
         "id": "rsa_public_key",
         "displayName": "RSA Public Key",
         "traits": [
@@ -133,7 +151,8 @@
       "capabilities": [
         "CAPABILITY_SYNC",
         "CAPABILITY_ACCOUNT_PROVISIONING",
-        "CAPABILITY_RESOURCE_DELETE"
+        "CAPABILITY_RESOURCE_DELETE",
+        "CAPABILITY_CREDENTIAL_ISSUE"
       ],
       "permissions": {}
     }
@@ -142,7 +161,8 @@
     "CAPABILITY_PROVISION",
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
-    "CAPABILITY_RESOURCE_DELETE"
+    "CAPABILITY_RESOURCE_DELETE",
+    "CAPABILITY_CREDENTIAL_ISSUE"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {
@@ -151,6 +171,32 @@
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD"
       ],
       "preferredCredentialOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
+    },
+    "capabilityCredentialIssue": {
+      "options": [
+        {
+          "option": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR",
+          "keyProfiles": [
+            {
+              "kty": "RSA",
+              "rsaModulusBits": 2048
+            },
+            {
+              "kty": "RSA",
+              "rsaModulusBits": 3072
+            },
+            {
+              "kty": "RSA",
+              "rsaModulusBits": 4096
+            }
+          ],
+          "lifetime": {
+            "min": "86400s",
+            "granularity": "86400s"
+          }
+        }
+      ],
+      "preferredOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR"
     }
   }
 }
