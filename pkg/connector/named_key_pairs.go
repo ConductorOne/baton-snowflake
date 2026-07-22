@@ -27,6 +27,7 @@ type namedKeyPairBuilder struct {
 const (
 	snowflakeServiceUserType       = "SERVICE"
 	snowflakeLegacyServiceUserType = "LEGACY_SERVICE"
+	snowflakeRSAKeyType            = "RSA"
 )
 
 func newNamedKeyPairBuilder(client *snowflake.Client) *namedKeyPairBuilder {
@@ -110,7 +111,7 @@ func (b *credentialIssuingUserBuilder) Issue(
 	if keypair == nil {
 		return nil, fmt.Errorf("baton-snowflake: only keypair credentials are supported")
 	}
-	if keypair.GetProfile().GetKty() != "RSA" {
+	if keypair.GetProfile().GetKty() != snowflakeRSAKeyType {
 		return nil, fmt.Errorf("baton-snowflake: only RSA key pairs are supported")
 	}
 	bits := int(keypair.GetProfile().GetRsaModulusBits())
@@ -177,7 +178,7 @@ func (*credentialIssuingUserBuilder) IssueCapabilityDetails(context.Context) (*v
 	profiles := make([]*v2.KeyGenerationProfile, 0, 3)
 	for _, size := range []uint32{2048, 3072, 4096} {
 		bits := size
-		profiles = append(profiles, v2.KeyGenerationProfile_builder{Kty: "RSA", RsaModulusBits: &bits}.Build())
+		profiles = append(profiles, v2.KeyGenerationProfile_builder{Kty: snowflakeRSAKeyType, RsaModulusBits: &bits}.Build())
 	}
 	return v2.CredentialDetailsCredentialIssue_builder{
 		Options: []*v2.CredentialIssueOptionDescriptor{
@@ -194,7 +195,11 @@ func (*credentialIssuingUserBuilder) IssueCapabilityDetails(context.Context) (*v
 	}.Build(), nil, nil
 }
 
-func (b *credentialIssuingUserBuilder) GetCredentialIssueEligibility(ctx context.Context, identityID *v2.ResourceId, _ v2.CapabilityDetailCredentialOption) (*v2.GetCredentialIssueEligibilityResponse, error) {
+func (b *credentialIssuingUserBuilder) GetCredentialIssueEligibility(
+	ctx context.Context,
+	identityID *v2.ResourceId,
+	_ v2.CapabilityDetailCredentialOption,
+) (*v2.GetCredentialIssueEligibilityResponse, error) {
 	if identityID == nil || identityID.GetResourceType() != userResourceType.Id {
 		return v2.GetCredentialIssueEligibilityResponse_builder{Status: v2.GetCredentialIssueEligibilityResponse_STATUS_INELIGIBLE, ReasonCode: "invalid_identity"}.Build(), nil
 	}

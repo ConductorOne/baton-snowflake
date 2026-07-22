@@ -91,7 +91,7 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 	// https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
 	//	TYPE = PERSON | SERVICE | LEGACY_SERVICE | NULL
-	if user.Type == "LEGACY_SERVICE" || user.Type == "SERVICE" {
+	if user.Type == snowflakeLegacyServiceUserType || user.Type == snowflakeServiceUserType {
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN

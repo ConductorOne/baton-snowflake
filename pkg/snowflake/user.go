@@ -60,13 +60,13 @@ var (
 	}
 
 	namedKeyPairStructFieldToColumnMap = map[string]string{
-		"Name":        "name",
+		"Name":        columnName,
 		"UserName":    "user_name",
 		"Fingerprint": "fingerprint",
 		"RoleScope":   "role_scope",
 		"Status":      "status",
 		"Comment":     "comment",
-		"CreatedOn":   "created_on",
+		"CreatedOn":   columnCreatedOn,
 		"CreatedBy":   "created_by",
 		"LastUsedOn":  "last_used_on",
 		"ExpiresAt":   "expires_at",
