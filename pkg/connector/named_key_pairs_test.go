@@ -75,7 +75,7 @@ func TestCredentialIssuingUserBuilderIssueNamedKeyPair(t *testing.T) {
 	require.NoError(t, err)
 	privateKey, ok := privateValue.(*rsa.PrivateKey)
 	require.True(t, ok)
-	require.Equal(t, publicKey.N, privateKey.PublicKey.N)
+	require.Equal(t, publicKey.N, privateKey.N)
 }
 
 func TestCredentialIssuingUserBuilderRejectsHumanUser(t *testing.T) {

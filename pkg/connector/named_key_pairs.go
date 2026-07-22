@@ -24,6 +24,11 @@ type namedKeyPairBuilder struct {
 	client *snowflake.Client
 }
 
+const (
+	snowflakeServiceUserType       = "SERVICE"
+	snowflakeLegacyServiceUserType = "LEGACY_SERVICE"
+)
+
 func newNamedKeyPairBuilder(client *snowflake.Client) *namedKeyPairBuilder {
 	return &namedKeyPairBuilder{client: client}
 }
@@ -94,7 +99,7 @@ func (b *credentialIssuingUserBuilder) Issue(
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: get credential target: %w", err)
 	}
-	if user.Type != "SERVICE" && user.Type != "LEGACY_SERVICE" {
+	if user.Type != snowflakeServiceUserType && user.Type != snowflakeLegacyServiceUserType {
 		return nil, fmt.Errorf("baton-snowflake: key pairs may only be issued for service users")
 	}
 
@@ -197,7 +202,7 @@ func (b *credentialIssuingUserBuilder) GetCredentialIssueEligibility(ctx context
 	if err != nil {
 		return nil, err
 	}
-	if user.Type == "SERVICE" || user.Type == "LEGACY_SERVICE" {
+	if user.Type == snowflakeServiceUserType || user.Type == snowflakeLegacyServiceUserType {
 		return v2.GetCredentialIssueEligibilityResponse_builder{Status: v2.GetCredentialIssueEligibilityResponse_STATUS_ELIGIBLE}.Build(), nil
 	}
 	return v2.GetCredentialIssueEligibilityResponse_builder{
