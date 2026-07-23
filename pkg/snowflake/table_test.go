@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -380,4 +381,99 @@ func TestListTableGrants_PropagatesPartialCacheReadFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, grants)
 	assert.Empty(t, cursor2)
+}
+
+// serveTableMatch returns an httptest.Server implementing the Snowflake Statements API's
+// two-step POST-then-GET flow for a single-row SHOW TABLES LIKE ... response matching the
+// given table, and captures the "statement" field of the POST body into capturedSQL.
+func serveTableMatch(t *testing.T, database, schema, tableName string, capturedSQL *string) *httptest.Server {
+	t.Helper()
+	const handle = "handle-table"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var req StatementsApiRequestBody
+			require.NoError(t, json.Unmarshal(body, &req))
+			*capturedSQL = req.Statement
+
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+			})
+		case http.MethodGet:
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows": 1,
+					"rowType": []map[string]interface{}{
+						{"name": columnCreatedOn, "type": "timestamp_ltz"},
+						{"name": columnName, "type": "text"},
+						{"name": columnSchemaName, "type": "text"},
+						{"name": columnDatabaseName, "type": "text"},
+						{"name": columnKind, "type": "text"},
+						{"name": columnComment, "type": "text"},
+						{"name": columnOwner, "type": "text"},
+					},
+				},
+				"data": [][]string{{"1700000000.000000000", tableName, schema, database, testObjectKind, "", "SYSADMIN"}},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// TestGetTable_NoEscapeClauseForLikeWildcards documents a Snowflake limitation: SHOW TABLES'
+// LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate/WHERE usage), so
+// there is no syntax to make an underscore or percent sign in a table name match literally.
+// Only the single quote is escaped, to keep the string literal well-formed; _ and % are sent
+// through untouched and remain active wildcards. A prior version of this query added
+// "ESCAPE '\'" to try to neutralize these wildcards, but SHOW TABLES does not support that
+// clause at all - Snowflake rejects it as a 422 Unprocessable Entity (SQL compilation error)
+// on every single call, not just ones with wildcard characters.
+func TestGetTable_NoEscapeClauseForLikeWildcards(t *testing.T) {
+	const database = "DB"
+	const schema = "SCHEMA"
+	const tableName = `FACT_TABLE%1`
+
+	var capturedSQL string
+	server := serveTableMatch(t, database, schema, tableName, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, tableName)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW TABLES LIKE 'FACT_TABLE%1' IN SCHEMA "DB"."SCHEMA" LIMIT 1;`, capturedSQL)
+	require.NotNil(t, table)
+	assert.Equal(t, tableName, table.Name)
+}
+
+// TestGetTable_EscapesIdentifiers verifies that a table name containing a single quote, and
+// a database/schema name containing an embedded double quote, are escaped before being
+// interpolated into the SHOW TABLES LIKE '...' IN SCHEMA "..."."..."; statement.
+func TestGetTable_EscapesIdentifiers(t *testing.T) {
+	const database = `weird"db`
+	const schema = `weird"schema`
+	const tableName = `o'brien`
+
+	var capturedSQL string
+	server := serveTableMatch(t, database, schema, tableName, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, tableName)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW TABLES LIKE 'o''brien' IN SCHEMA "weird""db"."weird""schema" LIMIT 1;`, capturedSQL)
+	require.NotNil(t, table)
+	assert.Equal(t, tableName, table.Name)
 }

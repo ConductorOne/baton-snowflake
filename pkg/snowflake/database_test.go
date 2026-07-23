@@ -58,18 +58,19 @@ func TestGetDatabase_EscapesName(t *testing.T) {
 
 	db, _, err := client.GetDatabase(context.Background(), database)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW DATABASES LIKE 'o''brien' ESCAPE '\' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW DATABASES LIKE 'o''brien' LIMIT 1;`, capturedSQL)
 	assert.Equal(t, database, db.Name)
 }
 
-// TestGetDatabase_EscapesLikeWildcards verifies that a database name containing an
-// underscore or percent sign - both special LIKE wildcards, and both extremely common in
-// real database names (e.g. PROD_DB) - is backslash-escaped in the pattern AND that the
-// statement declares ESCAPE '\', so the backslash is honored as an escape character
-// instead of being treated as a literal character with no special meaning (Snowflake LIKE
-// has no default escape char). Without the ESCAPE clause, this exact name would fail to
-// match at all.
-func TestGetDatabase_EscapesLikeWildcards(t *testing.T) {
+// TestGetDatabase_NoEscapeClauseForLikeWildcards documents a Snowflake limitation: SHOW
+// DATABASES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate/WHERE
+// usage), so there is no syntax to make an underscore or percent sign in a database name
+// match literally. Only the single quote is escaped, to keep the string literal well-formed;
+// _ and % are sent through untouched and remain active wildcards. A prior version of this
+// code added "ESCAPE '\'" to the statement to try to neutralize these wildcards, but SHOW
+// DATABASES does not support that clause at all - Snowflake rejects it as a 422 Unprocessable
+// Entity (SQL compilation error) on every call, not just ones with wildcard characters.
+func TestGetDatabase_NoEscapeClauseForLikeWildcards(t *testing.T) {
 	const database = `PROD_DB%1`
 
 	var capturedSQL string
@@ -81,7 +82,7 @@ func TestGetDatabase_EscapesLikeWildcards(t *testing.T) {
 
 	db, _, err := client.GetDatabase(context.Background(), database)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW DATABASES LIKE 'PROD\_DB\%1' ESCAPE '\' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW DATABASES LIKE 'PROD_DB%1' LIMIT 1;`, capturedSQL)
 	assert.Equal(t, database, db.Name)
 }
 

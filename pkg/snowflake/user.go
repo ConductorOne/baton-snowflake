@@ -43,7 +43,7 @@ var (
 	secretStructFieldToColumnMap = map[string]string{
 		structFieldCreatedOn:    columnCreatedOn,
 		structFieldName:         columnName,
-		"SchemaName":            "schema_name",
+		structFieldSchemaName:   columnSchemaName,
 		structFieldDatabaseName: columnDatabaseName,
 		structFieldOwner:        columnOwner,
 		structFieldComment:      columnComment,

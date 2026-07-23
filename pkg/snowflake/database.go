@@ -102,8 +102,11 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 }
 
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
+	// SHOW DATABASES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' ESCAPE '\\' LIMIT 1;", escapeLikePattern(name)),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", escapeSingleQuote(name)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

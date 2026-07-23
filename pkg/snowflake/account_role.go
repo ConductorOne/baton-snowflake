@@ -210,8 +210,11 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 		}
 	}
 
+	// SHOW ROLES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' ESCAPE '\\' LIMIT 1;", escapeLikePattern(roleName)),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", escapeSingleQuote(roleName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
