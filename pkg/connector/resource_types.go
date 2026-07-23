@@ -43,7 +43,7 @@ var (
 		Id:          "named_key_pair",
 		DisplayName: "Named Key Pair",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
-		Annotations: getSkipEntitlementsAnnotation(),
+		Annotations: getOptInSkipEntitlementsAnnotation(),
 	}
 	integrationResourceType = &v2.ResourceType{
 		Id:          "integration",
@@ -64,6 +64,12 @@ func getSkipEntitlementsAnnotation() annotations.Annotations {
 	annotations.Update(&v2.SkipEntitlementsAndGrants{})
 
 	return annotations
+}
+
+func getOptInSkipEntitlementsAnnotation() annotations.Annotations {
+	annos := getSkipEntitlementsAnnotation()
+	annos.Update(&v2.OptInRequired{})
+	return annos
 }
 
 func getLicenseAnnotations() annotations.Annotations {

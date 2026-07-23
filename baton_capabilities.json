@@ -78,6 +78,9 @@
         "annotations": [
           {
             "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.OptInRequired"
           }
         ]
       },
@@ -85,7 +88,8 @@
         "CAPABILITY_SYNC",
         "CAPABILITY_RESOURCE_DELETE"
       ],
-      "permissions": {}
+      "permissions": {},
+      "optInRequired": true
     },
     {
       "resourceType": {
