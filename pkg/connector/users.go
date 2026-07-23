@@ -96,7 +96,8 @@ const (
 )
 
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
-	if user.Type == userTypeLegacyService || user.Type == userTypeService {
+	switch strings.ToUpper(strings.TrimSpace(user.Type)) {
+	case userTypeService, userTypeLegacyService:
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN

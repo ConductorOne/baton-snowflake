@@ -69,6 +69,29 @@ func TestClassifyUserNHI(t *testing.T) {
 	}
 }
 
+func TestGetUserAccountType(t *testing.T) {
+	tests := []struct {
+		name     string
+		userType string
+		want     v2.UserTrait_AccountType
+	}{
+		{name: "service", userType: "SERVICE", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
+		{name: "legacy service", userType: "LEGACY_SERVICE", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
+		{name: "lowercase and padded service", userType: "  service  ", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
+		{name: "person", userType: "PERSON", want: v2.UserTrait_ACCOUNT_TYPE_HUMAN},
+		{name: "empty", userType: "", want: v2.UserTrait_ACCOUNT_TYPE_HUMAN},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getUserAccountType(&snowflake.User{Type: tt.userType})
+			if got != tt.want {
+				t.Errorf("getUserAccountType(%q) = %v, want %v", tt.userType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUserResourceNHIAnnotation(t *testing.T) {
 	ctx := context.Background()
 
