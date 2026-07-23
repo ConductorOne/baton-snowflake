@@ -319,6 +319,67 @@ func TestGetAccountRole_NoEscapeClauseForLikeWildcards(t *testing.T) {
 	assert.Equal(t, `SHOW ROLES LIKE 'DATA_ENGINEER%1' LIMIT 1;`, capturedSQL)
 }
 
+// serveAccountRoleMatch returns an httptest.Server implementing the Snowflake Statements
+// API's single-step POST flow that GetAccountRole uses (unlike ListAccountRoles, it does not
+// follow up with a GET to fetch the statement result - the POST response must carry the data
+// directly), returning a single row for the given role name.
+func serveAccountRoleMatch(t *testing.T, roleName string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": 1,
+				"rowType": accountRoleRowTypes(),
+			},
+			"data": [][]string{{roleName}},
+		})
+	}))
+}
+
+// TestGetAccountRole_ExactMatch verifies the normal case: the single row SHOW ROLES LIKE
+// returns is an exact match for roleName, so it is returned as-is.
+func TestGetAccountRole_ExactMatch(t *testing.T) {
+	const role = "SYSADMIN"
+
+	server := serveAccountRoleMatch(t, role)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	got, _, err := client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, role, got.Name)
+}
+
+// TestGetAccountRole_RejectsWildcardMismatch guards against the exact bug the exact-match
+// check exists to prevent: SHOW ROLES' LIKE filter is a pattern match with no ESCAPE clause
+// to neutralize _/% wildcards (see the query comment in GetAccountRole), so a roleName
+// containing a wildcard character can match some other role entirely. Here roleName is
+// "DATA_ENGINEER" (the _ is a wildcard matching any single character) and the server - as
+// Snowflake's LIMIT 1 would for an over-broad pattern - returns exactly one row for a
+// DIFFERENT role, "DATAXENGINEER", that happens to match the loose pattern. Before the
+// exact-match guard, GetAccountRole would have silently returned this wrong role. It must
+// instead be treated as "not found": nil role, no error.
+func TestGetAccountRole_RejectsWildcardMismatch(t *testing.T) {
+	const requested = "DATA_ENGINEER"
+	const actualMatch = "DATAXENGINEER"
+
+	server := serveAccountRoleMatch(t, actualMatch)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	got, _, err := client.GetAccountRole(context.Background(), nil, requested)
+	require.NoError(t, err)
+	assert.Nil(t, got, "a role name that only loosely matches the LIKE wildcard pattern must not be returned as if it were an exact match")
+}
+
 // TestGrantAccountRole_EscapesIdentifiers verifies that role and user names containing
 // embedded double quotes are escaped before being interpolated into the
 // GRANT ROLE "..." TO USER "..."; statement.
