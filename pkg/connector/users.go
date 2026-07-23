@@ -93,6 +93,9 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 const (
 	userTypeService       = "SERVICE"
 	userTypeLegacyService = "LEGACY_SERVICE"
+
+	nhiDetailService       = "snowflake.user.service"
+	nhiDetailLegacyService = "snowflake.user.legacy_service"
 )
 
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
@@ -108,9 +111,9 @@ func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 func classifyUserNHI(userType string) (v2.NonHumanIdentityTrait_NhiType, string, bool) {
 	switch strings.ToUpper(strings.TrimSpace(userType)) {
 	case userTypeService:
-		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "snowflake.user.service", true
+		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailService, true
 	case userTypeLegacyService:
-		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, "snowflake.user.legacy_service", true
+		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailLegacyService, true
 	default:
 		return v2.NonHumanIdentityTrait_NHI_TYPE_UNSPECIFIED, "", false
 	}
