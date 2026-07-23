@@ -17,12 +17,14 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/segmentio/ksuid"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type namedKeyPairBuilder struct {
-	client        *snowflake.Client
+	listKeyPairs  func(context.Context, string) ([]snowflake.NamedKeyPair, error)
 	removeKeyPair func(context.Context, string, string) error
 }
 
@@ -33,7 +35,10 @@ const (
 )
 
 func newNamedKeyPairBuilder(client *snowflake.Client) *namedKeyPairBuilder {
-	return &namedKeyPairBuilder{client: client, removeKeyPair: client.RemoveUserKeyPair}
+	return &namedKeyPairBuilder{
+		listKeyPairs:  client.ListUserKeyPairs,
+		removeKeyPair: client.RemoveUserKeyPair,
+	}
 }
 
 func (*namedKeyPairBuilder) ResourceType(context.Context) *v2.ResourceType {
@@ -44,8 +49,12 @@ func (b *namedKeyPairBuilder) List(ctx context.Context, parent *v2.ResourceId, _
 	if parent == nil || parent.GetResourceType() != userResourceType.Id {
 		return nil, nil, nil
 	}
-	keyPairs, err := b.client.ListUserKeyPairs(ctx, parent.GetResource())
+	keyPairs, err := b.listKeyPairs(ctx, parent.GetResource())
 	if err != nil {
+		if isUnprocessableEntityError(err) {
+			ctxzap.Extract(ctx).Debug("ListUserKeyPairs unavailable", zap.String("username", parent.GetResource()), zap.Error(err))
+			return nil, nil, nil
+		}
 		return nil, nil, fmt.Errorf("baton-snowflake: list named key pairs: %w", err)
 	}
 	resources := make([]*v2.Resource, 0, len(keyPairs))

@@ -14,6 +14,8 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -145,4 +147,16 @@ func TestNamedKeyPairBuilderDeleteRejectsMismatchedParent(t *testing.T) {
 
 	_, err = builder.Delete(context.Background(), resourceID, parentID)
 	require.ErrorContains(t, err, "does not belong")
+}
+
+func TestNamedKeyPairBuilderListSkipsUnavailableFeature(t *testing.T) {
+	builder := &namedKeyPairBuilder{listKeyPairs: func(context.Context, string) ([]snowflake.NamedKeyPair, error) {
+		return nil, status.Error(codes.Unknown, "422 Unprocessable Entity")
+	}}
+	parentID, err := rs.NewResourceID(userResourceType, "svc_user")
+	require.NoError(t, err)
+
+	resources, _, err := builder.List(context.Background(), parentID, rs.SyncOpAttrs{})
+	require.NoError(t, err)
+	require.Empty(t, resources)
 }
