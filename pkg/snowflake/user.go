@@ -191,6 +191,15 @@ func (c *Client) AddUserKeyPair(ctx context.Context, username, keyPairName, publ
 	return c.ExecuteStatement(ctx, statement+";")
 }
 
+func (c *Client) RemoveUserKeyPair(ctx context.Context, username, keyPairName string) error {
+	statement := fmt.Sprintf(
+		"ALTER USER IF EXISTS \"%s\" REMOVE KEY PAIR \"%s\";",
+		escapeDoubleQuotedIdentifier(username),
+		escapeDoubleQuotedIdentifier(keyPairName),
+	)
+	return c.ExecuteStatement(ctx, statement)
+}
+
 func (c *Client) ListUserKeyPairs(ctx context.Context, username string) ([]NamedKeyPair, error) {
 	statement := fmt.Sprintf("SHOW USER KEY PAIRS FOR USER \"%s\";", escapeDoubleQuotedIdentifier(username))
 	req, err := c.PostStatementRequest(ctx, []string{statement})

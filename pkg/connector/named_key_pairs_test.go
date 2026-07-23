@@ -14,7 +14,7 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestCredentialIssuingUserBuilderIssueNamedKeyPair(t *testing.T) {
@@ -41,16 +41,15 @@ func TestCredentialIssuingUserBuilderIssueNamedKeyPair(t *testing.T) {
 		now:        func() time.Time { return now },
 	}
 	bits := uint32(2048)
-	keypair := v2.LocalCredentialOptions_Keypair_builder{
+	keypair := v2.CredentialIssueOptions_Keypair_builder{
 		Profile: v2.KeyGenerationProfile_builder{Kty: "RSA", RsaModulusBits: &bits}.Build(),
 	}.Build()
-	options := &v2.LocalCredentialOptions{}
-	options.SetKeypair(keypair)
+	options := v2.CredentialIssueOptions_builder{Keypair: keypair}.Build()
 
 	output, err := builder.Issue(ctx, &connectorbuilder.CredentialIssueInput{
-		IdentityID:          identityID,
-		CredentialOptions:   options,
-		IssuanceConstraints: v2.CredentialIssuanceConstraints_builder{Lifetime: durationpb.New(90 * 24 * time.Hour)}.Build(),
+		IdentityID:        identityID,
+		CredentialOptions: options,
+		ExpiresAt:         timestamppb.New(now.Add(90 * 24 * time.Hour)),
 	})
 	require.NoError(t, err)
 	secret, plaintext := output.Secret, output.PlaintextData
@@ -87,14 +86,13 @@ func TestCredentialIssuingUserBuilderRejectsHumanUser(t *testing.T) {
 			return &snowflake.User{Username: "alice", Type: "PERSON"}, nil
 		},
 	}
-	options := &v2.LocalCredentialOptions{}
-	options.SetKeypair(&v2.LocalCredentialOptions_Keypair{})
+	options := v2.CredentialIssueOptions_builder{Keypair: v2.CredentialIssueOptions_Keypair_builder{}.Build()}.Build()
 
 	_, err = builder.Issue(context.Background(), &connectorbuilder.CredentialIssueInput{IdentityID: identityID, CredentialOptions: options})
 	require.ErrorContains(t, err, "only be issued for service users")
 }
 
-func TestCredentialIssuingUserBuilderRejectsFractionalDayTTL(t *testing.T) {
+func TestCredentialIssuingUserBuilderRejectsPastExpiry(t *testing.T) {
 	identityID, err := rs.NewResourceID(userResourceType, "svc_automation")
 	require.NoError(t, err)
 	builder := &credentialIssuingUserBuilder{
@@ -102,18 +100,49 @@ func TestCredentialIssuingUserBuilderRejectsFractionalDayTTL(t *testing.T) {
 		getUser: func(context.Context, string) (*snowflake.User, error) {
 			return &snowflake.User{Username: "svc_automation", Type: "SERVICE"}, nil
 		},
+		now: time.Now,
 	}
 	bits := uint32(2048)
-	keypair := v2.LocalCredentialOptions_Keypair_builder{
+	keypair := v2.CredentialIssueOptions_Keypair_builder{
 		Profile: v2.KeyGenerationProfile_builder{Kty: "RSA", RsaModulusBits: &bits}.Build(),
 	}.Build()
-	options := &v2.LocalCredentialOptions{}
-	options.SetKeypair(keypair)
+	options := v2.CredentialIssueOptions_builder{Keypair: keypair}.Build()
 
 	_, err = builder.Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID:          identityID,
-		CredentialOptions:   options,
-		IssuanceConstraints: v2.CredentialIssuanceConstraints_builder{Lifetime: durationpb.New(36 * time.Hour)}.Build(),
+		IdentityID:        identityID,
+		CredentialOptions: options,
+		ExpiresAt:         timestamppb.New(time.Now().Add(-time.Hour)),
 	})
-	require.ErrorContains(t, err, "positive whole number of days")
+	require.ErrorContains(t, err, "must be in the future")
+}
+
+func TestNamedKeyPairBuilderDelete(t *testing.T) {
+	var gotUser, gotKey string
+	builder := &namedKeyPairBuilder{removeKeyPair: func(_ context.Context, user, key string) error {
+		gotUser, gotKey = user, key
+		return nil
+	}}
+	resourceID, err := rs.NewResourceID(namedKeyPairResourceType, "svc:ops:c1_key")
+	require.NoError(t, err)
+	parentID, err := rs.NewResourceID(userResourceType, "svc:ops")
+	require.NoError(t, err)
+
+	_, err = builder.Delete(context.Background(), resourceID, parentID)
+	require.NoError(t, err)
+	require.Equal(t, "svc:ops", gotUser)
+	require.Equal(t, "c1_key", gotKey)
+}
+
+func TestNamedKeyPairBuilderDeleteRejectsMismatchedParent(t *testing.T) {
+	builder := &namedKeyPairBuilder{removeKeyPair: func(context.Context, string, string) error {
+		t.Fatal("remove must not be called")
+		return nil
+	}}
+	resourceID, err := rs.NewResourceID(namedKeyPairResourceType, "alice:c1_key")
+	require.NoError(t, err)
+	parentID, err := rs.NewResourceID(userResourceType, "bob")
+	require.NoError(t, err)
+
+	_, err = builder.Delete(context.Background(), resourceID, parentID)
+	require.ErrorContains(t, err, "does not belong")
 }

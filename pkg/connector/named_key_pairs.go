@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"strings"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -21,7 +22,8 @@ import (
 )
 
 type namedKeyPairBuilder struct {
-	client *snowflake.Client
+	client        *snowflake.Client
+	removeKeyPair func(context.Context, string, string) error
 }
 
 const (
@@ -31,7 +33,7 @@ const (
 )
 
 func newNamedKeyPairBuilder(client *snowflake.Client) *namedKeyPairBuilder {
-	return &namedKeyPairBuilder{client: client}
+	return &namedKeyPairBuilder{client: client, removeKeyPair: client.RemoveUserKeyPair}
 }
 
 func (*namedKeyPairBuilder) ResourceType(context.Context) *v2.ResourceType {
@@ -74,6 +76,7 @@ type credentialIssuingUserBuilder struct {
 }
 
 var _ connectorbuilder.CredentialIssuerV2 = (*credentialIssuingUserBuilder)(nil)
+var _ connectorbuilder.ResourceDeleterV2 = (*namedKeyPairBuilder)(nil)
 
 func newCredentialIssuingUserBuilder(base *userBuilder) *credentialIssuingUserBuilder {
 	return &credentialIssuingUserBuilder{
@@ -119,12 +122,19 @@ func (b *credentialIssuingUserBuilder) Issue(
 		return nil, fmt.Errorf("baton-snowflake: unsupported RSA key size %d", bits)
 	}
 
+	now := b.now().UTC()
 	daysToExpiry := 0
-	if ttl := input.IssuanceConstraints.GetLifetime(); ttl != nil {
-		if err := ttl.CheckValid(); err != nil || ttl.AsDuration() <= 0 || ttl.AsDuration()%(24*time.Hour) != 0 {
-			return nil, fmt.Errorf("baton-snowflake: keypair lifetime must be a positive whole number of days")
+	if expiresAt := input.ExpiresAt; expiresAt != nil {
+		if err := expiresAt.CheckValid(); err != nil {
+			return nil, fmt.Errorf("baton-snowflake: keypair expiry is invalid: %w", err)
 		}
-		daysToExpiry = int(ttl.AsDuration() / (24 * time.Hour))
+		remaining := expiresAt.AsTime().Sub(now)
+		if remaining <= 0 {
+			return nil, fmt.Errorf("baton-snowflake: keypair expiry must be in the future")
+		}
+		// Snowflake accepts only whole DAYS_TO_EXPIRY values. Round up so a
+		// caller's requested expiry is never shortened by transport latency.
+		daysToExpiry = int((remaining + 24*time.Hour - 1) / (24 * time.Hour))
 	}
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
@@ -147,7 +157,6 @@ func (b *credentialIssuingUserBuilder) Issue(
 		return nil, fmt.Errorf("baton-snowflake: register named key pair: %w", err)
 	}
 
-	now := b.now().UTC()
 	fingerprintBytes := sha256.Sum256(publicDER)
 	metadata := &snowflake.NamedKeyPair{
 		Name:        keyName,
@@ -156,8 +165,8 @@ func (b *credentialIssuingUserBuilder) Issue(
 		Status:      "ACTIVE",
 		CreatedOn:   now,
 	}
-	if daysToExpiry > 0 {
-		metadata.ExpiresAt = now.Add(time.Duration(daysToExpiry) * 24 * time.Hour)
+	if input.ExpiresAt != nil {
+		metadata.ExpiresAt = input.ExpiresAt.AsTime()
 	}
 	secret, err := namedKeyPairResource(identityID, metadata)
 	if err != nil {
@@ -171,6 +180,7 @@ func (b *credentialIssuingUserBuilder) Issue(
 			Schema:      "application/x-pem-file",
 			Bytes:       privatePEM,
 		}},
+		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 	}, nil
 }
 
@@ -185,36 +195,33 @@ func (*credentialIssuingUserBuilder) IssueCapabilityDetails(context.Context) (*v
 			v2.CredentialIssueOptionDescriptor_builder{
 				Option:      v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR,
 				KeyProfiles: profiles,
-				Lifetime: v2.IssuanceLifetimeCapability_builder{
-					Min:         durationpb.New(24 * time.Hour),
-					Granularity: durationpb.New(24 * time.Hour),
+				Expiry: v2.IssuanceExpiryCapability_builder{
+					Min: durationpb.New(24 * time.Hour),
 				}.Build(),
+				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+				SecretResourceTypeId: namedKeyPairResourceType.Id,
 			}.Build(),
 		},
 		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR,
 	}.Build(), nil, nil
 }
 
-func (b *credentialIssuingUserBuilder) GetCredentialIssueEligibility(
-	ctx context.Context,
-	identityID *v2.ResourceId,
-	_ v2.CapabilityDetailCredentialOption,
-) (*v2.GetCredentialIssueEligibilityResponse, error) {
-	if identityID == nil || identityID.GetResourceType() != userResourceType.Id {
-		return v2.GetCredentialIssueEligibilityResponse_builder{Status: v2.GetCredentialIssueEligibilityResponse_STATUS_INELIGIBLE, ReasonCode: "invalid_identity"}.Build(), nil
+func (b *namedKeyPairBuilder) Delete(ctx context.Context, resourceID, parentResourceID *v2.ResourceId) (annotations.Annotations, error) {
+	if resourceID == nil || resourceID.GetResourceType() != namedKeyPairResourceType.Id {
+		return nil, fmt.Errorf("baton-snowflake: invalid named key-pair resource")
 	}
-	user, err := b.getUser(ctx, identityID.GetResource())
-	if err != nil {
-		return nil, err
+	if parentResourceID == nil || parentResourceID.GetResourceType() != userResourceType.Id || parentResourceID.GetResource() == "" {
+		return nil, fmt.Errorf("baton-snowflake: named key-pair parent user is required")
 	}
-	if user.Type == snowflakeServiceUserType || user.Type == snowflakeLegacyServiceUserType {
-		return v2.GetCredentialIssueEligibilityResponse_builder{Status: v2.GetCredentialIssueEligibilityResponse_STATUS_ELIGIBLE}.Build(), nil
+	prefix := parentResourceID.GetResource() + ":"
+	keyName, found := strings.CutPrefix(resourceID.GetResource(), prefix)
+	if !found || keyName == "" {
+		return nil, fmt.Errorf("baton-snowflake: named key-pair resource does not belong to parent user")
 	}
-	return v2.GetCredentialIssueEligibilityResponse_builder{
-		Status:      v2.GetCredentialIssueEligibilityResponse_STATUS_INELIGIBLE,
-		ReasonCode:  "not_service_user",
-		Explanation: "Snowflake named key pairs may only be issued for service users",
-	}.Build(), nil
+	if err := b.removeKeyPair(ctx, parentResourceID.GetResource(), keyName); err != nil {
+		return nil, fmt.Errorf("baton-snowflake: remove named key pair: %w", err)
+	}
+	return nil, nil
 }
 
 func namedKeyPairResource(identityID *v2.ResourceId, keyPair *snowflake.NamedKeyPair) (*v2.Resource, error) {
