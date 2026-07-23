@@ -135,14 +135,14 @@ const testObjectKind = "TABLE"
 
 func tableGrantRowTypes() []map[string]interface{} {
 	return []map[string]interface{}{
-		{"name": "created_on", "type": "timestamp_ltz"},
+		{"name": columnCreatedOn, "type": "timestamp_ltz"},
 		{"name": "privilege", "type": "text"},
 		{"name": "granted_on", "type": "text"},
-		{"name": "name", "type": "text"},
-		{"name": "granted_to", "type": "text"},
-		{"name": "grantee_name", "type": "text"},
-		{"name": "grant_option", "type": "text"},
-		{"name": "granted_by", "type": "text"},
+		{"name": columnName, "type": "text"},
+		{"name": columnGrantedTo, "type": "text"},
+		{"name": columnGranteeName, "type": "text"},
+		{"name": columnGrantOption, "type": "text"},
+		{"name": columnGrantedBy, "type": "text"},
 	}
 }
 

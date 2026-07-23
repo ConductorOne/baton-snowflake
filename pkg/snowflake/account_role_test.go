@@ -41,10 +41,25 @@ func captureStatement(t *testing.T, capturedSQL *string) *httptest.Server {
 	}))
 }
 
+// granteeRowTypes matches the column layout GetAccountRoleGrantees' ParseRow expects for SHOW
+// GRANTS OF ROLE, aligned with the index positions granteeRow's rows use: 0=created_on (unused
+// by AccountRoleGrantee, included only to occupy the position), 1=role, 2=granted_to,
+// 3=grantee_name.
+func granteeRowTypes() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"name": columnCreatedOn, "type": "text"},
+		{"name": columnRole, "type": "text"},
+		{"name": columnGrantedTo, "type": "text"},
+		{"name": columnGranteeName, "type": "text"},
+	}
+}
+
 // serveGrantees returns an httptest.Server that implements the Snowflake Statements
 // API for SHOW GRANTS OF ROLE. partition0Rows is returned on the initial GET
 // (partition 0); if partition1Rows is non-nil a second partition is advertised
-// and served on ?partition=1.
+// and served on ?partition=1. Only the partition-0 response carries rowType metadata -
+// matching real Snowflake behavior - so later partitions rely on the cursor to carry it
+// forward (see accountRoleGranteesCursor).
 func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [][]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +76,7 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 		case http.MethodGet:
 			_, hasPartition := r.URL.Query()["partition"]
 			if !hasPartition {
-				// Step 2: partition 0 + full partitionInfo metadata.
+				// Step 2: partition 0 + full partitionInfo and rowType metadata.
 				partitionInfo := []map[string]interface{}{
 					{"rowCount": len(partition0Rows)},
 				}
@@ -75,6 +90,7 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 					"resultSetMetadata": map[string]interface{}{
 						"numRows":       len(partition0Rows) + len(partition1Rows),
 						"partitionInfo": partitionInfo,
+						"rowType":       granteeRowTypes(),
 					},
 					"data": partition0Rows,
 				})
@@ -97,6 +113,37 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 // index 1 = roleName, index 2 = granteeType, index 3 = granteeName.
 func granteeRow(roleName, granteeType, granteeName string) []string {
 	return []string{"", roleName, granteeType, granteeName}
+}
+
+// TestListAccountRoleGrantees_ToleratesColumnReorder verifies GetAccountRoleGrantees parses
+// SHOW GRANTS OF ROLE rows by column name (via ResultSetMetadata.ParseRow), not by fixed
+// positional index. rowType here deliberately lists columns in a different order than
+// granteeRowTypes uses elsewhere in this file, with extra columns (granted_by, grant_option)
+// interleaved - the kind of reordering/addition a Snowflake behavior bundle could introduce.
+// A fixed-index implementation would silently misread these fields; parsing by name must not.
+func TestListAccountRoleGrantees_ToleratesColumnReorder(t *testing.T) {
+	response := ListAccountRoleGranteesRawResponse{
+		StatementsApiResponseBase: StatementsApiResponseBase{
+			ResultSetMetadata: ResultSetMetadata{
+				RowTypes: []RowType{
+					{Name: columnGranteeName, Type: "text"},
+					{Name: columnGrantedBy, Type: "text"},
+					{Name: columnRole, Type: "text"},
+					{Name: columnGrantOption, Type: "text"},
+					{Name: columnGrantedTo, Type: "text"},
+					{Name: columnCreatedOn, Type: "text"},
+				},
+			},
+			Data: [][]string{
+				{"alice", "ACCOUNTADMIN", "MYROLE", "false", "USER", ""},
+			},
+		},
+	}
+
+	grantees, err := response.GetAccountRoleGrantees()
+	require.NoError(t, err)
+	require.Len(t, grantees, 1)
+	assert.Equal(t, AccountRoleGrantee{RoleName: "MYROLE", GranteeType: "USER", GranteeName: "alice"}, grantees[0])
 }
 
 func TestListAccountRoleGrantees_SinglePartition(t *testing.T) {

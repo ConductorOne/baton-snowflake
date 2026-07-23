@@ -259,14 +259,14 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 }
 
 var tableGrantStructFieldToColumnMap = map[string]string{
-	structFieldCreatedOn: columnCreatedOn,
-	"Privilege":          "privilege",
-	"GrantedOn":          "granted_on",
-	structFieldName:      columnName,
-	"GrantedTo":          "granted_to",
-	"GranteeName":        "grantee_name",
-	"GrantOption":        "grant_option",
-	"GrantedBy":          "granted_by",
+	structFieldCreatedOn:   columnCreatedOn,
+	"Privilege":            "privilege",
+	"GrantedOn":            "granted_on",
+	structFieldName:        columnName,
+	structFieldGrantedTo:   columnGrantedTo,
+	structFieldGranteeName: columnGranteeName,
+	"GrantOption":          columnGrantOption,
+	"GrantedBy":            columnGrantedBy,
 }
 
 type (
