@@ -67,7 +67,10 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 		rs.WithResourceStatus(getUserStatus(user), getUserDetailedStatus(user)),
 	}
 	if syncSecrets {
-		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+		opts = append(opts,
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: namedKeyPairResourceType.Id}),
+		)
 	}
 
 	resource, err := rs.NewUserResource(
@@ -88,7 +91,7 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 	// https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
 	//	TYPE = PERSON | SERVICE | LEGACY_SERVICE | NULL
-	if user.Type == "LEGACY_SERVICE" || user.Type == "SERVICE" {
+	if user.Type == snowflakeLegacyServiceUserType || user.Type == snowflakeServiceUserType {
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
@@ -421,10 +424,14 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, par
 	return nil, nil
 }
 
-func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {
-	return &userBuilder{
+func newUserBuilder(client *snowflake.Client, syncSecrets bool) connectorbuilder.ResourceSyncerV2 {
+	base := &userBuilder{
 		resourceType: userResourceType,
 		client:       client,
 		syncSecrets:  syncSecrets,
 	}
+	if !syncSecrets {
+		return base
+	}
+	return newCredentialIssuingUserBuilder(base)
 }

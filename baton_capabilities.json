@@ -70,6 +70,29 @@
     },
     {
       "resourceType": {
+        "id": "named_key_pair",
+        "displayName": "Named Key Pair",
+        "traits": [
+          "TRAIT_SECRET"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.OptInRequired"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC",
+        "CAPABILITY_RESOURCE_DELETE"
+      ],
+      "permissions": {},
+      "optInRequired": true
+    },
+    {
+      "resourceType": {
         "id": "rsa_public_key",
         "displayName": "RSA Public Key",
         "traits": [
@@ -133,16 +156,45 @@
       "capabilities": [
         "CAPABILITY_SYNC",
         "CAPABILITY_ACCOUNT_PROVISIONING",
-        "CAPABILITY_RESOURCE_DELETE"
+        "CAPABILITY_RESOURCE_DELETE",
+        "CAPABILITY_CREDENTIAL_ISSUE"
       ],
-      "permissions": {}
+      "permissions": {},
+      "credentialIssue": {
+        "options": [
+          {
+            "option": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR",
+            "keyProfiles": [
+              {
+                "kty": "RSA",
+                "rsaModulusBits": 2048
+              },
+              {
+                "kty": "RSA",
+                "rsaModulusBits": 3072
+              },
+              {
+                "kty": "RSA",
+                "rsaModulusBits": 4096
+              }
+            ],
+            "expiry": {
+              "min": "86400s"
+            },
+            "resourceMode": "CREDENTIAL_RESOURCE_MODE_DISCOVERABLE",
+            "secretResourceTypeId": "named_key_pair"
+          }
+        ],
+        "preferredOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_KEYPAIR"
+      }
     }
   ],
   "connectorCapabilities": [
     "CAPABILITY_PROVISION",
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
-    "CAPABILITY_RESOURCE_DELETE"
+    "CAPABILITY_RESOURCE_DELETE",
+    "CAPABILITY_CREDENTIAL_ISSUE"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {

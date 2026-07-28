@@ -31,6 +31,12 @@ The Snowflake connector supports [account provisioning](/product/admin/account-p
 
 [This connector can sync secrets](/product/admin/inventory) and display them on the **Inventory** page.
 
+When **Sync secrets** is enabled, the connector also inventories Snowflake
+named key pairs and can issue a new named RSA key pair for `SERVICE` and
+`LEGACY_SERVICE` users. C1 encrypts the one-time private key at the connector
+boundary. Supported RSA modulus sizes are 2048, 3072, and 4096 bits. An optional
+credential lifetime must be a positive whole number of days.
+
 ## Gather Snowflake credentials 
 
 Configuring the connector requires you to pass in credentials generated in Snowflake. Gather these credentials before you move on. 

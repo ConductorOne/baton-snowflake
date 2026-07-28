@@ -99,15 +99,43 @@ func (m *ResultSetMetadata) GetTimeValueFromRow(row []string, key string) (time.
 		return time.Time{}, fmt.Errorf("row type %s not found", key)
 	}
 
-	if rowType.Type != rowTypeTimestampLtz {
+	// SHOW-family statements are not fully stable across Snowflake releases and
+	// may report timestamp values as text. Parse either representation.
+	if rowType.Type != rowTypeTimestampLtz && rowType.Type != rowTypeString {
 		return time.Time{}, fmt.Errorf("column %s is not a timestamp ltz (row type is '%s')", key, rowType.Type)
 	}
 
-	if row[i] == "" {
+	if row[i] == "" || row[i] == rowNull {
 		return time.Time{}, nil
 	}
 
 	return parseTime(row[i])
+}
+
+// ExecuteStatement executes a single non-secret SQL statement through the
+// Snowflake statements API. Callers must construct the statement from escaped
+// identifiers and non-secret values only.
+func (c *Client) ExecuteStatement(ctx context.Context, statement string) error {
+	req, err := c.PostStatementRequest(ctx, []string{statement})
+	if err != nil {
+		return err
+	}
+	var response StatementsApiResponseBase
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
+	if err != nil {
+		return err
+	}
+	if response.StatementHandle == "" {
+		return nil
+	}
+	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+	if err != nil {
+		return err
+	}
+	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	defer closeResponseBody(resp)
+	return err
 }
 
 func (m *ResultSetMetadata) GetStringValueFromRow(row []string, key string) (string, error) {
@@ -151,6 +179,12 @@ func (m *ResultSetMetadata) ParseRow(s Parsable, row []string) error {
 	for i := 0; i < reflected.NumField(); i++ {
 		field := reflected.Type().Field(i)
 		columnName := s.GetColumnName(field.Name)
+		if found, _, _ := m.FindRowTypeByName(columnName); !found {
+			if optional, ok := s.(interface{ IsOptionalField(string) bool }); ok && optional.IsOptionalField(field.Name) {
+				continue
+			}
+			return fmt.Errorf("row type %s not found", columnName)
+		}
 
 		switch field.Type.Kind() {
 		case reflect.String:

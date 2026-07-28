@@ -37,6 +37,7 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 			builders,
 			newSecretBuilder(d.Client),
 			newRsaBuilder(d.Client),
+			newNamedKeyPairBuilder(d.Client),
 		)
 	}
 
