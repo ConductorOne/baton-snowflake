@@ -143,7 +143,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
 	var q string
 	if cursor != "" {
-		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeSingleQuote(cursor))
+		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
 	} else {
 		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
 	}
@@ -196,8 +196,13 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	return tables, nextCursor, nil
 }
 
-// escapeSingleQuote doubles single quotes for use inside SQL string literals.
-func escapeSingleQuote(s string) string {
+// escapeStringLiteral escapes a string for use inside a single-quoted SQL string literal.
+// Snowflake processes backslash escape sequences inside single-quoted literals (e.g. \', \\),
+// so backslashes must be doubled first - otherwise a value ending in a lone backslash (e.g.
+// "foo\") would produce 'foo\', where the trailing \' is read as an escaped quote rather than
+// the closing quote, leaving the literal unterminated. Single quotes are then doubled as usual.
+func escapeStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, "'", "''")
 }
 
@@ -213,7 +218,7 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	// (A prior version of this query added "ESCAPE '\'", which SHOW TABLES doesn't support at
 	// all - Snowflake rejects it as a 422 Unprocessable Entity SQL compilation error on every call.)
-	likePattern := escapeSingleQuote(tableName)
+	likePattern := escapeStringLiteral(tableName)
 	queries := []string{
 		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT 1;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema)),
 	}

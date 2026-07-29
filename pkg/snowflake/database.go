@@ -63,7 +63,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	var queries []string
 
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, escapeSingleQuote(cursor)))
+		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d;", limit))
 	}
@@ -106,7 +106,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 	// only the single quote needs escaping to keep the string literal well-formed. _ and %
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", escapeSingleQuote(name)),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", escapeStringLiteral(name)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

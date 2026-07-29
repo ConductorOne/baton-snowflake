@@ -477,3 +477,48 @@ func TestGetTable_EscapesIdentifiers(t *testing.T) {
 	require.NotNil(t, table)
 	assert.Equal(t, tableName, table.Name)
 }
+
+// TestEscapeStringLiteral_EscapesBackslash verifies that escapeStringLiteral doubles backslashes
+// before doubling single quotes. Snowflake processes backslash escape sequences inside
+// single-quoted string literals, so a value ending in a lone backslash (e.g. `foo\`) would,
+// without this, produce 'foo\' - where the trailing \' is read as an escaped quote rather
+// than the closing quote, leaving the literal unterminated.
+func TestEscapeStringLiteral_EscapesBackslash(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "trailing backslash", input: `foo\`, want: `foo\\`},
+		{name: "backslash and single quote", input: `foo\'bar`, want: `foo\\''bar`},
+		{name: "no special characters", input: `foo`, want: `foo`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, escapeStringLiteral(tt.input))
+		})
+	}
+}
+
+// TestGetTable_EscapesBackslash verifies that a table name containing a trailing backslash
+// is escaped (doubled) before being interpolated into the SHOW TABLES LIKE '...' statement,
+// so the backslash cannot be combined with the closing quote to escape it and leave the SQL
+// string literal unterminated.
+func TestGetTable_EscapesBackslash(t *testing.T) {
+	const database = "DB"
+	const schema = "SCHEMA"
+	const tableName = `weird\`
+
+	var capturedSQL string
+	server := serveTableMatch(t, database, schema, tableName, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, tableName)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW TABLES LIKE 'weird\\' IN SCHEMA "DB"."SCHEMA" LIMIT 1;`, capturedSQL)
+	require.NotNil(t, table)
+	assert.Equal(t, tableName, table.Name)
+}

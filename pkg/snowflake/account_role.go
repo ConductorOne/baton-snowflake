@@ -91,7 +91,7 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	var queries []string
 
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, escapeSingleQuote(cursor)))
+		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d;", limit))
 	}
@@ -282,7 +282,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	// only the single quote needs escaping to keep the string literal well-formed. _ and %
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", escapeSingleQuote(roleName)),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", escapeStringLiteral(roleName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
