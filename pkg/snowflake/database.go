@@ -130,10 +130,8 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 		return nil, resp.StatusCode, err
 	}
 
-	if len(databases) == 0 {
+	if len(databases) == 0 || databases[0].Name != name {
 		return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
-	} else if len(databases) > 1 {
-		return nil, resp.StatusCode, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
 	}
 
 	return &databases[0], resp.StatusCode, nil

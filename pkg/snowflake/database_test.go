@@ -86,6 +86,31 @@ func TestGetDatabase_NoEscapeClauseForLikeWildcards(t *testing.T) {
 	assert.Equal(t, database, db.Name)
 }
 
+// TestGetDatabase_RejectsWildcardMismatch guards against the exact bug the exact-match
+// check exists to prevent: SHOW DATABASES' LIKE filter is a pattern match with no ESCAPE
+// clause to neutralize _/% wildcards (see the query comment in GetDatabase), so a name
+// containing a wildcard character can match some other database entirely. Here name is
+// "MY_DB" (the _ is a wildcard matching any single character) and the server - as
+// Snowflake's LIMIT 1 would for an over-broad pattern - returns exactly one row for a
+// DIFFERENT database, "MYADB", that happens to match the loose pattern. Before the
+// exact-match guard, GetDatabase would have silently returned this wrong database. It
+// must instead be treated as "not found".
+func TestGetDatabase_RejectsWildcardMismatch(t *testing.T) {
+	const requested = "MY_DB"
+	const actualMatch = "MYADB"
+
+	var capturedSQL string
+	server := serveDatabaseMatch(t, actualMatch, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	db, _, err := client.GetDatabase(context.Background(), requested)
+	require.Error(t, err)
+	assert.Nil(t, db, "a database name that only loosely matches the LIKE wildcard pattern must not be returned as if it were an exact match")
+}
+
 // TestListDatabases_EscapesCursor verifies that the pagination cursor - the bare name of
 // the last database from a previous page, which can itself contain a single quote - is
 // escaped before being interpolated into the SHOW DATABASES LIMIT ... FROM '...' statement.
