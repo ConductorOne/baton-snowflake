@@ -12,6 +12,7 @@ const (
 	structFieldKind         = "Kind"
 	structFieldGrantedTo    = "GrantedTo"
 	structFieldGranteeName  = "GranteeName"
+	structFieldOrigin       = "Origin"
 )
 
 const (
@@ -29,4 +30,5 @@ const (
 	columnRole         = "role"
 	columnGrantOption  = "grant_option"
 	columnGrantedBy    = "granted_by"
+	columnOrigin       = "origin"
 )
