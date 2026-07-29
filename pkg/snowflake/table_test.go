@@ -429,6 +429,69 @@ func serveTableMatch(t *testing.T, database, schema, tableName string, capturedS
 	}))
 }
 
+// serveTableRows is like serveTableMatch but returns multiple rows (all in the same
+// database/schema), for tests exercising wildcard collisions where more than one table name
+// matches the LIKE pattern.
+func serveTableRows(t *testing.T, database, schema string, tableNames []string) *httptest.Server {
+	t.Helper()
+	const handle = "handle-table"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+			})
+		case http.MethodGet:
+			data := make([][]string, len(tableNames))
+			for i, name := range tableNames {
+				data[i] = []string{"1700000000.000000000", name, schema, database, testObjectKind, "", "SYSADMIN"}
+			}
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows": len(tableNames),
+					"rowType": []map[string]interface{}{
+						{"name": columnCreatedOn, "type": "timestamp_ltz"},
+						{"name": columnName, "type": "text"},
+						{"name": columnSchemaName, "type": "text"},
+						{"name": columnDatabaseName, "type": "text"},
+						{"name": columnKind, "type": "text"},
+						{"name": columnComment, "type": "text"},
+						{"name": columnOwner, "type": "text"},
+					},
+				},
+				"data": data,
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// TestGetTable_FindsExactMatchAmongWildcardCollisions verifies that GetTable finds the real
+// table even when a wildcard-colliding table ("FACTXTABLE") is returned before it.
+func TestGetTable_FindsExactMatchAmongWildcardCollisions(t *testing.T) {
+	const database = "DB"
+	const schema = "SCHEMA"
+	const requested = "FACT_TABLE"
+	const collision = "FACTXTABLE"
+
+	server := serveTableRows(t, database, schema, []string{collision, requested})
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, requested)
+	require.NoError(t, err)
+	require.NotNil(t, table, "the real table must still be found even though a wildcard-colliding table was returned first")
+	assert.Equal(t, requested, table.Name)
+}
+
 // TestGetTable_NoEscapeClauseForLikeWildcards documents a Snowflake limitation: SHOW TABLES'
 // LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate/WHERE usage), so
 // there is no syntax to make an underscore or percent sign in a table name match literally.
@@ -451,7 +514,7 @@ func TestGetTable_NoEscapeClauseForLikeWildcards(t *testing.T) {
 
 	table, err := client.GetTable(context.Background(), database, schema, tableName)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW TABLES LIKE 'FACT_TABLE%1' IN SCHEMA "DB"."SCHEMA" LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW TABLES LIKE 'FACT_TABLE%1' IN SCHEMA "DB"."SCHEMA" LIMIT 50;`, capturedSQL)
 	require.NotNil(t, table)
 	assert.Equal(t, tableName, table.Name)
 }
@@ -473,7 +536,7 @@ func TestGetTable_EscapesIdentifiers(t *testing.T) {
 
 	table, err := client.GetTable(context.Background(), database, schema, tableName)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW TABLES LIKE 'o''brien' IN SCHEMA "weird""db"."weird""schema" LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW TABLES LIKE 'o''brien' IN SCHEMA "weird""db"."weird""schema" LIMIT 50;`, capturedSQL)
 	require.NotNil(t, table)
 	assert.Equal(t, tableName, table.Name)
 }
@@ -518,7 +581,7 @@ func TestGetTable_EscapesBackslash(t *testing.T) {
 
 	table, err := client.GetTable(context.Background(), database, schema, tableName)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW TABLES LIKE 'weird\\' IN SCHEMA "DB"."SCHEMA" LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW TABLES LIKE 'weird\\' IN SCHEMA "DB"."SCHEMA" LIMIT 50;`, capturedSQL)
 	require.NotNil(t, table)
 	assert.Equal(t, tableName, table.Name)
 }

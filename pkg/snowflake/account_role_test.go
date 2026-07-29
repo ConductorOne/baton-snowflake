@@ -340,7 +340,7 @@ func TestGetAccountRole_EscapesRoleName(t *testing.T) {
 
 	_, _, err = client.GetAccountRole(context.Background(), nil, role)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW ROLES LIKE 'o''brien' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW ROLES LIKE 'o''brien' LIMIT 50;`, capturedSQL)
 }
 
 // TestGetAccountRole_NoEscapeClauseForLikeWildcards documents a Snowflake limitation:
@@ -363,7 +363,7 @@ func TestGetAccountRole_NoEscapeClauseForLikeWildcards(t *testing.T) {
 
 	_, _, err = client.GetAccountRole(context.Background(), nil, role)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW ROLES LIKE 'DATA_ENGINEER%1' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW ROLES LIKE 'DATA_ENGINEER%1' LIMIT 50;`, capturedSQL)
 }
 
 // serveAccountRoleMatch returns an httptest.Server implementing the Snowflake Statements
@@ -425,6 +425,46 @@ func TestGetAccountRole_RejectsWildcardMismatch(t *testing.T) {
 	got, _, err := client.GetAccountRole(context.Background(), nil, requested)
 	require.NoError(t, err)
 	assert.Nil(t, got, "a role name that only loosely matches the LIKE wildcard pattern must not be returned as if it were an exact match")
+}
+
+// serveAccountRoleRows is like serveAccountRoleMatch but returns multiple rows, for tests
+// exercising wildcard collisions where more than one role matches the LIKE pattern.
+func serveAccountRoleRows(t *testing.T, roleNames []string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		data := make([][]string, len(roleNames))
+		for i, name := range roleNames {
+			data[i] = []string{name}
+		}
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": len(roleNames),
+				"rowType": accountRoleRowTypes(),
+			},
+			"data": data,
+		})
+	}))
+}
+
+// TestGetAccountRole_FindsExactMatchAmongWildcardCollisions verifies that GetAccountRole finds
+// the real role even when a wildcard-colliding role ("DATAXENGINEER") is returned before it.
+func TestGetAccountRole_FindsExactMatchAmongWildcardCollisions(t *testing.T) {
+	const requested = "DATA_ENGINEER"
+	const collision = "DATAXENGINEER"
+
+	server := serveAccountRoleRows(t, []string{collision, requested})
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	got, _, err := client.GetAccountRole(context.Background(), nil, requested)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the real role must still be found even though a wildcard-colliding role was returned first")
+	assert.Equal(t, requested, got.Name)
 }
 
 // TestGrantAccountRole_EscapesIdentifiers verifies that role and user names containing

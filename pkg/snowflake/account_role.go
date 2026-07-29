@@ -282,7 +282,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	// only the single quote needs escaping to keep the string literal well-formed. _ and %
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", escapeStringLiteral(roleName)),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT %d;", escapeStringLiteral(roleName), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -306,15 +306,14 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 		return nil, resp.StatusCode, err
 	}
 
-	// LIKE is a pattern match, not an exact match, and SHOW ROLES has no ESCAPE clause to
-	// neutralize _/% wildcards in roleName (see the query comment above). LIMIT 1 means at
-	// most one row comes back, but if roleName contains a wildcard character, that one row
-	// can be some other role that happens to match the loose pattern - not necessarily
-	// roleName itself. Only accept it if the name matches exactly; otherwise treat it the
-	// same as "not found" rather than silently returning the wrong role.
+	// Wildcard collisions can outrank the real role, so scan all rows rather than assuming
+	// accountRoles[0] is the match.
 	var role *AccountRole
-	if len(accountRoles) > 0 && accountRoles[0].Name == roleName {
-		role = &accountRoles[0]
+	for i := range accountRoles {
+		if accountRoles[i].Name == roleName {
+			role = &accountRoles[i]
+			break
+		}
 	}
 
 	if ss != nil {

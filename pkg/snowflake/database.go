@@ -106,7 +106,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 	// only the single quote needs escaping to keep the string literal well-formed. _ and %
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", escapeStringLiteral(name)),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT %d;", escapeStringLiteral(name), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -130,9 +130,13 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 		return nil, resp.StatusCode, err
 	}
 
-	if len(databases) == 0 || databases[0].Name != name {
-		return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
+	// Wildcard collisions can outrank the real database, so scan all rows rather than assuming
+	// databases[0] is the match.
+	for i := range databases {
+		if databases[i].Name == name {
+			return &databases[i], resp.StatusCode, nil
+		}
 	}
 
-	return &databases[0], resp.StatusCode, nil
+	return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
 }

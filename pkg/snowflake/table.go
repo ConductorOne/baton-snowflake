@@ -196,6 +196,11 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	return tables, nextCursor, nil
 }
 
+// wildcardLookupLimit bounds SHOW ... LIKE '<name>' name lookups (GetTable, GetAccountRole,
+// GetDatabase). SHOW's LIKE has no ESCAPE clause, so _ and % stay live wildcards; LIMIT 1 could
+// let a colliding row crowd out the real one before the exact-match filter sees it.
+const wildcardLookupLimit = 50
+
 // escapeStringLiteral escapes a string for use inside a single-quoted SQL string literal.
 // Snowflake processes backslash escape sequences inside single-quoted literals (e.g. \', \\),
 // so backslashes must be doubled first - otherwise a value ending in a lone backslash (e.g.
@@ -220,7 +225,7 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	// all - Snowflake rejects it as a 422 Unprocessable Entity SQL compilation error on every call.)
 	likePattern := escapeStringLiteral(tableName)
 	queries := []string{
-		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT 1;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema)),
+		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

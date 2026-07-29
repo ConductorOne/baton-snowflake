@@ -58,7 +58,7 @@ func TestGetDatabase_EscapesName(t *testing.T) {
 
 	db, _, err := client.GetDatabase(context.Background(), database)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW DATABASES LIKE 'o''brien' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW DATABASES LIKE 'o''brien' LIMIT 50;`, capturedSQL)
 	assert.Equal(t, database, db.Name)
 }
 
@@ -82,7 +82,7 @@ func TestGetDatabase_NoEscapeClauseForLikeWildcards(t *testing.T) {
 
 	db, _, err := client.GetDatabase(context.Background(), database)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW DATABASES LIKE 'PROD_DB%1' LIMIT 1;`, capturedSQL)
+	assert.Equal(t, `SHOW DATABASES LIKE 'PROD_DB%1' LIMIT 50;`, capturedSQL)
 	assert.Equal(t, database, db.Name)
 }
 
@@ -109,6 +109,51 @@ func TestGetDatabase_RejectsWildcardMismatch(t *testing.T) {
 	db, _, err := client.GetDatabase(context.Background(), requested)
 	require.Error(t, err)
 	assert.Nil(t, db, "a database name that only loosely matches the LIKE wildcard pattern must not be returned as if it were an exact match")
+}
+
+// serveDatabaseRows is like serveDatabaseMatch but returns multiple rows, for tests exercising
+// wildcard collisions where more than one database matches the LIKE pattern.
+func serveDatabaseRows(t *testing.T, databaseNames []string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		data := make([][]string, len(databaseNames))
+		for i, name := range databaseNames {
+			data[i] = []string{name, "SYSADMIN", "STANDARD", ""}
+		}
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": len(databaseNames),
+				"rowType": []map[string]interface{}{
+					{"name": "name", "type": "text"},
+					{"name": "owner", "type": "text"},
+					{"name": "kind", "type": "text"},
+					{"name": "origin", "type": "text"},
+				},
+			},
+			"data": data,
+		})
+	}))
+}
+
+// TestGetDatabase_FindsExactMatchAmongWildcardCollisions verifies that GetDatabase finds the
+// real database even when a wildcard-colliding database ("MYADB") is returned before it.
+func TestGetDatabase_FindsExactMatchAmongWildcardCollisions(t *testing.T) {
+	const requested = "MY_DB"
+	const collision = "MYADB"
+
+	server := serveDatabaseRows(t, []string{collision, requested})
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	db, _, err := client.GetDatabase(context.Background(), requested)
+	require.NoError(t, err)
+	require.NotNil(t, db, "the real database must still be found even though a wildcard-colliding database was returned first")
+	assert.Equal(t, requested, db.Name)
 }
 
 // TestListDatabases_EscapesCursor verifies that the pagination cursor - the bare name of
