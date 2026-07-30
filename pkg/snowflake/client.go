@@ -13,6 +13,8 @@ import (
 
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/protoadapt"
 )
 
 var (
@@ -299,7 +301,9 @@ func closeResponseBody(resp *http.Response) {
 }
 
 // uhttp.Do always joins a generic "<code> <http status text>" error ahead of
-// WithErrorResponse's detailed one; keep just the last (most specific) error.
+// WithErrorResponse's detailed one, and it's the generic one that carries any
+// rate-limit gRPC details. Keep the detailed message but carry those details
+// over so rate-limit-aware retry still sees them.
 func dedupeAPIError(err error) error {
 	if err == nil {
 		return nil
@@ -312,5 +316,29 @@ func dedupeAPIError(err error) error {
 	if len(errs) == 0 {
 		return err
 	}
-	return errs[len(errs)-1]
+	last := errs[len(errs)-1]
+
+	generic, ok := status.FromError(errs[0])
+	if !ok || len(generic.Details()) == 0 {
+		return last
+	}
+	lastStatus, ok := status.FromError(last)
+	if !ok {
+		return last
+	}
+
+	var details []protoadapt.MessageV1
+	for _, d := range generic.Details() {
+		if m, ok := d.(protoadapt.MessageV1); ok {
+			details = append(details, m)
+		}
+	}
+	if len(details) == 0 {
+		return last
+	}
+	merged, err := lastStatus.WithDetails(details...)
+	if err != nil {
+		return last
+	}
+	return merged.Err()
 }

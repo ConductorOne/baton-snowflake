@@ -114,11 +114,11 @@ func (c *Client) doRequest(
 	var errorResponse SnowflakeError
 	doOptions := []uhttp.DoOption{
 		uhttp.WithRatelimitData(&rateLimitData),
-		uhttp.WithErrorResponse(&errorResponse),
 	}
 	if target != nil {
 		doOptions = append(doOptions, uhttp.WithJSONResponse(target))
 	}
+	doOptions = append(doOptions, uhttp.WithErrorResponse(&errorResponse))
 
 	response, err := c.Do(request, doOptions...)
 	defer func() {
