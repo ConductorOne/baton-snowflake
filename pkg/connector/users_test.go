@@ -32,6 +32,13 @@ func TestClassifyUserNHI(t *testing.T) {
 			wantIsNHI:  true,
 		},
 		{
+			name:       "service agent user -> app registration",
+			userType:   "SERVICE_AGENT",
+			wantType:   v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION,
+			wantDetail: "snowflake.user.service_agent",
+			wantIsNHI:  true,
+		},
+		{
 			name:       "lowercase and padded service type still classified",
 			userType:   "  service  ",
 			wantType:   v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION,
@@ -46,6 +53,11 @@ func TestClassifyUserNHI(t *testing.T) {
 		{
 			name:      "empty user type -> no NHI trait",
 			userType:  "",
+			wantIsNHI: false,
+		},
+		{
+			name:      "unrecognized future user type -> no NHI trait",
+			userType:  "AI_COPILOT",
 			wantIsNHI: false,
 		},
 	}
@@ -77,9 +89,11 @@ func TestGetUserAccountType(t *testing.T) {
 	}{
 		{name: "service", userType: "SERVICE", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
 		{name: "legacy service", userType: "LEGACY_SERVICE", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
+		{name: "service agent", userType: "SERVICE_AGENT", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
 		{name: "lowercase and padded service", userType: "  service  ", want: v2.UserTrait_ACCOUNT_TYPE_SERVICE},
 		{name: "person", userType: "PERSON", want: v2.UserTrait_ACCOUNT_TYPE_HUMAN},
 		{name: "empty", userType: "", want: v2.UserTrait_ACCOUNT_TYPE_HUMAN},
+		{name: "unrecognized future type", userType: "AI_COPILOT", want: v2.UserTrait_ACCOUNT_TYPE_HUMAN},
 	}
 
 	for _, tt := range tests {

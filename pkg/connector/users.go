@@ -89,29 +89,33 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 }
 
 // https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
-//	TYPE = PERSON | SERVICE | LEGACY_SERVICE | NULL
+//	TYPE = { PERSON | SERVICE | SERVICE_AGENT | LEGACY_SERVICE }
 const (
 	userTypeService       = "SERVICE"
+	userTypeServiceAgent  = "SERVICE_AGENT"
 	userTypeLegacyService = "LEGACY_SERVICE"
 
 	nhiDetailService       = "snowflake.user.service"
+	nhiDetailServiceAgent  = "snowflake.user.service_agent"
 	nhiDetailLegacyService = "snowflake.user.legacy_service"
 )
 
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 	switch strings.ToUpper(strings.TrimSpace(user.Type)) {
-	case userTypeService, userTypeLegacyService:
+	case userTypeService, userTypeServiceAgent, userTypeLegacyService:
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
 }
 
 // classifyUserNHI maps a Snowflake user TYPE to its NHI spine and axis-2 detail.
-// SERVICE and LEGACY_SERVICE users hold a self-custodied standing credential (app registration); other types get no NHI trait.
+// SERVICE, SERVICE_AGENT, and LEGACY_SERVICE users hold a self-custodied standing credential (app registration); other types get no NHI trait.
 func classifyUserNHI(userType string) (v2.NonHumanIdentityTrait_NhiType, string, bool) {
 	switch strings.ToUpper(strings.TrimSpace(userType)) {
 	case userTypeService:
 		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailService, true
+	case userTypeServiceAgent:
+		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailServiceAgent, true
 	case userTypeLegacyService:
 		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailLegacyService, true
 	default:
