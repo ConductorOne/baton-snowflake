@@ -54,28 +54,29 @@ func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAc
 	}
 
 	var response ListOrganizationAccountsRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
 		statusCode := 0
 		if resp1 != nil {
 			statusCode = resp1.StatusCode
 		}
-		return nil, statusCode, err
+		return nil, statusCode, dedupeAPIError(err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, 0, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
 		statusCode := 0
 		if resp2 != nil {
 			statusCode = resp2.StatusCode
 		}
-		return nil, statusCode, err
+		return nil, statusCode, dedupeAPIError(err)
 	}
 
 	accounts, err := response.GetOrganizationAccounts()
@@ -95,20 +96,21 @@ func (c *Client) CountUsers(ctx context.Context) (int64, error) {
 	}
 
 	var response StatementsApiResponseBase
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		return 0, err
+		return 0, dedupeAPIError(err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return 0, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return 0, err
+		return 0, dedupeAPIError(err)
 	}
 
 	if len(response.Data) == 0 || len(response.Data[0]) == 0 {

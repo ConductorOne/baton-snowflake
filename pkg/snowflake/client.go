@@ -297,3 +297,20 @@ func closeResponseBody(resp *http.Response) {
 		_ = resp.Body.Close()
 	}
 }
+
+// uhttp.Do always joins a generic "<code> <http status text>" error ahead of
+// WithErrorResponse's detailed one; keep just the last (most specific) error.
+func dedupeAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return err
+	}
+	errs := joined.Unwrap()
+	if len(errs) == 0 {
+		return err
+	}
+	return errs[len(errs)-1]
+}

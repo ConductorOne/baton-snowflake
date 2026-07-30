@@ -64,7 +64,8 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	}
 
 	var response ListSchemasRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
 		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
@@ -72,14 +73,14 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s: %w", databaseName, err)
 			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
 		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
@@ -87,7 +88,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result): %w", databaseName, err)
 			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	return response.ListSchemas()
@@ -155,7 +156,8 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	}
 
 	var response ListTablesRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
 		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
@@ -164,14 +166,14 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s: %w", databaseName, schemaName, err)
 			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, "", err
+		return nil, "", dedupeAPIError(err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, "", err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
 		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
@@ -180,7 +182,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s (statement result): %w", databaseName, schemaName, err)
 			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return nil, "", err
+		return nil, "", dedupeAPIError(err)
 	}
 
 	tables, err := response.ListTables()
@@ -229,23 +231,24 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	}
 
 	var response ListTablesRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
 		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
 			return nil, nil
 		}
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
 		return nil, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	tables, err := response.ListTables()
@@ -435,7 +438,8 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	}
 
 	var response ListTableGrantsRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			var errMsg struct {
@@ -460,7 +464,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 			return tableGrantsFirstPage{}, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
 		}
 
-		return tableGrantsFirstPage{}, err
+		return tableGrantsFirstPage{}, dedupeAPIError(err)
 	}
 	if resp != nil {
 		defer resp.Body.Close()
@@ -472,14 +476,14 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	if err != nil {
 		return tableGrantsFirstPage{}, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response))
+	resp, err = c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
 			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %w", database, schema, tableName, err)
 			return tableGrantsFirstPage{}, status.Error(codes.PermissionDenied, wrappedErr.Error())
 		}
-		return tableGrantsFirstPage{}, err
+		return tableGrantsFirstPage{}, dedupeAPIError(err)
 	}
 	if resp != nil {
 		defer resp.Body.Close()
@@ -519,10 +523,11 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	}
 
 	var response ListTableGrantsRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, "", err
+		return nil, "", dedupeAPIError(err)
 	}
 
 	// Partitions after the first come back with data only, no resultSetMetadata - reuse the

@@ -136,7 +136,7 @@ func (c *Client) doRequest(
 		if response != nil {
 			statusCode = response.StatusCode
 		}
-		return nil, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: request failed: %w", err)
+		return nil, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: request failed: %w", dedupeAPIError(err))
 	}
 
 	// WithErrorResponse ensures c.Do() returns an error for status >= 300,

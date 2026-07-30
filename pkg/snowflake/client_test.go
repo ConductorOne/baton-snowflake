@@ -32,7 +32,8 @@ func TestStatementsApiRequestBodyRole(t *testing.T) {
 	}
 }
 
-// A 401 must surface Snowflake's response-body reason while keeping codes.Unauthenticated.
+// A 401 must surface Snowflake's response-body reason while keeping codes.Unauthenticated,
+// with no bare "401 Unauthorized" line duplicated alongside the detailed reason.
 func TestListUsers_SurfacesAuthFailureReason(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -48,4 +49,40 @@ func TestListUsers_SurfacesAuthFailureReason(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 	assert.Contains(t, err.Error(), "JWT token is invalid")
+	assert.Equal(t, 1, strings.Count(err.Error(), "rpc error"), "expected a single error, not joined with the bare status: %s", err.Error())
+}
+
+// A non-JSON 401 body (e.g. an HTML page from a proxy in front of Snowflake) must not panic
+// and must still map to codes.Unauthenticated.
+func TestListUsers_NonJSONAuthFailureBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`<html><body>401 Unauthorized</body></html>`))
+	}))
+	defer srv.Close()
+
+	client, err := New(srv.URL, JWTConfig{}, srv.Client())
+	require.NoError(t, err)
+
+	_, err = client.ListUsers(context.Background(), "", 1)
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
+// A malformed (truncated) JSON 401 body must not panic and must still map to codes.Unauthenticated.
+func TestListUsers_MalformedJSONAuthFailureBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":"390144","message":`))
+	}))
+	defer srv.Close()
+
+	client, err := New(srv.URL, JWTConfig{}, srv.Client())
+	require.NoError(t, err)
+
+	_, err = client.ListUsers(context.Background(), "", 1)
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
