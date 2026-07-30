@@ -69,6 +69,9 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 	if syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
 	}
+	if nhiType, nhiDetail, isNHI := classifyUserNHI(user.Type); isNHI {
+		opts = append(opts, rs.WithNHIType(nhiType, nhiDetail))
+	}
 
 	resource, err := rs.NewUserResource(
 		displayName,
@@ -85,13 +88,39 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 	return resource, nil
 }
 
+// https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
+//	TYPE = { PERSON | SERVICE | SERVICE_AGENT | LEGACY_SERVICE }
+const (
+	userTypeService       = "SERVICE"
+	userTypeServiceAgent  = "SERVICE_AGENT"
+	userTypeLegacyService = "LEGACY_SERVICE"
+
+	nhiDetailService       = "snowflake.user.service"
+	nhiDetailServiceAgent  = "snowflake.user.service_agent"
+	nhiDetailLegacyService = "snowflake.user.legacy_service"
+)
+
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
-	// https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
-	//	TYPE = PERSON | SERVICE | LEGACY_SERVICE | NULL
-	if user.Type == "LEGACY_SERVICE" || user.Type == "SERVICE" {
+	switch strings.ToUpper(strings.TrimSpace(user.Type)) {
+	case userTypeService, userTypeServiceAgent, userTypeLegacyService:
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
+}
+
+// classifyUserNHI maps a Snowflake user TYPE to its NHI spine and axis-2 detail.
+// SERVICE, SERVICE_AGENT, and LEGACY_SERVICE users hold a self-custodied standing credential (app registration); other types get no NHI trait.
+func classifyUserNHI(userType string) (v2.NonHumanIdentityTrait_NhiType, string, bool) {
+	switch strings.ToUpper(strings.TrimSpace(userType)) {
+	case userTypeService:
+		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailService, true
+	case userTypeServiceAgent:
+		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailServiceAgent, true
+	case userTypeLegacyService:
+		return v2.NonHumanIdentityTrait_NHI_TYPE_APP_REGISTRATION, nhiDetailLegacyService, true
+	default:
+		return v2.NonHumanIdentityTrait_NHI_TYPE_UNSPECIFIED, "", false
+	}
 }
 
 func getUserStatus(user *snowflake.User) v2.Status_ResourceStatus {

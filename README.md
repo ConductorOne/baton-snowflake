@@ -234,6 +234,13 @@ baton resources
 - Databases
 - Integrations
 
+## Users
+
+`baton-snowflake` syncs users via `SHOW USERS`. Users with a Snowflake `TYPE` of `SERVICE`,
+`SERVICE_AGENT`, or `LEGACY_SERVICE` are marked as non-human identities (app registrations), since
+they authenticate with a self-custodied standing credential the account holds and rotates. `PERSON`
+and untyped users carry no non-human-identity tag.
+
 ## Integrations
 
 `baton-snowflake` syncs account-level integrations via `SHOW INTEGRATIONS` and marks them as
