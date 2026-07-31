@@ -309,16 +309,14 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	// Wildcard collisions can outrank the real role, so scan all rows rather than assuming
 	// accountRoles[0] is the match.
 	var role *AccountRole
-	for i := range accountRoles {
-		if accountRoles[i].Name == roleName {
-			role = &accountRoles[i]
+	for _, ar := range accountRoles {
+		if ar.Name == roleName {
+			role = &ar
 			break
 		}
 	}
 
-	if ss != nil {
-		// Best-effort: role was already fetched above and is returned regardless; a failed
-		// cache write only costs a future GetAccountRole call a redundant re-query.
+	if ss != nil && role != nil {
 		_ = session.SetJSON(ctx, ss, roleName, role, accountRoleNamespace)
 	}
 
