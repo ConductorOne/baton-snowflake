@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -134,14 +135,14 @@ const testObjectKind = "TABLE"
 
 func tableGrantRowTypes() []map[string]interface{} {
 	return []map[string]interface{}{
-		{"name": "created_on", "type": "timestamp_ltz"},
+		{"name": columnCreatedOn, "type": "timestamp_ltz"},
 		{"name": "privilege", "type": "text"},
 		{"name": "granted_on", "type": "text"},
-		{"name": "name", "type": "text"},
-		{"name": "granted_to", "type": "text"},
-		{"name": "grantee_name", "type": "text"},
-		{"name": "grant_option", "type": "text"},
-		{"name": "granted_by", "type": "text"},
+		{"name": columnName, "type": "text"},
+		{"name": columnGrantedTo, "type": "text"},
+		{"name": columnGranteeName, "type": "text"},
+		{"name": columnGrantOption, "type": "text"},
+		{"name": columnGrantedBy, "type": "text"},
 	}
 }
 
@@ -380,4 +381,207 @@ func TestListTableGrants_PropagatesPartialCacheReadFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, grants)
 	assert.Empty(t, cursor2)
+}
+
+// serveTableMatch returns an httptest.Server implementing the Snowflake Statements API's
+// two-step POST-then-GET flow for a single-row SHOW TABLES LIKE ... response matching the
+// given table, and captures the "statement" field of the POST body into capturedSQL.
+func serveTableMatch(t *testing.T, database, schema, tableName string, capturedSQL *string) *httptest.Server {
+	t.Helper()
+	const handle = "handle-table"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var req StatementsApiRequestBody
+			require.NoError(t, json.Unmarshal(body, &req))
+			*capturedSQL = req.Statement
+
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+			})
+		case http.MethodGet:
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows": 1,
+					"rowType": []map[string]interface{}{
+						{"name": columnCreatedOn, "type": "timestamp_ltz"},
+						{"name": columnName, "type": "text"},
+						{"name": columnSchemaName, "type": "text"},
+						{"name": columnDatabaseName, "type": "text"},
+						{"name": columnKind, "type": "text"},
+						{"name": columnComment, "type": "text"},
+						{"name": columnOwner, "type": "text"},
+					},
+				},
+				"data": [][]string{{"1700000000.000000000", tableName, schema, database, testObjectKind, "", "SYSADMIN"}},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// serveTableRows is like serveTableMatch but returns multiple rows (all in the same
+// database/schema), for tests exercising wildcard collisions where more than one table name
+// matches the LIKE pattern.
+func serveTableRows(t *testing.T, database, schema string, tableNames []string) *httptest.Server {
+	t.Helper()
+	const handle = "handle-table"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+			})
+		case http.MethodGet:
+			data := make([][]string, len(tableNames))
+			for i, name := range tableNames {
+				data[i] = []string{"1700000000.000000000", name, schema, database, testObjectKind, "", "SYSADMIN"}
+			}
+			_ = enc.Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows": len(tableNames),
+					"rowType": []map[string]interface{}{
+						{"name": columnCreatedOn, "type": "timestamp_ltz"},
+						{"name": columnName, "type": "text"},
+						{"name": columnSchemaName, "type": "text"},
+						{"name": columnDatabaseName, "type": "text"},
+						{"name": columnKind, "type": "text"},
+						{"name": columnComment, "type": "text"},
+						{"name": columnOwner, "type": "text"},
+					},
+				},
+				"data": data,
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// TestGetTable_FindsExactMatchAmongWildcardCollisions verifies that GetTable finds the real
+// table even when a wildcard-colliding table ("FACTXTABLE") is returned before it.
+func TestGetTable_FindsExactMatchAmongWildcardCollisions(t *testing.T) {
+	const database = "DB"
+	const schema = "SCHEMA"
+	const requested = "FACT_TABLE"
+	const collision = "FACTXTABLE"
+
+	server := serveTableRows(t, database, schema, []string{collision, requested})
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, requested)
+	require.NoError(t, err)
+	require.NotNil(t, table, "the real table must still be found even though a wildcard-colliding table was returned first")
+	assert.Equal(t, requested, table.Name)
+}
+
+// TestGetTable_NoEscapeClauseForLikeWildcards documents a Snowflake limitation: SHOW TABLES'
+// LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate/WHERE usage), so
+// there is no syntax to make an underscore or percent sign in a table name match literally.
+// Only the single quote is escaped, to keep the string literal well-formed; _ and % are sent
+// through untouched and remain active wildcards. A prior version of this query added
+// "ESCAPE '\'" to try to neutralize these wildcards, but SHOW TABLES does not support that
+// clause at all - Snowflake rejects it as a 422 Unprocessable Entity (SQL compilation error)
+// on every single call, not just ones with wildcard characters.
+func TestGetTable_NoEscapeClauseForLikeWildcards(t *testing.T) {
+	const database = "DB"
+	const schema = "SCHEMA"
+	const tableName = `FACT_TABLE%1`
+
+	var capturedSQL string
+	server := serveTableMatch(t, database, schema, tableName, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, tableName)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW TABLES LIKE 'FACT_TABLE%1' IN SCHEMA "DB"."SCHEMA" LIMIT 50;`, capturedSQL)
+	require.NotNil(t, table)
+	assert.Equal(t, tableName, table.Name)
+}
+
+// TestGetTable_EscapesIdentifiers verifies that a table name containing a single quote, and
+// a database/schema name containing an embedded double quote, are escaped before being
+// interpolated into the SHOW TABLES LIKE '...' IN SCHEMA "..."."..."; statement.
+func TestGetTable_EscapesIdentifiers(t *testing.T) {
+	const database = `weird"db`
+	const schema = `weird"schema`
+	const tableName = `o'brien`
+
+	var capturedSQL string
+	server := serveTableMatch(t, database, schema, tableName, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, tableName)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW TABLES LIKE 'o''brien' IN SCHEMA "weird""db"."weird""schema" LIMIT 50;`, capturedSQL)
+	require.NotNil(t, table)
+	assert.Equal(t, tableName, table.Name)
+}
+
+// TestEscapeStringLiteral_EscapesBackslash verifies that escapeStringLiteral doubles backslashes
+// before doubling single quotes. Snowflake processes backslash escape sequences inside
+// single-quoted string literals, so a value ending in a lone backslash (e.g. `foo\`) would,
+// without this, produce 'foo\' - where the trailing \' is read as an escaped quote rather
+// than the closing quote, leaving the literal unterminated.
+func TestEscapeStringLiteral_EscapesBackslash(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "trailing backslash", input: `foo\`, want: `foo\\`},
+		{name: "backslash and single quote", input: `foo\'bar`, want: `foo\\''bar`},
+		{name: "no special characters", input: `foo`, want: `foo`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, escapeStringLiteral(tt.input))
+		})
+	}
+}
+
+// TestGetTable_EscapesBackslash verifies that a table name containing a trailing backslash
+// is escaped (doubled) before being interpolated into the SHOW TABLES LIKE '...' statement,
+// so the backslash cannot be combined with the closing quote to escape it and leave the SQL
+// string literal unterminated.
+func TestGetTable_EscapesBackslash(t *testing.T) {
+	const database = "DB"
+	const schema = "SCHEMA"
+	const tableName = `weird\`
+
+	var capturedSQL string
+	server := serveTableMatch(t, database, schema, tableName, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	table, err := client.GetTable(context.Background(), database, schema, tableName)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW TABLES LIKE 'weird\\' IN SCHEMA "DB"."SCHEMA" LIMIT 50;`, capturedSQL)
+	require.NotNil(t, table)
+	assert.Equal(t, tableName, table.Name)
 }
