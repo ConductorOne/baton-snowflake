@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,10 +12,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// captureStatement returns an httptest.Server that records the "statement" field of
+// the initial POST body it receives (the SQL text sent to the Statements API) into
+// capturedSQL, then replies with a minimal valid response - including to any follow-up
+// GET made to fetch the statement result - so the client's read path doesn't error.
+func captureStatement(t *testing.T, capturedSQL *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var req StatementsApiRequestBody
+			require.NoError(t, json.Unmarshal(body, &req))
+			*capturedSQL = req.Statement
+		}
+
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": 0,
+			},
+			"data": [][]string{},
+		})
+	}))
+}
+
+// granteeRowTypes matches the column layout GetAccountRoleGrantees' ParseRow expects for SHOW
+// GRANTS OF ROLE, aligned with the index positions granteeRow's rows use: 0=created_on (unused
+// by AccountRoleGrantee, included only to occupy the position), 1=role, 2=granted_to,
+// 3=grantee_name.
+func granteeRowTypes() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"name": columnCreatedOn, "type": "text"},
+		{"name": columnRole, "type": "text"},
+		{"name": columnGrantedTo, "type": "text"},
+		{"name": columnGranteeName, "type": "text"},
+	}
+}
+
 // serveGrantees returns an httptest.Server that implements the Snowflake Statements
 // API for SHOW GRANTS OF ROLE. partition0Rows is returned on the initial GET
 // (partition 0); if partition1Rows is non-nil a second partition is advertised
-// and served on ?partition=1.
+// and served on ?partition=1. Only the partition-0 response carries rowType metadata -
+// matching real Snowflake behavior - so later partitions rely on the cursor to carry it
+// forward (see accountRoleGranteesCursor).
 func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [][]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +76,7 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 		case http.MethodGet:
 			_, hasPartition := r.URL.Query()["partition"]
 			if !hasPartition {
-				// Step 2: partition 0 + full partitionInfo metadata.
+				// Step 2: partition 0 + full partitionInfo and rowType metadata.
 				partitionInfo := []map[string]interface{}{
 					{"rowCount": len(partition0Rows)},
 				}
@@ -45,6 +90,7 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 					"resultSetMetadata": map[string]interface{}{
 						"numRows":       len(partition0Rows) + len(partition1Rows),
 						"partitionInfo": partitionInfo,
+						"rowType":       granteeRowTypes(),
 					},
 					"data": partition0Rows,
 				})
@@ -67,6 +113,37 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 // index 1 = roleName, index 2 = granteeType, index 3 = granteeName.
 func granteeRow(roleName, granteeType, granteeName string) []string {
 	return []string{"", roleName, granteeType, granteeName}
+}
+
+// TestListAccountRoleGrantees_ToleratesColumnReorder verifies GetAccountRoleGrantees parses
+// SHOW GRANTS OF ROLE rows by column name (via ResultSetMetadata.ParseRow), not by fixed
+// positional index. rowType here deliberately lists columns in a different order than
+// granteeRowTypes uses elsewhere in this file, with extra columns (granted_by, grant_option)
+// interleaved - the kind of reordering/addition a Snowflake behavior bundle could introduce.
+// A fixed-index implementation would silently misread these fields; parsing by name must not.
+func TestListAccountRoleGrantees_ToleratesColumnReorder(t *testing.T) {
+	response := ListAccountRoleGranteesRawResponse{
+		StatementsApiResponseBase: StatementsApiResponseBase{
+			ResultSetMetadata: ResultSetMetadata{
+				RowTypes: []RowType{
+					{Name: columnGranteeName, Type: "text"},
+					{Name: columnGrantedBy, Type: "text"},
+					{Name: columnRole, Type: "text"},
+					{Name: columnGrantOption, Type: "text"},
+					{Name: columnGrantedTo, Type: "text"},
+					{Name: columnCreatedOn, Type: "text"},
+				},
+			},
+			Data: [][]string{
+				{"alice", "ACCOUNTADMIN", "MYROLE", "false", "USER", ""},
+			},
+		},
+	}
+
+	grantees, err := response.GetAccountRoleGrantees()
+	require.NoError(t, err)
+	require.Len(t, grantees, 1)
+	assert.Equal(t, AccountRoleGrantee{RoleName: "MYROLE", GranteeType: "USER", GranteeName: "alice"}, grantees[0])
 }
 
 func TestListAccountRoleGrantees_SinglePartition(t *testing.T) {
@@ -228,4 +305,221 @@ func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 	assert.Equal(t, "bob", page2[0].GranteeName)
 	assert.Equal(t, "USER", page2[0].GranteeType)
 	assert.Empty(t, cursor2, "last partition should return empty cursor")
+}
+
+// TestListAccountRoleGrantees_EscapesRoleName verifies that a role name containing an
+// embedded double quote (legal in Snowflake via a quoted identifier, e.g.
+// CREATE ROLE "weird""role") is escaped before being interpolated into the
+// SHOW GRANTS OF ROLE "..."; statement, rather than breaking out of the quoted identifier.
+func TestListAccountRoleGrantees_EscapesRoleName(t *testing.T) {
+	const role = `weird"role`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.ListAccountRoleGrantees(context.Background(), role, "")
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW GRANTS OF ROLE "weird""role";`, capturedSQL)
+}
+
+// TestGetAccountRole_EscapesRoleName verifies that a role name containing a single quote
+// is escaped before being interpolated into the SHOW ROLES LIKE '...' statement.
+func TestGetAccountRole_EscapesRoleName(t *testing.T) {
+	const role = `o'brien`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIKE 'o''brien' LIMIT 50;`, capturedSQL)
+}
+
+// TestGetAccountRole_NoEscapeClauseForLikeWildcards documents a Snowflake limitation:
+// SHOW ROLES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate/WHERE
+// usage), so there is no syntax to make an underscore or percent sign in a role name match
+// literally. Only the single quote is escaped, to keep the string literal well-formed;
+// _ and % are sent through untouched and remain active wildcards. A prior version of this
+// code added "ESCAPE '\'" to the statement to try to neutralize these wildcards, but SHOW
+// ROLES does not support that clause at all - Snowflake rejects it as a 422 Unprocessable
+// Entity (SQL compilation error) on every call, not just ones with wildcard characters.
+func TestGetAccountRole_NoEscapeClauseForLikeWildcards(t *testing.T) {
+	const role = `DATA_ENGINEER%1`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIKE 'DATA_ENGINEER%1' LIMIT 50;`, capturedSQL)
+}
+
+// serveAccountRoleMatch returns an httptest.Server implementing the Snowflake Statements
+// API's single-step POST flow that GetAccountRole uses (unlike ListAccountRoles, it does not
+// follow up with a GET to fetch the statement result - the POST response must carry the data
+// directly), returning a single row for the given role name.
+func serveAccountRoleMatch(t *testing.T, roleName string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": 1,
+				"rowType": accountRoleRowTypes(),
+			},
+			"data": [][]string{{roleName}},
+		})
+	}))
+}
+
+// TestGetAccountRole_ExactMatch verifies the normal case: the single row SHOW ROLES LIKE
+// returns is an exact match for roleName, so it is returned as-is.
+func TestGetAccountRole_ExactMatch(t *testing.T) {
+	const role = "SYSADMIN"
+
+	server := serveAccountRoleMatch(t, role)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	got, _, err := client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, role, got.Name)
+}
+
+// TestGetAccountRole_RejectsWildcardMismatch guards against the exact bug the exact-match
+// check exists to prevent: SHOW ROLES' LIKE filter is a pattern match with no ESCAPE clause
+// to neutralize _/% wildcards (see the query comment in GetAccountRole), so a roleName
+// containing a wildcard character can match some other role entirely. Here roleName is
+// "DATA_ENGINEER" (the _ is a wildcard matching any single character) and the server - as
+// Snowflake's LIMIT 1 would for an over-broad pattern - returns exactly one row for a
+// DIFFERENT role, "DATAXENGINEER", that happens to match the loose pattern. Before the
+// exact-match guard, GetAccountRole would have silently returned this wrong role. It must
+// instead be treated as "not found": nil role, no error.
+func TestGetAccountRole_RejectsWildcardMismatch(t *testing.T) {
+	const requested = "DATA_ENGINEER"
+	const actualMatch = "DATAXENGINEER"
+
+	server := serveAccountRoleMatch(t, actualMatch)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	got, _, err := client.GetAccountRole(context.Background(), nil, requested)
+	require.NoError(t, err)
+	assert.Nil(t, got, "a role name that only loosely matches the LIKE wildcard pattern must not be returned as if it were an exact match")
+}
+
+// serveAccountRoleRows is like serveAccountRoleMatch but returns multiple rows, for tests
+// exercising wildcard collisions where more than one role matches the LIKE pattern.
+func serveAccountRoleRows(t *testing.T, roleNames []string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		data := make([][]string, len(roleNames))
+		for i, name := range roleNames {
+			data[i] = []string{name}
+		}
+		_ = enc.Encode(map[string]interface{}{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]interface{}{
+				"numRows": len(roleNames),
+				"rowType": accountRoleRowTypes(),
+			},
+			"data": data,
+		})
+	}))
+}
+
+// TestGetAccountRole_FindsExactMatchAmongWildcardCollisions verifies that GetAccountRole finds
+// the real role even when a wildcard-colliding role ("DATAXENGINEER") is returned before it.
+func TestGetAccountRole_FindsExactMatchAmongWildcardCollisions(t *testing.T) {
+	const requested = "DATA_ENGINEER"
+	const collision = "DATAXENGINEER"
+
+	server := serveAccountRoleRows(t, []string{collision, requested})
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	got, _, err := client.GetAccountRole(context.Background(), nil, requested)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the real role must still be found even though a wildcard-colliding role was returned first")
+	assert.Equal(t, requested, got.Name)
+}
+
+// TestGrantAccountRole_EscapesIdentifiers verifies that role and user names containing
+// embedded double quotes are escaped before being interpolated into the
+// GRANT ROLE "..." TO USER "..."; statement.
+func TestGrantAccountRole_EscapesIdentifiers(t *testing.T) {
+	const role = `weird"role`
+	const user = `weird"user`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	err = client.GrantAccountRole(context.Background(), role, user)
+	require.NoError(t, err)
+	assert.Equal(t, `GRANT ROLE "weird""role" TO USER "weird""user";`, capturedSQL)
+}
+
+// TestRevokeAccountRole_EscapesIdentifiers verifies that role and user names containing
+// embedded double quotes are escaped before being interpolated into the
+// REVOKE ROLE "..." FROM USER "..."; statement.
+func TestRevokeAccountRole_EscapesIdentifiers(t *testing.T) {
+	const role = `weird"role`
+	const user = `weird"user`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	err = client.RevokeAccountRole(context.Background(), role, user)
+	require.NoError(t, err)
+	assert.Equal(t, `REVOKE ROLE "weird""role" FROM USER "weird""user";`, capturedSQL)
+}
+
+// TestListAccountRoles_EscapesCursor verifies that the pagination cursor - which is the
+// bare name of the last role from a previous page, and so can itself contain a single
+// quote (e.g. a role created as CREATE ROLE "o'brien") - is escaped before being
+// interpolated into the SHOW ROLES LIMIT ... FROM '...' statement.
+func TestListAccountRoles_EscapesCursor(t *testing.T) {
+	const cursor = `o'brien`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, err = client.ListAccountRoles(context.Background(), cursor, 100)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIMIT 100 FROM 'o''brien';`, capturedSQL)
 }

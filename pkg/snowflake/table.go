@@ -97,9 +97,9 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 var tableStructFieldToColumnMap = map[string]string{
 	structFieldCreatedOn:    columnCreatedOn,
 	structFieldName:         columnName,
-	"SchemaName":            "schema_name",
+	structFieldSchemaName:   columnSchemaName,
 	structFieldDatabaseName: columnDatabaseName,
-	"Kind":                  "kind",
+	structFieldKind:         columnKind,
 	structFieldComment:      columnComment,
 	structFieldOwner:        columnOwner,
 }
@@ -144,7 +144,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
 	var q string
 	if cursor != "" {
-		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeSingleQuote(cursor))
+		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
 	} else {
 		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
 	}
@@ -198,19 +198,19 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	return tables, nextCursor, nil
 }
 
-// escapeSingleQuote doubles single quotes for use inside SQL string literals.
-func escapeSingleQuote(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
-}
+// wildcardLookupLimit bounds SHOW ... LIKE '<name>' name lookups (GetTable, GetAccountRole,
+// GetDatabase). SHOW's LIKE has no ESCAPE clause, so _ and % stay live wildcards; LIMIT 1 could
+// let a colliding row crowd out the real one before the exact-match filter sees it.
+const wildcardLookupLimit = 50
 
-// escapeLikePattern escapes a string for safe use in a Snowflake LIKE pattern (exact match).
-// Escapes: \ (escape char), ', %, _.
-func escapeLikePattern(s string) string {
+// escapeStringLiteral escapes a string for use inside a single-quoted SQL string literal.
+// Snowflake processes backslash escape sequences inside single-quoted literals (e.g. \', \\),
+// so backslashes must be doubled first - otherwise a value ending in a lone backslash (e.g.
+// "foo\") would produce 'foo\', where the trailing \' is read as an escaped quote rather than
+// the closing quote, leaving the literal unterminated. Single quotes are then doubled as usual.
+func escapeStringLiteral(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, "'", "''")
-	s = strings.ReplaceAll(s, "%", `\%`)
-	s = strings.ReplaceAll(s, "_", `\_`)
-	return s
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 // escapeDoubleQuotedIdentifier escapes a string for use inside Snowflake double-quoted identifiers.
@@ -220,9 +220,14 @@ func escapeDoubleQuotedIdentifier(s string) string {
 }
 
 func (c *Client) GetTable(ctx context.Context, database, schema, tableName string) (*Table, error) {
-	likePattern := escapeLikePattern(tableName)
+	// SHOW TABLES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
+	// (A prior version of this query added "ESCAPE '\'", which SHOW TABLES doesn't support at
+	// all - Snowflake rejects it as a 422 Unprocessable Entity SQL compilation error on every call.)
+	likePattern := escapeStringLiteral(tableName)
 	queries := []string{
-		fmt.Sprintf("SHOW TABLES LIKE '%s' ESCAPE '\\' IN SCHEMA \"%s\".\"%s\" LIMIT 1;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema)),
+		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -267,14 +272,14 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 }
 
 var tableGrantStructFieldToColumnMap = map[string]string{
-	structFieldCreatedOn: columnCreatedOn,
-	"Privilege":          "privilege",
-	"GrantedOn":          "granted_on",
-	structFieldName:      columnName,
-	"GrantedTo":          "granted_to",
-	"GranteeName":        "grantee_name",
-	"GrantOption":        "grant_option",
-	"GrantedBy":          "granted_by",
+	structFieldCreatedOn:   columnCreatedOn,
+	"Privilege":            "privilege",
+	"GrantedOn":            "granted_on",
+	structFieldName:        columnName,
+	structFieldGrantedTo:   columnGrantedTo,
+	structFieldGranteeName: columnGranteeName,
+	"GrantOption":          columnGrantOption,
+	"GrantedBy":            columnGrantedBy,
 }
 
 type (

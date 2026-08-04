@@ -12,6 +12,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 const (
@@ -388,6 +390,10 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 				continue
 			}
 			if role == nil {
+				ctxzap.Extract(ctx).Debug("account role not found, skipping table grant",
+					zap.String("account_role", tg.GranteeName),
+					zap.String("table", tableName),
+				)
 				continue
 			}
 			principalResource, err = accountRoleResource(role)

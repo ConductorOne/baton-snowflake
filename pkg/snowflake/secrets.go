@@ -19,7 +19,7 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 	l := ctxzap.Extract(ctx)
 
 	queries := []string{
-		fmt.Sprintf("SHOW SECRETS IN DATABASE \"%s\";", database),
+		fmt.Sprintf("SHOW SECRETS IN DATABASE \"%s\";", escapeDoubleQuotedIdentifier(database)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -68,7 +68,7 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 
 func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error) {
 	queries := []string{
-		fmt.Sprintf("DESCRIBE USER \"%s\";", username),
+		fmt.Sprintf("DESCRIBE USER \"%s\";", escapeDoubleQuotedIdentifier(username)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

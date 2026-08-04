@@ -11,10 +11,10 @@ import (
 )
 
 var databaseStructFieldToColumnMap = map[string]string{
-	structFieldName:  columnName,
-	structFieldOwner: columnOwner,
-	"Kind":           "kind",
-	"Origin":         "origin",
+	structFieldName:   columnName,
+	structFieldOwner:  columnOwner,
+	structFieldKind:   columnKind,
+	structFieldOrigin: columnOrigin,
 }
 
 type (
@@ -63,7 +63,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	var queries []string
 
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, cursor))
+		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d;", limit))
 	}
@@ -103,8 +103,11 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 }
 
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
+	// SHOW DATABASES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT 1;", name),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT %d;", escapeStringLiteral(name), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -129,11 +132,13 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 		return nil, resp.StatusCode, err
 	}
 
-	if len(databases) == 0 {
-		return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
-	} else if len(databases) > 1 {
-		return nil, resp.StatusCode, fmt.Errorf("expected 1 database with name %s, got %d", name, len(databases))
+	// Wildcard collisions can outrank the real database, so scan all rows rather than assuming
+	// databases[0] is the match.
+	for i := range databases {
+		if databases[i].Name == name {
+			return &databases[i], resp.StatusCode, nil
+		}
 	}
 
-	return &databases[0], resp.StatusCode, nil
+	return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
 }

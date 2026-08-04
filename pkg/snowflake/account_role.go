@@ -2,10 +2,9 @@ package snowflake
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/session"
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
@@ -16,6 +15,15 @@ import (
 
 var accountRoleStructFieldToColumnMap = map[string]string{
 	structFieldName: columnName,
+}
+
+// accountRoleGranteeStructFieldToColumnMap maps AccountRoleGrantee fields to SHOW GRANTS OF
+// ROLE's columns: created_on, role, granted_to, grantee_name, granted_by (only the ones this
+// connector consumes are mapped - see ParseRow).
+var accountRoleGranteeStructFieldToColumnMap = map[string]string{
+	"RoleName":             columnRole,
+	"GranteeType":          columnGrantedTo,
+	structFieldGranteeName: columnGranteeName,
 }
 
 type (
@@ -32,7 +40,6 @@ type (
 	}
 	ListAccountRoleGranteesRawResponse struct {
 		StatementsApiResponseBase
-		Data [][]string `json:"data"`
 	}
 	GrantAccountRoleResponse struct {
 		StatementsApiResponseBase
@@ -41,6 +48,10 @@ type (
 
 func (ar *AccountRole) GetColumnName(fieldName string) string {
 	return accountRoleStructFieldToColumnMap[fieldName]
+}
+
+func (g *AccountRoleGrantee) GetColumnName(fieldName string) string {
+	return accountRoleGranteeStructFieldToColumnMap[fieldName]
 }
 
 func (r *ListAccountRolesRawResponse) GetAccountRoles() ([]AccountRole, error) {
@@ -57,23 +68,30 @@ func (r *ListAccountRolesRawResponse) GetAccountRoles() ([]AccountRole, error) {
 	return accountRoles, nil
 }
 
-func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() []AccountRoleGrantee {
+// GetAccountRoleGrantees parses SHOW GRANTS OF ROLE rows by column name via
+// ResultSetMetadata.ParseRow rather than fixed positional indexes, so a Snowflake behavior
+// change that reorders or adds columns to this command's output doesn't silently corrupt
+// RoleName/GranteeType/GranteeName. See accountRoleGranteesCursor for how rowType metadata -
+// only present on the partition-0 response - is carried forward for later partitions.
+func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() ([]AccountRoleGrantee, error) {
 	var accountRoleGrantees []AccountRoleGrantee
-	for _, accountRoleGrantee := range r.Data {
-		accountRoleGrantees = append(accountRoleGrantees, AccountRoleGrantee{
-			RoleName:    accountRoleGrantee[1],
-			GranteeName: unquoteSnowflakeIdentifier(accountRoleGrantee[3]),
-			GranteeType: accountRoleGrantee[2],
-		})
+	for _, row := range r.Data {
+		grantee := &AccountRoleGrantee{}
+		if err := r.ResultSetMetadata.ParseRow(grantee, row); err != nil {
+			return nil, err
+		}
+		grantee.GranteeName = unquoteSnowflakeIdentifier(grantee.GranteeName)
+
+		accountRoleGrantees = append(accountRoleGrantees, *grantee)
 	}
-	return accountRoleGrantees
+	return accountRoleGrantees, nil
 }
 
 func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int) ([]AccountRole, error) {
 	var queries []string
 
 	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, cursor))
+		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor)))
 	} else {
 		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d;", limit))
 	}
@@ -112,16 +130,44 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	return accountRoles, nil
 }
 
+// accountRoleGranteesCursor is the opaque page cursor for ListAccountRoleGrantees. SHOW GRANTS
+// OF ROLE rows are parsed by column name via ResultSetMetadata.ParseRow, and Snowflake's SQL API
+// only returns that column layout (rowType) on the partition-0 response - partitions 1..N return
+// bare data with no metadata. The cursor therefore carries the rowType layout captured from
+// partition 0 forward so later partitions can still be parsed. Mirrors tableGrantsCursor in
+// table.go, which solves the identical problem for SHOW GRANTS ON TABLE/VIEW.
+type accountRoleGranteesCursor struct {
+	Handle          string    `json:"handle"`
+	PartitionID     int       `json:"partitionId"`
+	TotalPartitions int       `json:"totalPartitions"`
+	RowTypes        []RowType `json:"rowTypes"`
+}
+
+func encodeAccountRoleGranteesCursor(cur accountRoleGranteesCursor) (string, error) {
+	b, err := json.Marshal(cur)
+	if err != nil {
+		return "", fmt.Errorf("snowflake: failed to encode grantee page cursor: %w", err)
+	}
+	return string(b), nil
+}
+
+func decodeAccountRoleGranteesCursor(cursor string) (accountRoleGranteesCursor, error) {
+	var cur accountRoleGranteesCursor
+	if err := json.Unmarshal([]byte(cursor), &cur); err != nil {
+		return accountRoleGranteesCursor{}, fmt.Errorf("snowflake: invalid grantee page cursor: %w", err)
+	}
+	return cur, nil
+}
+
 // ListAccountRoleGrantees returns one page of grantees for the given role.
 // cursor is empty on the first call; subsequent calls pass the opaque cursor returned by the previous call.
 // The returned cursor is empty when all pages have been consumed.
-// Cursor format (internal): "{statementHandle}:{partitionID}:{totalPartitions}".
 func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, cursor string) ([]AccountRoleGrantee, string, error) {
 	var response ListAccountRoleGranteesRawResponse
 	var apiErr SnowflakeError
 
 	if cursor == "" {
-		queries := []string{fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", roleName)}
+		queries := []string{fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", escapeDoubleQuotedIdentifier(roleName))}
 
 		req, err := c.PostStatementRequest(ctx, queries)
 		if err != nil {
@@ -150,29 +196,34 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		l := ctxzap.Extract(ctx)
 		l.Debug("ListAccountRoleGrantees", zap.String("role", roleName), zap.Int("numPartitions", numPartitions), zap.Int("numRows", response.ResultSetMetadata.NumRows))
 
-		var nextCursor string
-		if numPartitions > 1 {
-			nextCursor = fmt.Sprintf("%s:1:%d", handle, numPartitions)
+		grantees, err := response.GetAccountRoleGrantees()
+		if err != nil {
+			return nil, "", err
 		}
 
-		return response.GetAccountRoleGrantees(), nextCursor, nil
+		var nextCursor string
+		if numPartitions > 1 {
+			nextCursor, err = encodeAccountRoleGranteesCursor(accountRoleGranteesCursor{
+				Handle:          handle,
+				PartitionID:     1,
+				TotalPartitions: numPartitions,
+				RowTypes:        response.ResultSetMetadata.RowTypes,
+			})
+			if err != nil {
+				return nil, "", err
+			}
+		}
+
+		return grantees, nextCursor, nil
 	}
 
 	// Subsequent calls: fetch the encoded partition directly.
-	parts := strings.SplitN(cursor, ":", 3)
-	if len(parts) != 3 {
-		return nil, "", fmt.Errorf("snowflake: invalid grantee page cursor")
-	}
-	handle := parts[0]
-	partitionID, err := strconv.Atoi(parts[1])
+	cur, err := decodeAccountRoleGranteesCursor(cursor)
 	if err != nil {
-		return nil, "", fmt.Errorf("snowflake: invalid partition ID in cursor: %w", err)
+		return nil, "", err
 	}
-	totalPartitions, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return nil, "", fmt.Errorf("snowflake: invalid partition count in cursor: %w", err)
-	}
-	req, err := c.GetStatementPartition(ctx, handle, partitionID)
+
+	req, err := c.GetStatementPartition(ctx, cur.Handle, cur.PartitionID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -182,12 +233,29 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		return nil, "", dedupeAPIError(err)
 	}
 
-	var nextCursor string
-	if partitionID+1 < totalPartitions {
-		nextCursor = fmt.Sprintf("%s:%d:%d", handle, partitionID+1, totalPartitions)
+	// Partition-only responses carry no rowType metadata - restore it from the cursor so
+	// ParseRow can still resolve column names by position.
+	response.ResultSetMetadata.RowTypes = cur.RowTypes
+
+	grantees, err := response.GetAccountRoleGrantees()
+	if err != nil {
+		return nil, "", err
 	}
 
-	return response.GetAccountRoleGrantees(), nextCursor, nil
+	var nextCursor string
+	if cur.PartitionID+1 < cur.TotalPartitions {
+		nextCursor, err = encodeAccountRoleGranteesCursor(accountRoleGranteesCursor{
+			Handle:          cur.Handle,
+			PartitionID:     cur.PartitionID + 1,
+			TotalPartitions: cur.TotalPartitions,
+			RowTypes:        cur.RowTypes,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	return grantees, nextCursor, nil
 }
 
 func (c *Client) CacheAccountRoles(ctx context.Context, ss sessions.SessionStore, roles []AccountRole) error {
@@ -212,8 +280,11 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 		}
 	}
 
+	// SHOW ROLES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT 1;", roleName),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT %d;", escapeStringLiteral(roleName), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -238,14 +309,17 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 		return nil, resp.StatusCode, err
 	}
 
+	// Wildcard collisions can outrank the real role, so scan all rows rather than assuming
+	// accountRoles[0] is the match.
 	var role *AccountRole
-	if len(accountRoles) > 0 {
-		role = &accountRoles[0]
+	for _, ar := range accountRoles {
+		if ar.Name == roleName {
+			role = &ar
+			break
+		}
 	}
 
-	if ss != nil {
-		// Best-effort: role was already fetched above and is returned regardless; a failed
-		// cache write only costs a future GetAccountRole call a redundant re-query.
+	if ss != nil && role != nil {
 		_ = session.SetJSON(ctx, ss, roleName, role, accountRoleNamespace)
 	}
 
@@ -254,7 +328,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 
 func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string) error {
 	queries := []string{
-		fmt.Sprintf("GRANT ROLE \"%s\" TO USER \"%s\";", roleName, userName),
+		fmt.Sprintf("GRANT ROLE \"%s\" TO USER \"%s\";", escapeDoubleQuotedIdentifier(roleName), escapeDoubleQuotedIdentifier(userName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -274,7 +348,7 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 
 func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName string) error {
 	queries := []string{
-		fmt.Sprintf("REVOKE ROLE \"%s\" FROM USER \"%s\";", roleName, userName),
+		fmt.Sprintf("REVOKE ROLE \"%s\" FROM USER \"%s\";", escapeDoubleQuotedIdentifier(roleName), escapeDoubleQuotedIdentifier(userName)),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
