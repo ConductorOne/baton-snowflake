@@ -28,7 +28,8 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 	}
 
 	var response ListSecretsRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
@@ -54,7 +55,7 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 			return nil, nil
 		}
 
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	secrets, err := response.ListSecrets()
@@ -76,10 +77,11 @@ func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error)
 	}
 
 	var response RsaGetUserRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	secrets, err := response.GetUserRsa(ctx)

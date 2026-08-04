@@ -114,11 +114,11 @@ func (c *Client) doRequest(
 	var errorResponse SnowflakeError
 	doOptions := []uhttp.DoOption{
 		uhttp.WithRatelimitData(&rateLimitData),
-		uhttp.WithErrorResponse(&errorResponse),
 	}
 	if target != nil {
 		doOptions = append(doOptions, uhttp.WithJSONResponse(target))
 	}
+	doOptions = append(doOptions, uhttp.WithErrorResponse(&errorResponse))
 
 	response, err := c.Do(request, doOptions...)
 	defer func() {
@@ -136,7 +136,7 @@ func (c *Client) doRequest(
 		if response != nil {
 			statusCode = response.StatusCode
 		}
-		return nil, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: request failed: %w", err)
+		return nil, &rateLimitData, statusCode, fmt.Errorf("baton-snowflake: request failed: %w", dedupeAPIError(err))
 	}
 
 	// WithErrorResponse ensures c.Do() returns an error for status >= 300,

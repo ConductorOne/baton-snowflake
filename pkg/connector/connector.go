@@ -185,7 +185,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
 	users, err := d.Client.ListUsers(ctx, "", 1)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("baton-snowflake: validation request failed: %w", err)
 	}
 
 	if len(users) == 0 {

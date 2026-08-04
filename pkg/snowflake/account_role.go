@@ -102,10 +102,11 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	}
 
 	var response ListAccountRolesRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	l := ctxzap.Extract(ctx)
@@ -115,10 +116,10 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	if err != nil {
 		return nil, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	accountRoles, err := response.GetAccountRoles()
@@ -163,6 +164,7 @@ func decodeAccountRoleGranteesCursor(cursor string) (accountRoleGranteesCursor, 
 // The returned cursor is empty when all pages have been consumed.
 func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, cursor string) ([]AccountRoleGrantee, string, error) {
 	var response ListAccountRoleGranteesRawResponse
+	var apiErr SnowflakeError
 
 	if cursor == "" {
 		queries := []string{fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", escapeDoubleQuotedIdentifier(roleName))}
@@ -172,10 +174,10 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 			return nil, "", err
 		}
 
-		resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+		resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 		defer closeResponseBody(resp1)
 		if err != nil {
-			return nil, "", err
+			return nil, "", dedupeAPIError(err)
 		}
 
 		handle := response.StatementHandle
@@ -184,10 +186,10 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		if err != nil {
 			return nil, "", err
 		}
-		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 		defer closeResponseBody(resp2)
 		if err != nil {
-			return nil, "", err
+			return nil, "", dedupeAPIError(err)
 		}
 
 		numPartitions := len(response.ResultSetMetadata.PartitionInfo)
@@ -225,10 +227,10 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 	if err != nil {
 		return nil, "", err
 	}
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, "", err
+		return nil, "", dedupeAPIError(err)
 	}
 
 	// Partition-only responses carry no rowType metadata - restore it from the cursor so
@@ -291,14 +293,15 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	}
 
 	var response ListAccountRolesRawResponse
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
 		statusCode := 0
 		if resp != nil {
 			statusCode = resp.StatusCode
 		}
-		return nil, statusCode, err
+		return nil, statusCode, dedupeAPIError(err)
 	}
 
 	accountRoles, err := response.GetAccountRoles()
@@ -333,10 +336,11 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 		return err
 	}
 
-	resp, err := c.Do(req)
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return err
+		return dedupeAPIError(err)
 	}
 
 	return nil
@@ -352,10 +356,11 @@ func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName strin
 		return err
 	}
 
-	resp, err := c.Do(req)
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return err
+		return dedupeAPIError(err)
 	}
 
 	return nil

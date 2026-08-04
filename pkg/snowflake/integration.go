@@ -61,10 +61,11 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 	}
 
 	var response ListIntegrationsRawResponse
-	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	var apiErr SnowflakeError
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	l := ctxzap.Extract(ctx)
@@ -74,10 +75,10 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response))
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, err
+		return nil, dedupeAPIError(err)
 	}
 
 	integrations, err := response.GetIntegrations()
