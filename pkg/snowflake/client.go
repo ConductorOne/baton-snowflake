@@ -304,6 +304,9 @@ func closeResponseBody(resp *http.Response) {
 // WithErrorResponse's detailed one, and it's the generic one that carries any
 // rate-limit gRPC details. Keep the detailed message but carry those details
 // over so rate-limit-aware retry still sees them.
+//
+// Requires WithErrorResponse to be the last DoOption passed to c.Do: uhttp.Do
+// joins errors in call order, so a later option would silently take its slot.
 func dedupeAPIError(err error) error {
 	if err == nil {
 		return nil
