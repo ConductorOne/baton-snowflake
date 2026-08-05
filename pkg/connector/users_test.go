@@ -134,3 +134,43 @@ func TestUserResourceNHIAnnotation(t *testing.T) {
 		t.Errorf("expected no NHI trait on person user, but found one")
 	}
 }
+
+func TestIsMissingLoginPrivilege(t *testing.T) {
+	tests := []struct {
+		name           string
+		usersSeen      int
+		usersWithLogin int
+		want           bool
+	}{
+		{name: "no users synced yet", usersSeen: 0, usersWithLogin: 0, want: false},
+		{name: "all users missing login_name", usersSeen: 10, usersWithLogin: 0, want: true},
+		{name: "some users have login_name", usersSeen: 10, usersWithLogin: 4, want: false},
+		{name: "every user has login_name", usersSeen: 10, usersWithLogin: 10, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isMissingLoginPrivilege(tt.usersSeen, tt.usersWithLogin)
+			if got != tt.want {
+				t.Errorf("isMissingLoginPrivilege(%d, %d) = %v, want %v", tt.usersSeen, tt.usersWithLogin, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUserBuilderListFailsWhenLoginPrivilegeMissing(t *testing.T) {
+	o := &userBuilder{resourceType: userResourceType}
+	if err := o.loginPrivilegeError(); err != nil {
+		t.Fatalf("loginPrivilegeError() before any users seen = %v, want nil", err)
+	}
+
+	o.usersSeen = 3
+	if err := o.loginPrivilegeError(); err == nil {
+		t.Fatal("loginPrivilegeError() with every user missing login_name = nil, want error")
+	}
+
+	o.usersWithLogin = 1
+	if err := o.loginPrivilegeError(); err != nil {
+		t.Errorf("loginPrivilegeError() with at least one login_name populated = %v, want nil", err)
+	}
+}

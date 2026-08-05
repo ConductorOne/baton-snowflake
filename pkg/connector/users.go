@@ -21,9 +21,11 @@ import (
 )
 
 type userBuilder struct {
-	resourceType *v2.ResourceType
-	client       *snowflake.Client
-	syncSecrets  bool
+	resourceType   *v2.ResourceType
+	client         *snowflake.Client
+	syncSecrets    bool
+	usersSeen      int
+	usersWithLogin int
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -201,7 +203,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	if len(users) == 0 {
-		return nil, nil, nil
+		return nil, nil, o.loginPrivilegeError()
 	}
 
 	if err := o.client.CacheUsers(ctx, opts.Session, users); err != nil {
@@ -210,6 +212,11 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var resources []*v2.Resource
 	for _, user := range users {
+		o.usersSeen++
+		if strings.TrimSpace(user.Login) != "" {
+			o.usersWithLogin++
+		}
+
 		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to create user resource")
@@ -219,6 +226,9 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	if isLastPage(len(users), resourcePageSize) {
+		if err := o.loginPrivilegeError(); err != nil {
+			return nil, nil, err
+		}
 		return resources, nil, nil
 	}
 
@@ -228,6 +238,23 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil
+}
+
+// Snowflake returns NULL for every SHOW USERS column but name unless the role holds OWNERSHIP or
+// account-level MANAGE GRANTS. login_name is mandatory, so an all-empty result across a full sync
+// means every other column, including type, is NULL too and every user would misclassify as human.
+func isMissingLoginPrivilege(usersSeen, usersWithLogin int) bool {
+	return usersSeen > 0 && usersWithLogin == 0
+}
+
+func (o *userBuilder) loginPrivilegeError() error {
+	if !isMissingLoginPrivilege(o.usersSeen, o.usersWithLogin) {
+		return nil
+	}
+	return wrapError(
+		errors.New("SHOW USERS returned no login_name for any user; role likely lacks OWNERSHIP or account-level MANAGE GRANTS"),
+		"cannot determine user account types",
+	)
 }
 
 // Entitlements always returns an empty slice for users.
