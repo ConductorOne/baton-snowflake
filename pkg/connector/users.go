@@ -192,6 +192,10 @@ func extractProfileFields(accountInfo *v2.AccountInfo, createReq *snowflake.Crea
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	if opts.PageToken.Token == "" {
+		o.resetLoginPrivilegeCounters()
+	}
+
 	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get next page cursor")
@@ -245,6 +249,14 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 // means every other column, including type, is NULL too and every user would misclassify as human.
 func isMissingLoginPrivilege(usersSeen, usersWithLogin int) bool {
 	return usersSeen > 0 && usersWithLogin == 0
+}
+
+// resetLoginPrivilegeCounters clears the counters at the start of a fresh sync so a
+// privilege regression can't be masked by counts carried over from an earlier sync
+// on a reused userBuilder (the SDK's daemon mode keeps builders alive across syncs).
+func (o *userBuilder) resetLoginPrivilegeCounters() {
+	o.usersSeen = 0
+	o.usersWithLogin = 0
 }
 
 func (o *userBuilder) loginPrivilegeError() error {
