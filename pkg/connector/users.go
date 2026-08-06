@@ -245,8 +245,9 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 }
 
 // Snowflake returns NULL for every SHOW USERS column but name unless the role holds OWNERSHIP or
-// account-level MANAGE GRANTS. login_name is mandatory, so an all-empty result across a full sync
-// means every other column, including type, is NULL too and every user would misclassify as human.
+// account-level MANAGE GRANTS. login_name defaults to the username and is mandatory for every
+// user TYPE, not just PERSON, so an all-empty result across a full sync means every other column,
+// including type, is NULL too and every user would misclassify as human.
 func isMissingLoginPrivilege(usersSeen, usersWithLogin int) bool {
 	return usersSeen > 0 && usersWithLogin == 0
 }
