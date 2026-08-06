@@ -211,13 +211,9 @@ func escapeStringLiteral(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-// escapeLikeStringLiteral escapes a string for use as a SHOW ... LIKE '<pattern>' argument.
-// Backslash is treated as the pattern-level escape character by SHOW's LIKE even though it
-// accepts no ESCAPE clause (unlike _ and %, which stay live wildcards with no way to suppress
-// them at all). Matching a literal backslash in the target name therefore requires escaping it
-// twice: once so the LIKE pattern itself sees a literal backslash instead of an escape
-// introducer, and again so the surrounding string literal parses correctly. Without the first
-// pass, a name ending in a lone backslash silently matches zero rows instead of erroring.
+// escapeLikeStringLiteral escapes a string for a SHOW ... LIKE '<pattern>' argument. LIKE
+// treats backslash as its own escape character, so it must be doubled before the usual
+// string-literal escaping, or a trailing backslash silently matches zero rows.
 func escapeLikeStringLiteral(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	return escapeStringLiteral(s)

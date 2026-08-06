@@ -363,14 +363,8 @@ func TestTableBuilder_Grants_NoOwnershipAnywhereFallsBackToOwnerColumn(t *testin
 	assert.Equal(t, int32(1), getTableCalls.Load(), "owner fallback should fire exactly once when no page had an explicit ownership grant")
 }
 
-// serveUnresolvedParentDatabase implements the Snowflake Statements API for the CXP-849
-// scenario: the parent database can't be resolved by SHOW DATABASES LIKE (e.g. its name ends
-// in a backslash, or it has more wildcard collisions than wildcardLookupLimit), but the sync
-// must still proceed for the schemas/tables underneath it rather than aborting. It serves:
-//   - SHOW DATABASES LIKE: a single-step POST response (GetDatabase never follows up with a
-//     GET) with zero matching rows.
-//   - SHOW SCHEMAS IN DATABASE: one schema, "SCHEMA".
-//   - SHOW TABLES IN SCHEMA: one table, "MYTABLE".
+// serveUnresolvedParentDatabase mocks a parent database that GetDatabase can't resolve (zero
+// rows for SHOW DATABASES LIKE), plus one schema ("SCHEMA") and one table ("MYTABLE") beneath it.
 func serveUnresolvedParentDatabase(t *testing.T) *httptest.Server {
 	t.Helper()
 	const schemasHandle = "schemas-handle"
@@ -454,10 +448,8 @@ func serveUnresolvedParentDatabase(t *testing.T) *httptest.Server {
 	}))
 }
 
-// TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase guards against CXP-849: when GetDatabase
-// can't resolve the parent database (a LIKE lookup miss - e.g. a trailing-backslash name, or a
-// name with more wildcard collisions than wildcardLookupLimit), isDBSharedOrSystem must treat
-// it as "not shared/system" rather than propagating an error that would abort the whole sync.
+// TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase verifies an unresolved parent database
+// is treated as "not shared/system" rather than an error.
 func TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase(t *testing.T) {
 	server := serveUnresolvedParentDatabase(t)
 	defer server.Close()
@@ -466,8 +458,7 @@ func TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase(t *testing.T) {
 	require.NoError(t, err)
 
 	builder := &tableBuilder{client: client}
-	// A bare resource (no profile) forces isDBSharedOrSystem past the cached-profile shortcut
-	// and into the GetDatabase call whose miss this test exercises.
+	// Bare resource (no profile) so isDBSharedOrSystem falls through to GetDatabase.
 	resource := makeBareResource(t, "DB.SCHEMA.MYTABLE")
 
 	isSharedOrSystem, err := builder.isDBSharedOrSystem(context.Background(), resource, "DB")
@@ -475,10 +466,8 @@ func TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase(t *testing.T) {
 	assert.False(t, isSharedOrSystem, "an unresolved parent database must not be treated as shared/system")
 }
 
-// TestTableBuilder_List_ToleratesUnresolvedParentDatabase guards against CXP-849 end to end at
-// the List() entry point: when GetDatabase can't resolve the parent database, table.go:141-152
-// must fall through and still enumerate schemas/tables underneath it, rather than aborting the
-// sync with "failed to get parent database".
+// TestTableBuilder_List_ToleratesUnresolvedParentDatabase verifies List() still enumerates
+// schemas/tables when the parent database can't be resolved, instead of aborting the sync.
 func TestTableBuilder_List_ToleratesUnresolvedParentDatabase(t *testing.T) {
 	server := serveUnresolvedParentDatabase(t)
 	defer server.Close()

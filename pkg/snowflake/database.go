@@ -131,10 +131,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 	}
 
 	// Wildcard collisions can outrank the real database, so scan all rows rather than assuming
-	// databases[0] is the match. A miss is not an error: the caller treats a nil database as
-	// "not resolvable" and skips it, the same as GetAccountRole does for roles - a lookup that
-	// can't find an exact match (e.g. a name the LIKE pattern can't represent, or one that
-	// exceeds wildcardLookupLimit collisions) must not abort the whole sync.
+	// databases[0] is the match. A miss is not an error (matches GetAccountRole's contract).
 	for i := range databases {
 		if databases[i].Name == name {
 			return &databases[i], resp.StatusCode, nil

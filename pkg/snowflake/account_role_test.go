@@ -403,11 +403,8 @@ func TestGetAccountRole_ExactMatch(t *testing.T) {
 	assert.Equal(t, role, got.Name)
 }
 
-// TestGetAccountRole_EscapesTrailingBackslash guards against the same defect as
-// TestGetDatabase_EscapesTrailingBackslash for the role lookup that shares
-// escapeLikeStringLiteral with GetDatabase: the backslash must be escaped twice on the wire -
-// once for the LIKE pattern layer, once for the surrounding string literal - or a role name
-// ending in a backslash silently matches zero rows.
+// TestGetAccountRole_EscapesTrailingBackslash verifies a role name ending in a backslash
+// still resolves to an exact match (see escapeLikeStringLiteral).
 func TestGetAccountRole_EscapesTrailingBackslash(t *testing.T) {
 	const role = `TST_BS\`
 

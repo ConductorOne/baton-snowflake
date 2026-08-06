@@ -563,12 +563,8 @@ func TestEscapeStringLiteral_EscapesBackslash(t *testing.T) {
 	}
 }
 
-// TestGetTable_EscapesBackslash guards against a table name containing a trailing
-// backslash must resolve to an exact match, not silently match zero rows. SHOW's LIKE pattern
-// layer treats backslash as its own escape character in addition to the string-literal layer,
-// so the raw SQL needs the backslash escaped twice (four backslashes on the wire) for the
-// pattern to match a single literal backslash - doubling it only once (for the string-literal
-// layer alone) leaves the LIKE pattern unable to match the name.
+// TestGetTable_EscapesBackslash verifies a table name ending in a backslash still resolves
+// to an exact match (see escapeLikeStringLiteral).
 func TestGetTable_EscapesBackslash(t *testing.T) {
 	const database = "DB"
 	const schema = "SCHEMA"
@@ -588,9 +584,8 @@ func TestGetTable_EscapesBackslash(t *testing.T) {
 	assert.Equal(t, tableName, table.Name)
 }
 
-// TestEscapeLikeStringLiteral_EscapesBackslashTwice verifies that escapeLikeStringLiteral
-// doubles a backslash once for the LIKE pattern layer and again for the surrounding string
-// literal, so a single literal backslash in the target name round-trips through both layers.
+// TestEscapeLikeStringLiteral_EscapesBackslashTwice verifies backslash is doubled for both
+// the LIKE pattern layer and the string-literal layer.
 func TestEscapeLikeStringLiteral_EscapesBackslashTwice(t *testing.T) {
 	tests := []struct {
 		name  string

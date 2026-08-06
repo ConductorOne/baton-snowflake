@@ -62,9 +62,8 @@ func TestGetDatabase_EscapesName(t *testing.T) {
 	assert.Equal(t, database, db.Name)
 }
 
-// TestGetDatabase_EscapesTrailingBackslash guards: a database name ending in
-// a backslash must still resolve to an exact match. the raw SQL needs the backslash escaped
-// twice (four backslashes on the wire) for the pattern to match a single literal backslash.
+// TestGetDatabase_EscapesTrailingBackslash verifies a database name ending in a backslash
+// still resolves to an exact match (see escapeLikeStringLiteral).
 func TestGetDatabase_EscapesTrailingBackslash(t *testing.T) {
 	const database = `TST_DB_BS\`
 
@@ -114,8 +113,7 @@ func TestGetDatabase_NoEscapeClauseForLikeWildcards(t *testing.T) {
 // Snowflake's LIMIT 1 would for an over-broad pattern - returns exactly one row for a
 // DIFFERENT database, "MYADB", that happens to match the loose pattern. Before the
 // exact-match guard, GetDatabase would have silently returned this wrong database. It
-// must instead be treated as "not found": nil database, no error - the same tolerant
-// contract GetAccountRole uses, so a lookup miss doesn't abort the whole sync.
+// must instead be treated as "not found": nil database, no error.
 func TestGetDatabase_RejectsWildcardMismatch(t *testing.T) {
 	const requested = "MY_DB"
 	const actualMatch = "MYADB"
