@@ -106,7 +106,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 	// only the single quote needs escaping to keep the string literal well-formed. _ and %
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT %d;", escapeStringLiteral(name), wildcardLookupLimit),
+		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT %d;", escapeLikeStringLiteral(name), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)
@@ -131,12 +131,15 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 	}
 
 	// Wildcard collisions can outrank the real database, so scan all rows rather than assuming
-	// databases[0] is the match.
+	// databases[0] is the match. A miss is not an error: the caller treats a nil database as
+	// "not resolvable" and skips it, the same as GetAccountRole does for roles - a lookup that
+	// can't find an exact match (e.g. a name the LIKE pattern can't represent, or one that
+	// exceeds wildcardLookupLimit collisions) must not abort the whole sync.
 	for i := range databases {
 		if databases[i].Name == name {
 			return &databases[i], resp.StatusCode, nil
 		}
 	}
 
-	return nil, resp.StatusCode, fmt.Errorf("database with name %s not found", name)
+	return nil, resp.StatusCode, nil
 }

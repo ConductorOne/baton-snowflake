@@ -67,8 +67,10 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 	if err != nil {
 		return false, err
 	}
+	// A database GetDatabase couldn't resolve (e.g. a LIKE lookup miss) is not an error - treat
+	// it as not shared/system rather than aborting the sync for this table.
 	if db == nil {
-		return false, fmt.Errorf("GetDatabase returned nil database for %q", databaseName)
+		return false, nil
 	}
 	return db.IsSharedOrSystem(), nil
 }

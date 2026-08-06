@@ -282,7 +282,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 	// only the single quote needs escaping to keep the string literal well-formed. _ and %
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT %d;", escapeStringLiteral(roleName), wildcardLookupLimit),
+		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT %d;", escapeLikeStringLiteral(roleName), wildcardLookupLimit),
 	}
 
 	req, err := c.PostStatementRequest(ctx, queries)

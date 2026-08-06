@@ -168,7 +168,7 @@ func TestListAccountRoleGrantees_SinglePartition(t *testing.T) {
 	assert.Equal(t, AccountRoleGrantee{RoleName: role, GranteeType: "ROLE", GranteeName: "SYSADMIN"}, grantees[1])
 }
 
-// TestListAccountRoleGrantees_UnquotesGranteeName verifies the CXP-784 fix: Snowflake's
+// TestListAccountRoleGrantees_UnquotesGranteeName
 // SHOW GRANTS OF ROLE renders grantee names that require quoting (mixed case, spaces) wrapped
 // in double quotes, with any embedded double quote doubled. GranteeName must come back
 // unquoted so it matches the canonical (unquoted) ID that SHOW ROLES produces for the same
@@ -233,8 +233,8 @@ func serveAccountRoles(t *testing.T, handle string, rows [][]string) *httptest.S
 	}))
 }
 
-// TestListAccountRoles_MatchesUnquotedGranteeID is the acceptance-criteria regression test for
-// CXP-784: for a role whose name requires quoting in SHOW GRANTS output, the resource ID Baton
+// TestListAccountRoles_MatchesUnquotedGranteeID is the acceptance-criteria regression test
+// for a role whose name requires quoting in SHOW GRANTS output, the resource ID Baton
 // builds from SHOW ROLES (canonical, bare name) must exactly match the principal ID built from
 // the corresponding SHOW GRANTS OF ROLE grantee entry for that same role (unquoted by this fix).
 // Before the fix, these diverged whenever the role name contained spaces/mixed case, silently
@@ -401,6 +401,26 @@ func TestGetAccountRole_ExactMatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, role, got.Name)
+}
+
+// TestGetAccountRole_EscapesTrailingBackslash guards against the same defect as
+// TestGetDatabase_EscapesTrailingBackslash for the role lookup that shares
+// escapeLikeStringLiteral with GetDatabase: the backslash must be escaped twice on the wire -
+// once for the LIKE pattern layer, once for the surrounding string literal - or a role name
+// ending in a backslash silently matches zero rows.
+func TestGetAccountRole_EscapesTrailingBackslash(t *testing.T) {
+	const role = `TST_BS\`
+
+	var capturedSQL string
+	server := captureStatement(t, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	_, _, err = client.GetAccountRole(context.Background(), nil, role)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW ROLES LIKE 'TST_BS\\\\' LIMIT 50;`, capturedSQL)
 }
 
 // TestGetAccountRole_RejectsWildcardMismatch guards against the exact bug the exact-match

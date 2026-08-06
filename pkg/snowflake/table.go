@@ -211,6 +211,18 @@ func escapeStringLiteral(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
+// escapeLikeStringLiteral escapes a string for use as a SHOW ... LIKE '<pattern>' argument.
+// Backslash is treated as the pattern-level escape character by SHOW's LIKE even though it
+// accepts no ESCAPE clause (unlike _ and %, which stay live wildcards with no way to suppress
+// them at all). Matching a literal backslash in the target name therefore requires escaping it
+// twice: once so the LIKE pattern itself sees a literal backslash instead of an escape
+// introducer, and again so the surrounding string literal parses correctly. Without the first
+// pass, a name ending in a lone backslash silently matches zero rows instead of erroring.
+func escapeLikeStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return escapeStringLiteral(s)
+}
+
 // escapeDoubleQuotedIdentifier escapes a string for use inside Snowflake double-quoted identifiers.
 // Double quotes inside the identifier must be escaped by doubling them ("").
 func escapeDoubleQuotedIdentifier(s string) string {
@@ -223,7 +235,7 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
 	// (A prior version of this query added "ESCAPE '\'", which SHOW TABLES doesn't support at
 	// all - Snowflake rejects it as a 422 Unprocessable Entity SQL compilation error on every call.)
-	likePattern := escapeStringLiteral(tableName)
+	likePattern := escapeLikeStringLiteral(tableName)
 	queries := []string{
 		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit),
 	}
