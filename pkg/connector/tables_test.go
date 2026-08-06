@@ -166,12 +166,14 @@ func tableGrantRow(privilege, grantedTo, granteeName string) []string {
 const (
 	keyName         = "name"
 	keyType         = "type"
+	colName         = "name"
 	colCreatedOn    = "created_on"
 	colSchemaName   = "schema_name"
 	colDatabaseName = "database_name"
 	colKind         = "kind"
 	colComment      = "comment"
 	colOwner        = "owner"
+	colOrigin       = "origin"
 	colText         = "text"
 	colTimestampLtz = "timestamp_ltz"
 )
@@ -359,6 +361,143 @@ func TestTableBuilder_Grants_NoOwnershipAnywhereFallsBackToOwnerColumn(t *testin
 	}
 
 	assert.Equal(t, int32(1), getTableCalls.Load(), "owner fallback should fire exactly once when no page had an explicit ownership grant")
+}
+
+// serveUnresolvedParentDatabase implements the Snowflake Statements API for the CXP-849
+// scenario: the parent database can't be resolved by SHOW DATABASES LIKE (e.g. its name ends
+// in a backslash, or it has more wildcard collisions than wildcardLookupLimit), but the sync
+// must still proceed for the schemas/tables underneath it rather than aborting. It serves:
+//   - SHOW DATABASES LIKE: a single-step POST response (GetDatabase never follows up with a
+//     GET) with zero matching rows.
+//   - SHOW SCHEMAS IN DATABASE: one schema, "SCHEMA".
+//   - SHOW TABLES IN SCHEMA: one table, "MYTABLE".
+func serveUnresolvedParentDatabase(t *testing.T) *httptest.Server {
+	t.Helper()
+	const schemasHandle = "schemas-handle"
+	const tablesHandle = "tables-handle"
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			var body struct {
+				Statement string `json:"statement"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			switch {
+			case strings.Contains(body.Statement, "SHOW DATABASES LIKE"):
+				_ = enc.Encode(map[string]interface{}{
+					"statementHandle": "databases-handle",
+					"resultSetMetadata": map[string]interface{}{
+						"numRows": 0,
+						"rowType": []map[string]interface{}{
+							{keyName: colName, keyType: colText},
+							{keyName: colOwner, keyType: colText},
+							{keyName: colKind, keyType: colText},
+							{keyName: colOrigin, keyType: colText},
+						},
+					},
+					"data": [][]string{},
+				})
+			case strings.Contains(body.Statement, "SHOW SCHEMAS IN DATABASE"):
+				_ = enc.Encode(map[string]interface{}{"statementHandle": schemasHandle})
+			case strings.Contains(body.Statement, "SHOW TABLES IN SCHEMA"):
+				_ = enc.Encode(map[string]interface{}{"statementHandle": tablesHandle})
+			default:
+				t.Errorf("unexpected statement: %s", body.Statement)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+
+		case http.MethodGet:
+			handle := strings.TrimSuffix(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], "/")
+			switch handle {
+			case schemasHandle:
+				_ = enc.Encode(map[string]interface{}{
+					"statementHandle": schemasHandle,
+					"resultSetMetadata": map[string]interface{}{
+						"numRows": 1,
+						"rowType": []map[string]interface{}{
+							{keyName: colName, keyType: colText},
+							{keyName: colDatabaseName, keyType: colText},
+						},
+					},
+					"data": [][]string{{"SCHEMA", "DB"}},
+				})
+			case tablesHandle:
+				_ = enc.Encode(map[string]interface{}{
+					"statementHandle": tablesHandle,
+					"resultSetMetadata": map[string]interface{}{
+						"numRows": 1,
+						"rowType": []map[string]interface{}{
+							{keyName: colCreatedOn, keyType: colTimestampLtz},
+							{keyName: colName, keyType: colText},
+							{keyName: colSchemaName, keyType: colText},
+							{keyName: colDatabaseName, keyType: colText},
+							{keyName: colKind, keyType: colText},
+							{keyName: colComment, keyType: colText},
+							{keyName: colOwner, keyType: colText},
+						},
+					},
+					"data": [][]string{{"1700000000.000000000", "MYTABLE", "SCHEMA", "DB", "TABLE", "", "SYSADMIN"}},
+				})
+			default:
+				t.Errorf("unexpected statement handle: %s", handle)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+
+		default:
+			t.Errorf("unexpected method: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase guards against CXP-849: when GetDatabase
+// can't resolve the parent database (a LIKE lookup miss - e.g. a trailing-backslash name, or a
+// name with more wildcard collisions than wildcardLookupLimit), isDBSharedOrSystem must treat
+// it as "not shared/system" rather than propagating an error that would abort the whole sync.
+func TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase(t *testing.T) {
+	server := serveUnresolvedParentDatabase(t)
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &tableBuilder{client: client}
+	// A bare resource (no profile) forces isDBSharedOrSystem past the cached-profile shortcut
+	// and into the GetDatabase call whose miss this test exercises.
+	resource := makeBareResource(t, "DB.SCHEMA.MYTABLE")
+
+	isSharedOrSystem, err := builder.isDBSharedOrSystem(context.Background(), resource, "DB")
+	require.NoError(t, err)
+	assert.False(t, isSharedOrSystem, "an unresolved parent database must not be treated as shared/system")
+}
+
+// TestTableBuilder_List_ToleratesUnresolvedParentDatabase guards against CXP-849 end to end at
+// the List() entry point: when GetDatabase can't resolve the parent database, table.go:141-152
+// must fall through and still enumerate schemas/tables underneath it, rather than aborting the
+// sync with "failed to get parent database".
+func TestTableBuilder_List_ToleratesUnresolvedParentDatabase(t *testing.T) {
+	server := serveUnresolvedParentDatabase(t)
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &tableBuilder{client: client}
+	parentResourceID := &v2.ResourceId{ResourceType: databaseResourceType.Id, Resource: "DB"}
+
+	resources, results, err := builder.List(context.Background(), parentResourceID, rs.SyncOpAttrs{PageToken: pagination.Token{}})
+	require.NoError(t, err)
+	require.NotNil(t, results)
+	require.Len(t, resources, 1)
+	assert.Equal(t, "MYTABLE", resources[0].DisplayName)
+
+	profile := rs.GetProfile(resources[0])
+	isSharedOrSystemDB, _ := profile.GetFields()["database_is_shared_system"].AsInterface().(bool)
+	assert.False(t, isSharedOrSystemDB, "an unresolved parent database must not mark its tables as shared/system")
 }
 
 // makePartialProfileResource creates a resource with profile missing the "name" field,
