@@ -213,7 +213,10 @@ func escapeStringLiteral(s string) string {
 
 // escapeLikeStringLiteral escapes a string for a SHOW ... LIKE '<pattern>' argument. LIKE
 // treats backslash as its own escape character, so it must be doubled before the usual
-// string-literal escaping, or a trailing backslash silently matches zero rows.
+// string-literal escaping, or a trailing backslash silently matches zero rows. Because backslash
+// is itself a live LIKE escape character here, _ and % could in principle be neutralized as \_
+// and \% (no ESCAPE clause needed) - this helper does not do that today, so _ and % in the input
+// still act as wildcards rather than literal characters.
 func escapeLikeStringLiteral(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	return escapeStringLiteral(s)

@@ -9,6 +9,8 @@ import (
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -111,7 +113,13 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, opt
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get database")
 	}
-	if database == nil || database.Owner == "" {
+	if database == nil {
+		ctxzap.Extract(ctx).Debug("database not resolvable, skipping ownership grant",
+			zap.String("database", resource.Id.Resource),
+		)
+		return nil, nil, nil
+	}
+	if database.Owner == "" {
 		return nil, nil, nil
 	}
 

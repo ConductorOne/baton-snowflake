@@ -69,6 +69,9 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 	}
 	// Unresolved database (LIKE lookup miss): treat as not shared/system, not an error.
 	if db == nil {
+		ctxzap.Extract(ctx).Debug("database not resolvable, treating as not shared/system",
+			zap.String("database", databaseName),
+		)
 		return false, nil
 	}
 	return db.IsSharedOrSystem(), nil

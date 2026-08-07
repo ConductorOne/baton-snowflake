@@ -489,6 +489,27 @@ func TestTableBuilder_List_ToleratesUnresolvedParentDatabase(t *testing.T) {
 	assert.False(t, isSharedOrSystemDB, "an unresolved parent database must not mark its tables as shared/system")
 }
 
+// TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase verifies databaseBuilder.Grants returns
+// no grants and no error for a database that GetDatabase can't resolve (zero rows for SHOW
+// DATABASES LIKE), instead of surfacing an error - the SDK could interpret an error here as
+// revoking any previously-synced ownership grant.
+func TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase(t *testing.T) {
+	server := serveUnresolvedParentDatabase(t)
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &databaseBuilder{resourceType: databaseResourceType, client: client}
+	resource, err := databaseResource(&snowflake.Database{Name: "DB"}, false)
+	require.NoError(t, err)
+
+	grants, results, err := builder.Grants(context.Background(), resource, rs.SyncOpAttrs{PageToken: pagination.Token{}})
+	require.NoError(t, err)
+	assert.Nil(t, results)
+	assert.Empty(t, grants, "an unresolved database must yield no ownership grants, not an error")
+}
+
 // makePartialProfileResource creates a resource with profile missing the "name" field,
 // forcing a fallback to the split-based parsing.
 func makePartialProfileResource(t *testing.T, dbName, schemaName, tableName string) *v2.Resource {
