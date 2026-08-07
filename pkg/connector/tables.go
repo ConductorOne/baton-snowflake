@@ -125,6 +125,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		return nil, nil, wrapError(fmt.Errorf("invalid parent resource type: %s", parentResourceID.ResourceType), "invalid parent resource type")
 	}
 
+	l := ctxzap.Extract(ctx)
 	databaseName := parentResourceID.Resource
 
 	bag := &pagination.Bag{}
@@ -143,6 +144,14 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 
 		schemas, err := o.client.ListSchemasInDatabase(ctx, databaseName)
 		if err != nil {
+			// A role without USAGE on the database cannot enumerate its schemas. Skipping the
+			// database keeps the rest of the sync - including every other database, and the
+			// user/account-role types that sync alongside it - from being cancelled with it.
+			if snowflake.IsInsufficientPrivileges(err) {
+				l.Debug("skipping database: insufficient privileges to list schemas",
+					zap.String("database", databaseName))
+				return nil, &rs.SyncOpResults{}, nil
+			}
 			return nil, nil, wrapError(err, "failed to list schemas in database")
 		}
 
@@ -175,6 +184,18 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	const pageSize = 200
 	tables, nextTableCursor, err := o.client.ListTablesInSchema(ctx, databaseName, schemaName, tableCursor, pageSize)
 	if err != nil {
+		// Schema-level privileges are independent of the database's, so a readable database can
+		// still hold an unreadable schema. Advance past it with NextToken("") - popping the schema
+		// rather than returning the current token, which would re-request the same page forever.
+		if snowflake.IsInsufficientPrivileges(err) {
+			l.Debug("skipping schema: insufficient privileges to list tables",
+				zap.String("database", databaseName), zap.String("schema", schemaName))
+			nextToken, tokenErr := bag.NextToken("")
+			if tokenErr != nil {
+				return nil, nil, wrapError(tokenErr, "failed to create next page token")
+			}
+			return nil, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+		}
 		return nil, nil, wrapError(err, "failed to list tables in schema")
 	}
 
@@ -243,9 +264,12 @@ func grantsContainPrincipal(grants []*v2.Grant, principalID *v2.ResourceId, enti
 	return false
 }
 
-// tableGrantsPageState is the SDK page-token payload for tableBuilder.Grants(): the pagination
-// cursor plus OwnershipSeen, carried across calls so the last page knows whether to fall back to
-// the table's Owner column.
+// tableGrantsPageState is the SDK page-token payload for tableBuilder.Grants(). Alongside the
+// low-level snowflake.Client pagination cursor, it carries ownershipSeen - whether an explicit
+// OWNERSHIP grant has been found on any page walked so far - forward across successive
+// SDK-driven Grants() calls. This lets the last page know whether to fall back to the table's
+// Owner column without an internal loop or a cache re-fetch: the fact is accumulated for free
+// as a side effect of the per-page grant loop every call already does.
 type tableGrantsPageState struct {
 	Cursor        string `json:"cursor"`
 	OwnershipSeen bool   `json:"ownershipSeen"`
@@ -292,6 +316,13 @@ func (o *tableBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	objectKind := getObjectKind(resource)
 	tableGrants, nextCursor, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, cursor)
 	if err != nil {
+		// A table whose grants the role cannot read exposes the same surface as a shared/system
+		// table above: the owner entitlement, which is derived from the table itself.
+		if snowflake.IsInsufficientPrivileges(err) {
+			ctxzap.Extract(ctx).Debug("skipping table entitlements: insufficient privileges to show grants",
+				zap.String("table", resource.Id.Resource))
+			return ownerEntitlementOnly(resource), &rs.SyncOpResults{}, nil
+		}
 		return nil, nil, wrapError(err, fmt.Sprintf("failed to list table grants for %s", resource.Id.Resource))
 	}
 
@@ -350,6 +381,12 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 	objectKind := getObjectKind(resource)
 	tableGrants, nextCursor, err := o.client.ListTableGrants(ctx, opts.Session, databaseName, schemaName, tableName, objectKind, state.Cursor)
 	if err != nil {
+		// Mirrors the shared/system short-circuit above: no visible grants rather than a failure.
+		if snowflake.IsInsufficientPrivileges(err) {
+			ctxzap.Extract(ctx).Debug("skipping table grants: insufficient privileges to show grants",
+				zap.String("table", resource.Id.Resource))
+			return nil, &rs.SyncOpResults{}, nil
+		}
 		return nil, nil, wrapError(err, "failed to list table grants")
 	}
 	if len(tableGrants) == 0 && nextCursor == "" && pageToken == "" {
@@ -425,8 +462,10 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		grants = append(grants, grant.NewGrant(resource, ownerEntitlement, ownerPrincipalID, addExpandableOpts(ownerExpandableRoleName)...))
 	}
 
-	// Whether this or any earlier page had an explicit OWNERSHIP row; carried via the page token
-	// (tableGrantsPageState) so the last page can decide on the Owner-column fallback for free.
+	// Carried forward via the SDK page token (see tableGrantsPageState) rather than recomputed by
+	// re-fetching or looping: whether THIS OR ANY EARLIER page in this table's grant list had an
+	// explicit OWNERSHIP row. That's all the last page needs to decide on the Owner-column fallback,
+	// with zero extra API calls beyond the pagination that's already happening.
 	ownershipSeen := state.OwnershipSeen || ownerPrincipalID != nil
 
 	if nextCursor != "" {

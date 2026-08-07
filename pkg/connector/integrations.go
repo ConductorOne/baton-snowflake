@@ -95,11 +95,11 @@ func (o *integrationBuilder) List(ctx context.Context, parentResourceID *v2.Reso
 
 	integrations, err := o.client.ListIntegrations(ctx)
 	if err != nil {
-		// A role without privileges to view integrations can surface a 422
+		// A role without privileges to view integrations can surface a 422/003001
 		// rather than an empty result set; treat that as "nothing visible".
-		if isUnprocessableEntityError(err) {
+		if snowflake.IsInsufficientPrivileges(err) {
 			l.Debug("ListIntegrations: insufficient privileges, skipping", zap.Error(err))
-			return nil, nil, nil
+			return nil, &rs.SyncOpResults{}, nil
 		}
 		return nil, nil, wrapError(err, "failed to list integrations")
 	}

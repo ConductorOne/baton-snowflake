@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/conductorone/baton-sdk/pkg/session"
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
@@ -68,10 +66,13 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
+		if isAccessControlDenial(resp1, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s: %w", databaseName, err)
-			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return nil, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s", databaseName),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 		return nil, dedupeAPIError(err)
 	}
@@ -83,10 +84,13 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
+		if isAccessControlDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result): %w", databaseName, err)
-			return nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return nil, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result)", databaseName),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 		return nil, dedupeAPIError(err)
 	}
@@ -160,11 +164,14 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
+		if isAccessControlDenial(resp1, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s: %w", databaseName, schemaName, err)
-			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return nil, "", uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s", databaseName, schemaName),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 		return nil, "", dedupeAPIError(err)
 	}
@@ -176,11 +183,14 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		if resp2 != nil && resp2.StatusCode == http.StatusUnprocessableEntity {
+		if isAccessControlDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA (statement result)",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s (statement result): %w", databaseName, schemaName, err)
-			return nil, "", status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return nil, "", uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s (statement result)", databaseName, schemaName),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 		return nil, "", dedupeAPIError(err)
 	}
@@ -198,8 +208,9 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	return tables, nextCursor, nil
 }
 
-// wildcardLookupLimit bounds SHOW ... LIKE name lookups (GetTable, GetAccountRole, GetDatabase);
-// LIMIT 1 risks a wildcard-colliding row crowding out the real match before exact-match filtering.
+// wildcardLookupLimit bounds SHOW ... LIKE '<name>' name lookups (GetTable, GetAccountRole,
+// GetDatabase). SHOW's LIKE has no ESCAPE clause, so _ and % stay live wildcards; LIMIT 1 could
+// let a colliding row crowd out the real one before the exact-match filter sees it.
 const wildcardLookupLimit = 50
 
 // escapeStringLiteral escapes a string for a single-quoted SQL literal: backslashes are doubled
@@ -242,7 +253,10 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if resp1 != nil && resp1.StatusCode == http.StatusUnprocessableEntity {
+		// Same contract as ListSchemasInDatabase: only an access-control 422 means the table
+		// is invisible to this role. Other 422s (SQL compilation from a bad LIKE/ESCAPE, etc.)
+		// must stay fatal so a connector bug cannot look like a missing table.
+		if isAccessControlDenial(resp1, &apiErr) {
 			return nil, nil
 		}
 		return nil, dedupeAPIError(err)
@@ -448,27 +462,16 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	var apiErr SnowflakeError
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
-			var errMsg struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			}
-
-			decodeErr := json.NewDecoder(resp.Body).Decode(&errMsg)
-			if decodeErr != nil {
-				return tableGrantsFirstPage{}, fmt.Errorf("received 422 but failed to decode response body: %w (request error: %s)", decodeErr, err.Error())
-			}
-
-			// code: 003001
-			// message: SQL access control error:\nInsufficient privileges
+		// uhttp already decoded the error body into apiErr, so the access-control code is read
+		// from there rather than by consuming resp.Body a second time.
+		if isAccessControlDenial(resp, &apiErr) {
 			tableRef := fmt.Sprintf("%s.%s.%s", database, schema, tableName)
-			if errMsg.Code == "003001" {
-				l.Debug("Insufficient privileges to show grants on table", zap.String("table", tableRef))
-			} else {
-				l.Error(errMsg.Message, zap.String("table", tableRef))
-			}
-
-			return tableGrantsFirstPage{}, status.Errorf(codes.PermissionDenied, "baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, errMsg.Message)
+			l.Debug("Insufficient privileges to show grants on table", zap.String("table", tableRef))
+			return tableGrantsFirstPage{}, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges to show grants on table %s: %s", tableRef, apiErr.Message()),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 
 		return tableGrantsFirstPage{}, dedupeAPIError(err)
@@ -485,10 +488,13 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+		if isAccessControlDenial(resp, &apiErr) {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result): %w", database, schema, tableName, err)
-			return tableGrantsFirstPage{}, status.Error(codes.PermissionDenied, wrappedErr.Error())
+			return tableGrantsFirstPage{}, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges to show grants on table %s.%s.%s (statement result)", database, schema, tableName),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 		return tableGrantsFirstPage{}, dedupeAPIError(err)
 	}
