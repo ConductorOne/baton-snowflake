@@ -62,6 +62,25 @@ func TestGetDatabase_EscapesName(t *testing.T) {
 	assert.Equal(t, database, db.Name)
 }
 
+// TestGetDatabase_EscapesTrailingBackslash verifies a database name ending in a backslash
+// still resolves to an exact match (see escapeLikeStringLiteral).
+func TestGetDatabase_EscapesTrailingBackslash(t *testing.T) {
+	const database = `TST_DB_BS\`
+
+	var capturedSQL string
+	server := serveDatabaseMatch(t, database, &capturedSQL)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	db, _, err := client.GetDatabase(context.Background(), database)
+	require.NoError(t, err)
+	assert.Equal(t, `SHOW DATABASES LIKE 'TST_DB_BS\\\\' LIMIT 50;`, capturedSQL)
+	require.NotNil(t, db, "a database name ending in a backslash must still resolve to an exact match")
+	assert.Equal(t, database, db.Name)
+}
+
 // TestGetDatabase_NoEscapeClauseForLikeWildcards documents a Snowflake limitation: SHOW
 // DATABASES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate/WHERE
 // usage), so there is no syntax to make an underscore or percent sign in a database name
@@ -94,7 +113,7 @@ func TestGetDatabase_NoEscapeClauseForLikeWildcards(t *testing.T) {
 // Snowflake's LIMIT 1 would for an over-broad pattern - returns exactly one row for a
 // DIFFERENT database, "MYADB", that happens to match the loose pattern. Before the
 // exact-match guard, GetDatabase would have silently returned this wrong database. It
-// must instead be treated as "not found".
+// must instead be treated as "not found": nil database, no error.
 func TestGetDatabase_RejectsWildcardMismatch(t *testing.T) {
 	const requested = "MY_DB"
 	const actualMatch = "MYADB"
@@ -107,7 +126,7 @@ func TestGetDatabase_RejectsWildcardMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	db, _, err := client.GetDatabase(context.Background(), requested)
-	require.Error(t, err)
+	require.NoError(t, err)
 	assert.Nil(t, db, "a database name that only loosely matches the LIKE wildcard pattern must not be returned as if it were an exact match")
 }
 

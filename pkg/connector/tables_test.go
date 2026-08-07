@@ -166,12 +166,14 @@ func tableGrantRow(privilege, grantedTo, granteeName string) []string {
 const (
 	keyName         = "name"
 	keyType         = "type"
+	colName         = "name"
 	colCreatedOn    = "created_on"
 	colSchemaName   = "schema_name"
 	colDatabaseName = "database_name"
 	colKind         = "kind"
 	colComment      = "comment"
 	colOwner        = "owner"
+	colOrigin       = "origin"
 	colText         = "text"
 	colTimestampLtz = "timestamp_ltz"
 )
@@ -284,11 +286,8 @@ func newTableGrantsMockServer(t *testing.T, partitions [][][]string, tableOwner 
 	}))
 }
 
-// TestTableBuilder_Grants_OwnershipOnMiddlePage reproduces PR #131's reported scenario end to end:
-// the OWNERSHIP grant lands on a page that is neither first nor last, and no session store is
-// configured. It asserts both that ownership is still correctly detected (not missed, and not
-// duplicated via a spurious Owner-column fallback) and that no extra API calls are made to
-// determine that fact - the state carried in the SDK page token makes it free.
+// TestTableBuilder_Grants_OwnershipOnMiddlePage verifies an OWNERSHIP grant on a middle page is
+// still detected exactly once, with no owner-fallback API call.
 func TestTableBuilder_Grants_OwnershipOnMiddlePage(t *testing.T) {
 	partitions := [][][]string{
 		{tableGrantRow("SELECT", grantedToRole, "ANALYST")},
@@ -359,6 +358,151 @@ func TestTableBuilder_Grants_NoOwnershipAnywhereFallsBackToOwnerColumn(t *testin
 	}
 
 	assert.Equal(t, int32(1), getTableCalls.Load(), "owner fallback should fire exactly once when no page had an explicit ownership grant")
+}
+
+// serveUnresolvedParentDatabase mocks a parent database that GetDatabase can't resolve (zero
+// rows for SHOW DATABASES LIKE), plus one schema ("SCHEMA") and one table ("MYTABLE") beneath it.
+func serveUnresolvedParentDatabase(t *testing.T) *httptest.Server {
+	t.Helper()
+	const schemasHandle = "schemas-handle"
+	const tablesHandle = "tables-handle"
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+
+		switch r.Method {
+		case http.MethodPost:
+			var body struct {
+				Statement string `json:"statement"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			switch {
+			case strings.Contains(body.Statement, "SHOW DATABASES LIKE"):
+				_ = enc.Encode(map[string]interface{}{
+					"statementHandle": "databases-handle",
+					"resultSetMetadata": map[string]interface{}{
+						"numRows": 0,
+						"rowType": []map[string]interface{}{
+							{keyName: colName, keyType: colText},
+							{keyName: colOwner, keyType: colText},
+							{keyName: colKind, keyType: colText},
+							{keyName: colOrigin, keyType: colText},
+						},
+					},
+					"data": [][]string{},
+				})
+			case strings.Contains(body.Statement, "SHOW SCHEMAS IN DATABASE"):
+				_ = enc.Encode(map[string]interface{}{"statementHandle": schemasHandle})
+			case strings.Contains(body.Statement, "SHOW TABLES IN SCHEMA"):
+				_ = enc.Encode(map[string]interface{}{"statementHandle": tablesHandle})
+			default:
+				t.Errorf("unexpected statement: %s", body.Statement)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+
+		case http.MethodGet:
+			handle := strings.TrimSuffix(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], "/")
+			switch handle {
+			case schemasHandle:
+				_ = enc.Encode(map[string]interface{}{
+					"statementHandle": schemasHandle,
+					"resultSetMetadata": map[string]interface{}{
+						"numRows": 1,
+						"rowType": []map[string]interface{}{
+							{keyName: colName, keyType: colText},
+							{keyName: colDatabaseName, keyType: colText},
+						},
+					},
+					"data": [][]string{{"SCHEMA", "DB"}},
+				})
+			case tablesHandle:
+				_ = enc.Encode(map[string]interface{}{
+					"statementHandle": tablesHandle,
+					"resultSetMetadata": map[string]interface{}{
+						"numRows": 1,
+						"rowType": []map[string]interface{}{
+							{keyName: colCreatedOn, keyType: colTimestampLtz},
+							{keyName: colName, keyType: colText},
+							{keyName: colSchemaName, keyType: colText},
+							{keyName: colDatabaseName, keyType: colText},
+							{keyName: colKind, keyType: colText},
+							{keyName: colComment, keyType: colText},
+							{keyName: colOwner, keyType: colText},
+						},
+					},
+					"data": [][]string{{"1700000000.000000000", "MYTABLE", "SCHEMA", "DB", "TABLE", "", "SYSADMIN"}},
+				})
+			default:
+				t.Errorf("unexpected statement handle: %s", handle)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+
+		default:
+			t.Errorf("unexpected method: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+}
+
+// TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase verifies an unresolved parent database
+// is treated as "not shared/system" rather than an error.
+func TestIsDBSharedOrSystem_ToleratesUnresolvedDatabase(t *testing.T) {
+	server := serveUnresolvedParentDatabase(t)
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &tableBuilder{client: client}
+	// Bare resource (no profile) so isDBSharedOrSystem falls through to GetDatabase.
+	resource := makeBareResource(t, "DB.SCHEMA.MYTABLE")
+
+	isSharedOrSystem, err := builder.isDBSharedOrSystem(context.Background(), resource, "DB")
+	require.NoError(t, err)
+	assert.False(t, isSharedOrSystem, "an unresolved parent database must not be treated as shared/system")
+}
+
+// TestTableBuilder_List_ToleratesUnresolvedParentDatabase verifies List() still enumerates
+// schemas/tables when the parent database can't be resolved, instead of aborting the sync.
+func TestTableBuilder_List_ToleratesUnresolvedParentDatabase(t *testing.T) {
+	server := serveUnresolvedParentDatabase(t)
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &tableBuilder{client: client}
+	parentResourceID := &v2.ResourceId{ResourceType: databaseResourceType.Id, Resource: "DB"}
+
+	resources, results, err := builder.List(context.Background(), parentResourceID, rs.SyncOpAttrs{PageToken: pagination.Token{}})
+	require.NoError(t, err)
+	require.NotNil(t, results)
+	require.Len(t, resources, 1)
+	assert.Equal(t, "MYTABLE", resources[0].DisplayName)
+
+	profile := rs.GetProfile(resources[0])
+	isSharedOrSystemDB, _ := profile.GetFields()["database_is_shared_system"].AsInterface().(bool)
+	assert.False(t, isSharedOrSystemDB, "an unresolved parent database must not mark its tables as shared/system")
+}
+
+// TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase verifies Grants returns no grants and no
+// error when the database can't be resolved, rather than an error the SDK could read as a revocation.
+func TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase(t *testing.T) {
+	server := serveUnresolvedParentDatabase(t)
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &databaseBuilder{resourceType: databaseResourceType, client: client}
+	resource, err := databaseResource(&snowflake.Database{Name: "DB"}, false)
+	require.NoError(t, err)
+
+	grants, results, err := builder.Grants(context.Background(), resource, rs.SyncOpAttrs{PageToken: pagination.Token{}})
+	require.NoError(t, err)
+	assert.Nil(t, results)
+	assert.Empty(t, grants, "an unresolved database must yield no ownership grants, not an error")
 }
 
 // makePartialProfileResource creates a resource with profile missing the "name" field,

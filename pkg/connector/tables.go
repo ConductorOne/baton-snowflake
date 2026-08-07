@@ -67,8 +67,12 @@ func (o *tableBuilder) isDBSharedOrSystem(ctx context.Context, resource *v2.Reso
 	if err != nil {
 		return false, err
 	}
+	// Unresolved database (LIKE lookup miss): treat as not shared/system, not an error.
 	if db == nil {
-		return false, fmt.Errorf("GetDatabase returned nil database for %q", databaseName)
+		ctxzap.Extract(ctx).Debug("database not resolvable, treating as not shared/system",
+			zap.String("database", databaseName),
+		)
+		return false, nil
 	}
 	return db.IsSharedOrSystem(), nil
 }
@@ -128,13 +132,9 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		return nil, nil, wrapError(err, "failed to parse page token")
 	}
 
-	// On first call, enumerate all schemas and push them onto the bag stack.
-	// Each schema becomes a PageState:
-	//   ResourceID     = schema name
-	//   ResourceTypeID = "shared" if the DB is shared/system, "" otherwise
-	//   Token          = table name cursor within the schema
-	// Encoding isSharedOrSystemDB in ResourceTypeID avoids re-querying the
-	// database on every subsequent page.
+	// On first call, push one PageState per schema (ResourceID=schema name, ResourceTypeID=
+	// "shared"/"" for isSharedOrSystemDB, Token=table cursor) so later pages don't need to
+	// re-query the database.
 	if bag.Current() == nil {
 		parentDB, statusCode, err := o.client.GetDatabase(ctx, databaseName)
 		if err != nil && !snowflake.IsUnprocessableEntity(statusCode, err) {
@@ -188,10 +188,8 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		resources = append(resources, resource)
 	}
 
-	// NextToken("") pops the current schema without re-pushing it, advancing to
-	// the next schema. NextToken(cursor) updates the current schema's cursor for
-	// the next page within this schema. When the bag is empty, Marshal returns ""
-	// and the SDK stops calling List.
+	// Empty cursor advances to the next schema; non-empty cursor pages within the current one.
+	// Bag empty -> Marshal returns "" -> SDK stops calling List.
 	nextToken, err := bag.NextToken(nextTableCursor)
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to create next page token")
@@ -245,12 +243,9 @@ func grantsContainPrincipal(grants []*v2.Grant, principalID *v2.ResourceId, enti
 	return false
 }
 
-// tableGrantsPageState is the SDK page-token payload for tableBuilder.Grants(). Alongside the
-// low-level snowflake.Client pagination cursor, it carries ownershipSeen - whether an explicit
-// OWNERSHIP grant has been found on any page walked so far - forward across successive
-// SDK-driven Grants() calls. This lets the last page know whether to fall back to the table's
-// Owner column without an internal loop or a cache re-fetch: the fact is accumulated for free
-// as a side effect of the per-page grant loop every call already does.
+// tableGrantsPageState is the SDK page-token payload for tableBuilder.Grants(): the pagination
+// cursor plus OwnershipSeen, carried across calls so the last page knows whether to fall back to
+// the table's Owner column.
 type tableGrantsPageState struct {
 	Cursor        string `json:"cursor"`
 	OwnershipSeen bool   `json:"ownershipSeen"`
@@ -430,10 +425,8 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 		grants = append(grants, grant.NewGrant(resource, ownerEntitlement, ownerPrincipalID, addExpandableOpts(ownerExpandableRoleName)...))
 	}
 
-	// Carried forward via the SDK page token (see tableGrantsPageState) rather than recomputed by
-	// re-fetching or looping: whether THIS OR ANY EARLIER page in this table's grant list had an
-	// explicit OWNERSHIP row. That's all the last page needs to decide on the Owner-column fallback,
-	// with zero extra API calls beyond the pagination that's already happening.
+	// Whether this or any earlier page had an explicit OWNERSHIP row; carried via the page token
+	// (tableGrantsPageState) so the last page can decide on the Owner-column fallback for free.
 	ownershipSeen := state.OwnershipSeen || ownerPrincipalID != nil
 
 	if nextCursor != "" {

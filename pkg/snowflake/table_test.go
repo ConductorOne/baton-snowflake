@@ -224,7 +224,7 @@ func TestListTableGrants_SinglePartition(t *testing.T) {
 	assert.Equal(t, "SYSADMIN", grants[1].GranteeName)
 }
 
-// TestListTableGrants_UnquotesGranteeName verifies the CXP-784 fix: Snowflake's SHOW GRANTS
+// TestListTableGrants_UnquotesGranteeName verifies that Snowflake's SHOW GRANTS
 // ON TABLE/VIEW renders grantee names that require quoting wrapped in double quotes, with
 // embedded double quotes doubled. GranteeName must come back unquoted so it matches the
 // canonical (unquoted) ID that SHOW ROLES/SHOW USERS produce for the same principal.
@@ -563,10 +563,8 @@ func TestEscapeStringLiteral_EscapesBackslash(t *testing.T) {
 	}
 }
 
-// TestGetTable_EscapesBackslash verifies that a table name containing a trailing backslash
-// is escaped (doubled) before being interpolated into the SHOW TABLES LIKE '...' statement,
-// so the backslash cannot be combined with the closing quote to escape it and leave the SQL
-// string literal unterminated.
+// TestGetTable_EscapesBackslash verifies a table name ending in a backslash still resolves
+// to an exact match (see escapeLikeStringLiteral).
 func TestGetTable_EscapesBackslash(t *testing.T) {
 	const database = "DB"
 	const schema = "SCHEMA"
@@ -581,7 +579,26 @@ func TestGetTable_EscapesBackslash(t *testing.T) {
 
 	table, err := client.GetTable(context.Background(), database, schema, tableName)
 	require.NoError(t, err)
-	assert.Equal(t, `SHOW TABLES LIKE 'weird\\' IN SCHEMA "DB"."SCHEMA" LIMIT 50;`, capturedSQL)
+	assert.Equal(t, `SHOW TABLES LIKE 'weird\\\\' IN SCHEMA "DB"."SCHEMA" LIMIT 50;`, capturedSQL)
 	require.NotNil(t, table)
 	assert.Equal(t, tableName, table.Name)
+}
+
+// TestEscapeLikeStringLiteral_EscapesBackslashTwice verifies backslash is doubled for both
+// the LIKE pattern layer and the string-literal layer.
+func TestEscapeLikeStringLiteral_EscapesBackslashTwice(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "trailing backslash", input: `foo\`, want: `foo\\\\`},
+		{name: "backslash and single quote", input: `foo\'bar`, want: `foo\\\\''bar`},
+		{name: "no special characters", input: `foo`, want: `foo`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, escapeLikeStringLiteral(tt.input))
+		})
+	}
 }
