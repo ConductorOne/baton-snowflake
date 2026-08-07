@@ -286,11 +286,8 @@ func newTableGrantsMockServer(t *testing.T, partitions [][][]string, tableOwner 
 	}))
 }
 
-// TestTableBuilder_Grants_OwnershipOnMiddlePage reproduces PR #131's reported scenario end to end:
-// the OWNERSHIP grant lands on a page that is neither first nor last, and no session store is
-// configured. It asserts both that ownership is still correctly detected (not missed, and not
-// duplicated via a spurious Owner-column fallback) and that no extra API calls are made to
-// determine that fact - the state carried in the SDK page token makes it free.
+// TestTableBuilder_Grants_OwnershipOnMiddlePage verifies an OWNERSHIP grant on a middle page is
+// still detected exactly once, with no owner-fallback API call.
 func TestTableBuilder_Grants_OwnershipOnMiddlePage(t *testing.T) {
 	partitions := [][][]string{
 		{tableGrantRow("SELECT", grantedToRole, "ANALYST")},
@@ -489,10 +486,8 @@ func TestTableBuilder_List_ToleratesUnresolvedParentDatabase(t *testing.T) {
 	assert.False(t, isSharedOrSystemDB, "an unresolved parent database must not mark its tables as shared/system")
 }
 
-// TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase verifies databaseBuilder.Grants returns
-// no grants and no error for a database that GetDatabase can't resolve (zero rows for SHOW
-// DATABASES LIKE), instead of surfacing an error - the SDK could interpret an error here as
-// revoking any previously-synced ownership grant.
+// TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase verifies Grants returns no grants and no
+// error when the database can't be resolved, rather than an error the SDK could read as a revocation.
 func TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase(t *testing.T) {
 	server := serveUnresolvedParentDatabase(t)
 	defer server.Close()
