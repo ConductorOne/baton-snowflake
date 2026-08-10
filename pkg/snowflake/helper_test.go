@@ -242,7 +242,6 @@ func TestClient_NonSkippableHTTPStatusesStayFatal(t *testing.T) {
 	}
 }
 
-
 // newInsufficientPrivilegesServer answers every POST with the access-control 422, which is what the
 // Statements API returns when the connector role cannot see the object.
 func newInsufficientPrivilegesServer(t *testing.T) *httptest.Server {

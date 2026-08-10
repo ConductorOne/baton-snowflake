@@ -461,6 +461,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	var response ListTableGrantsRawResponse
 	var apiErr SnowflakeError
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp)
 	if err != nil {
 		// uhttp already decoded the error body into apiErr, so the access-control code is read
 		// from there rather than by consuming resp.Body a second time.
@@ -476,9 +477,6 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 
 		return tableGrantsFirstPage{}, dedupeAPIError(err)
 	}
-	if resp != nil {
-		defer resp.Body.Close()
-	}
 
 	handle := response.StatementHandle
 
@@ -487,6 +485,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 		return tableGrantsFirstPage{}, err
 	}
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp)
 	if err != nil {
 		if isAccessControlDenial(resp, &apiErr) {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
@@ -497,9 +496,6 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 			)
 		}
 		return tableGrantsFirstPage{}, dedupeAPIError(err)
-	}
-	if resp != nil {
-		defer resp.Body.Close()
 	}
 
 	grants, err := response.GetTableGrants()

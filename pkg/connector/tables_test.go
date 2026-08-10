@@ -511,9 +511,6 @@ func TestDatabaseBuilder_Grants_ToleratesUnresolvedDatabase(t *testing.T) {
 	assert.Empty(t, grants, "an unresolved database must yield no ownership grants, not an error")
 }
 
-// makePartialProfileResource creates a resource with profile missing the "name" field,
-// forcing a fallback to the split-based parsing.
-
 // accessControlErrorBody is the body Snowflake pairs with a 422 when the connector role lacks
 // privileges on the object a SHOW statement names. Error code 003001 is the SQL access-control
 // denial; note the message names neither the status nor the number 422.
