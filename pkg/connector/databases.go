@@ -11,8 +11,6 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 )
@@ -123,11 +121,15 @@ func (o *databaseBuilder) Grants(ctx context.Context, resource *v2.Resource, opt
 		return nil, nil, nil
 	}
 
-	owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, opts.Session, database.Owner)
+	owner, _, err := o.client.GetAccountRole(ctx, opts.Session, database.Owner)
 	if err != nil {
-		if snowflake.IsUnprocessableEntity(ownerStatusCode, err) {
-			wrappedErr := fmt.Errorf("baton-snowflake: insufficient privileges for database owner role %q (database %q): %w", database.Owner, resource.Id.Resource, err)
-			return nil, nil, status.Error(codes.PermissionDenied, wrappedErr.Error())
+		// A database is routinely owned by a system role the connector role cannot describe
+		// (SYSADMIN, ACCOUNTADMIN), which Snowflake reports as 422/003001. Returning
+		// PermissionDenied here cancelled the shared sync context.
+		if snowflake.IsInsufficientPrivileges(err) {
+			ctxzap.Extract(ctx).Debug("skipping database owner grant: owner role is not describable",
+				zap.String("database", resource.Id.Resource), zap.String("owner", database.Owner))
+			return nil, &rs.SyncOpResults{}, nil
 		}
 		return nil, nil, wrapError(err, "failed to get owner account role")
 	}

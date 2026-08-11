@@ -2,13 +2,12 @@ package snowflake
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
@@ -32,29 +31,13 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
-			var errMsg struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			}
-
-			err := json.NewDecoder(resp.Body).Decode(&errMsg)
-			if err != nil {
-				return nil, err
-			}
-
-			// code: 003001
-			// message: SQL access control error:\nInsufficient privileges to operate on database 'DB'
-			if errMsg.Code == "003001" {
-				l.Debug("Insufficient privileges to operate on database", zap.String("database", database))
-			} else {
-				l.Error(errMsg.Message, zap.String("database", database))
-			}
-
-			// Ignore if the account/role does not have permission to show secrets of database
+		// Snowflake's SQL API answers statement failures with HTTP 422 + QueryFailureStatus.
+		// Only access-control denials (code 003001) mean "nothing visible here"; every other
+		// 422 (e.g. SQL compilation) must stay fatal. uhttp already decoded the body into apiErr.
+		if isAccessControlDenial(resp, &apiErr) {
+			l.Debug("Insufficient privileges to show secrets in database", zap.String("database", database))
 			return nil, nil
 		}
-
 		return nil, dedupeAPIError(err)
 	}
 
@@ -81,6 +64,15 @@ func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error)
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
+		// DESCRIBE USER requires MONITOR on the target user. Without it Snowflake answers 422
+		// with QueryFailureStatus code 003001 - same access-control shape as SHOW SCHEMAS.
+		if isAccessControlDenial(resp, &apiErr) {
+			return nil, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges to describe user %s", username),
+				ErrInsufficientPrivileges, err,
+			)
+		}
 		return nil, dedupeAPIError(err)
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 )
 
 var accountRoleStructFieldToColumnMap = map[string]string{
@@ -300,6 +301,14 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 		statusCode := 0
 		if resp != nil {
 			statusCode = resp.StatusCode
+		}
+		// SHOW ROLES LIKE on a system role the connector cannot observe returns 422/003001.
+		if isAccessControlDenial(resp, &apiErr) {
+			return nil, statusCode, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				fmt.Sprintf("baton-snowflake: insufficient privileges to describe role %s", roleName),
+				ErrInsufficientPrivileges, err,
+			)
 		}
 		return nil, statusCode, dedupeAPIError(err)
 	}

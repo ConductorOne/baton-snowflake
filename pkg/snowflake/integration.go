@@ -6,6 +6,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 )
 
 var integrationStructFieldToColumnMap = map[string]string{
@@ -65,6 +66,13 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
+		if isAccessControlDenial(resp1, &apiErr) {
+			return nil, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				"baton-snowflake: insufficient privileges to list integrations",
+				ErrInsufficientPrivileges, err,
+			)
+		}
 		return nil, dedupeAPIError(err)
 	}
 
@@ -78,6 +86,13 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
+		if isAccessControlDenial(resp2, &apiErr) {
+			return nil, uhttp.WrapErrors(
+				codes.PermissionDenied,
+				"baton-snowflake: insufficient privileges to list integrations (statement result)",
+				ErrInsufficientPrivileges, err,
+			)
+		}
 		return nil, dedupeAPIError(err)
 	}
 
