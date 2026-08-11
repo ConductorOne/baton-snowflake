@@ -404,9 +404,10 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 
 		switch tg.GrantedTo {
 		case grantedToRole:
-			role, statusCode, err := o.client.GetAccountRole(ctx, opts.Session, tg.GranteeName)
+			role, _, err := o.client.GetAccountRole(ctx, opts.Session, tg.GranteeName)
 			if err != nil {
-				if snowflake.IsUnprocessableEntity(statusCode, err) {
+				// System roles the connector cannot describe surface as 422/003001.
+				if snowflake.IsInsufficientPrivileges(err) {
 					principalId, idErr := rs.NewResourceID(accountRoleResourceType, tg.GranteeName)
 					if idErr != nil {
 						continue
@@ -486,10 +487,10 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 			return nil, nil, wrapError(err, "failed to get table for owner fallback")
 		}
 		if table != nil && table.Owner != "" && table.Owner != "SNOWFLAKE" {
-			owner, ownerStatusCode, err := o.client.GetAccountRole(ctx, opts.Session, table.Owner)
+			owner, _, err := o.client.GetAccountRole(ctx, opts.Session, table.Owner)
 			switch {
-			case snowflake.IsUnprocessableEntity(ownerStatusCode, err):
-				// system role, skip
+			case snowflake.IsInsufficientPrivileges(err):
+				// System role the connector cannot describe — skip owner fallback.
 			case err != nil:
 				return nil, nil, wrapError(err, fmt.Sprintf("failed to get account role for table owner %q", table.Owner))
 			case owner != nil:

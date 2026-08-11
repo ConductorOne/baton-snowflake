@@ -32,27 +32,28 @@ func isAccessControlDenial(resp *http.Response, apiErr *SnowflakeError) bool {
 		apiErr.Code == sqlAccessControlErrorCode
 }
 
-// IsUnprocessableEntity reports whether the Snowflake API returned HTTP 422 (Unprocessable Entity).
-// Snowflake returns 422 for certain operations on system/predefined objects (e.g. SHOW GRANTS OF ROLE for ACCOUNTADMIN,
-// SHOW ROLES LIKE for some roles). Callers can treat this as "no data" or "not resolvable" instead of a hard error.
+// IsInsufficientPrivileges reports whether err is a Snowflake access-control denial that the
+// connector may skip (HTTP 422 with Snowflake code 003001, joined as ErrInsufficientPrivileges).
 //
-// Use this overload only where the client method hands back the raw HTTP status code; when all you
-// have is the error, call IsInsufficientPrivileges or IsUnprocessableEntityError directly.
+// This is the privilege-skip predicate. We do NOT skip every 422: compilation and other
+// non-access-control 422s stay fatal. Prefer this over IsUnprocessableEntity wherever the client
+// method has classified the response body.
+func IsInsufficientPrivileges(err error) bool {
+	return err != nil && errors.Is(err, ErrInsufficientPrivileges)
+}
+
+// IsUnprocessableEntity reports whether the call failed with HTTP 422, regardless of Snowflake's
+// error code. It is a status-only helper for call sites that only have a raw statusCode (or a
+// legacy string-matched error) and treat "unprocessable" as "not resolvable" — e.g. shared/system
+// database quirks on GetDatabase.
+//
+// It is NOT the privilege-skip used by CXH-2193 paths. Those must call IsInsufficientPrivileges
+// so a SQL-compilation 422 cannot be swallowed as invisible data.
 func IsUnprocessableEntity(statusCode int, err error) bool {
 	if statusCode == http.StatusUnprocessableEntity {
 		return true
 	}
 	return IsInsufficientPrivileges(err) || IsUnprocessableEntityError(err)
-}
-
-// IsInsufficientPrivileges reports whether err is a Snowflake access-control denial, i.e. one the
-// caller may skip over.
-//
-// It matches on the sentinel alone, never on the HTTP status: the raw 422 is not sufficient
-// evidence, because Snowflake also answers 422 for SQL compilation errors that must stay fatal.
-// Only a client method that inspected the error code in the response body joins the sentinel.
-func IsInsufficientPrivileges(err error) bool {
-	return err != nil && errors.Is(err, ErrInsufficientPrivileges)
 }
 
 // IsUnprocessableEntityError reports whether err's message still contains the literal HTTP status
