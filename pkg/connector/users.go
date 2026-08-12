@@ -21,11 +21,9 @@ import (
 )
 
 type userBuilder struct {
-	resourceType   *v2.ResourceType
-	client         *snowflake.Client
-	syncSecrets    bool
-	usersSeen      int
-	usersWithLogin int
+	resourceType *v2.ResourceType
+	client       *snowflake.Client
+	syncSecrets  bool
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -192,10 +190,6 @@ func extractProfileFields(accountInfo *v2.AccountInfo, createReq *snowflake.Crea
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
-	if opts.PageToken.Token == "" {
-		o.resetLoginPrivilegeCounters()
-	}
-
 	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get next page cursor")
@@ -207,7 +201,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	if len(users) == 0 {
-		return nil, nil, o.loginPrivilegeError()
+		return nil, nil, nil
 	}
 
 	if err := o.client.CacheUsers(ctx, opts.Session, users); err != nil {
@@ -216,11 +210,6 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var resources []*v2.Resource
 	for _, user := range users {
-		o.usersSeen++
-		if strings.TrimSpace(user.Login) != "" {
-			o.usersWithLogin++
-		}
-
 		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to create user resource")
@@ -230,9 +219,6 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	if isLastPage(len(users), resourcePageSize) {
-		if err := o.loginPrivilegeError(); err != nil {
-			return nil, nil, err
-		}
 		return resources, nil, nil
 	}
 
@@ -242,32 +228,6 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	return resources, &rs.SyncOpResults{NextPageToken: nextCursor}, nil
-}
-
-// Snowflake returns NULL for every SHOW USERS column but name unless the role holds OWNERSHIP or
-// account-level MANAGE GRANTS. login_name defaults to the username and is mandatory for every
-// user TYPE, not just PERSON, so an all-empty result across a full sync means every other column,
-// including type, is NULL too and every user would misclassify as human.
-func isMissingLoginPrivilege(usersSeen, usersWithLogin int) bool {
-	return usersSeen > 0 && usersWithLogin == 0
-}
-
-// resetLoginPrivilegeCounters clears the counters at the start of a fresh sync so a
-// privilege regression can't be masked by counts carried over from an earlier sync
-// on a reused userBuilder (the SDK's daemon mode keeps builders alive across syncs).
-func (o *userBuilder) resetLoginPrivilegeCounters() {
-	o.usersSeen = 0
-	o.usersWithLogin = 0
-}
-
-func (o *userBuilder) loginPrivilegeError() error {
-	if !isMissingLoginPrivilege(o.usersSeen, o.usersWithLogin) {
-		return nil
-	}
-	return wrapError(
-		errors.New("SHOW USERS returned no login_name for any user; role likely lacks OWNERSHIP or account-level MANAGE GRANTS"),
-		"cannot determine user account types",
-	)
 }
 
 // Entitlements always returns an empty slice for users.

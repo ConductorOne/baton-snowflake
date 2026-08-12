@@ -2,8 +2,10 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -192,7 +194,21 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 		return nil, fmt.Errorf("no users found")
 	}
 
+	if err := missingLoginPrivilegeErr(users[0]); err != nil {
+		return nil, err
+	}
+
 	return nil, nil
+}
+
+// Snowflake returns NULL for every SHOW USERS column but name unless the role holds OWNERSHIP or
+// account-level MANAGE GRANTS, and login_name is mandatory for every user TYPE, not just PERSON.
+// So the condition is account-wide: one user missing it means every user would misclassify as human.
+func missingLoginPrivilegeErr(user snowflake.User) error {
+	if strings.TrimSpace(user.Login) != "" {
+		return nil
+	}
+	return errors.New("baton-snowflake: SHOW USERS returned no login_name; role likely lacks OWNERSHIP or account-level MANAGE GRANTS")
 }
 
 // New returns a new instance of the connector.
