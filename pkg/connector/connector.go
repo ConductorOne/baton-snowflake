@@ -2,8 +2,10 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -183,7 +185,7 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 // Validate is called to ensure that the connector is properly configured. It should exercise any API credentials
 // to be sure that they are valid.
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
-	users, err := d.Client.ListUsers(ctx, "", 1)
+	users, err := d.Client.ListUsers(ctx, "", resourcePageSize)
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: validation request failed: %w", err)
 	}
@@ -192,7 +194,23 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 		return nil, fmt.Errorf("no users found")
 	}
 
+	if err := missingLoginPrivilegeErr(users); err != nil {
+		return nil, err
+	}
+
 	return nil, nil
+}
+
+// Snowflake returns NULL for every SHOW USERS column but name unless the role holds OWNERSHIP or
+// account-level MANAGE GRANTS, and login_name is mandatory for every user TYPE, not just PERSON.
+// Fail only when every sampled user lacks it; a single user can lack it for unrelated reasons.
+func missingLoginPrivilegeErr(users []snowflake.User) error {
+	for _, user := range users {
+		if strings.TrimSpace(user.Login) != "" {
+			return nil
+		}
+	}
+	return errors.New("baton-snowflake: SHOW USERS returned no login_name; role likely lacks OWNERSHIP or account-level MANAGE GRANTS")
 }
 
 // New returns a new instance of the connector.
