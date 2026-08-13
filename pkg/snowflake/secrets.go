@@ -32,10 +32,16 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 	defer closeResponseBody(resp)
 	if err != nil {
 		// Snowflake's SQL API answers statement failures with HTTP 422 + QueryFailureStatus.
-		// Only access-control denials (code 003001) mean "nothing visible here"; every other
-		// 422 (e.g. SQL compilation) must stay fatal. uhttp already decoded the body into apiErr.
+		// Access-control denials (code 003001) and an unavailable shared database (the
+		// publisher revoked the underlying share) both mean "nothing visible here"; every
+		// other 422 (e.g. a genuine SQL compilation bug) must stay fatal. uhttp already
+		// decoded the body into apiErr.
 		if isAccessControlDenial(resp, &apiErr) {
 			l.Debug("Insufficient privileges to show secrets in database", zap.String("database", database))
+			return nil, nil
+		}
+		if isSharedDatabaseUnavailable(resp, &apiErr) {
+			l.Debug("Shared database is no longer available, skipping secrets", zap.String("database", database))
 			return nil, nil
 		}
 		return nil, dedupeAPIError(err)

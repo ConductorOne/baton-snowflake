@@ -74,6 +74,14 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrInsufficientPrivileges, err,
 			)
 		}
+		if isSharedDatabaseUnavailable(resp1, &apiErr) {
+			l.Debug("Shared database is no longer available for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
+			return nil, uhttp.WrapErrors(
+				codes.NotFound,
+				fmt.Sprintf("baton-snowflake: shared database unavailable for SHOW SCHEMAS IN DATABASE %s", databaseName),
+				ErrSharedDatabaseUnavailable, err,
+			)
+		}
 		return nil, dedupeAPIError(err)
 	}
 
@@ -90,6 +98,14 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				codes.PermissionDenied,
 				fmt.Sprintf("baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE %s (statement result)", databaseName),
 				ErrInsufficientPrivileges, err,
+			)
+		}
+		if isSharedDatabaseUnavailable(resp2, &apiErr) {
+			l.Debug("Shared database is no longer available for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
+			return nil, uhttp.WrapErrors(
+				codes.NotFound,
+				fmt.Sprintf("baton-snowflake: shared database unavailable for SHOW SCHEMAS IN DATABASE %s (statement result)", databaseName),
+				ErrSharedDatabaseUnavailable, err,
 			)
 		}
 		return nil, dedupeAPIError(err)
@@ -173,6 +189,15 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrInsufficientPrivileges, err,
 			)
 		}
+		if isSharedDatabaseUnavailable(resp1, &apiErr) {
+			l.Debug("Shared database is no longer available for SHOW TABLES IN SCHEMA",
+				zap.String("database", databaseName), zap.String("schema", schemaName))
+			return nil, "", uhttp.WrapErrors(
+				codes.NotFound,
+				fmt.Sprintf("baton-snowflake: shared database unavailable for SHOW TABLES IN SCHEMA %s.%s", databaseName, schemaName),
+				ErrSharedDatabaseUnavailable, err,
+			)
+		}
 		return nil, "", dedupeAPIError(err)
 	}
 
@@ -190,6 +215,15 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				codes.PermissionDenied,
 				fmt.Sprintf("baton-snowflake: insufficient privileges for SHOW TABLES IN SCHEMA %s.%s (statement result)", databaseName, schemaName),
 				ErrInsufficientPrivileges, err,
+			)
+		}
+		if isSharedDatabaseUnavailable(resp2, &apiErr) {
+			l.Debug("Shared database is no longer available for SHOW TABLES IN SCHEMA (statement result)",
+				zap.String("database", databaseName), zap.String("schema", schemaName))
+			return nil, "", uhttp.WrapErrors(
+				codes.NotFound,
+				fmt.Sprintf("baton-snowflake: shared database unavailable for SHOW TABLES IN SCHEMA %s.%s (statement result)", databaseName, schemaName),
+				ErrSharedDatabaseUnavailable, err,
 			)
 		}
 		return nil, "", dedupeAPIError(err)

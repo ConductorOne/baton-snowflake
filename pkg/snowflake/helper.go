@@ -42,6 +42,43 @@ func IsInsufficientPrivileges(err error) bool {
 	return err != nil && errors.Is(err, ErrInsufficientPrivileges)
 }
 
+// ErrSharedDatabaseUnavailable marks a Snowflake HTTP 422 SQL compilation error meaning the
+// database's underlying data share has been revoked or pulled by the publisher. Snowflake still
+// lists such a database via SHOW DATABASES / GetDatabase, but any statement scoped into it (SHOW
+// SCHEMAS, SHOW SECRETS, SHOW TABLES, ...) fails with this specific, stable message. Unlike
+// ErrInsufficientPrivileges this is not an access-control denial - QueryFailureStatus carries a
+// SQL-compilation code, not 003001 - but it is equally unactionable by the connector's role: the
+// object stays gone until the publisher restores the share.
+//
+// Client methods join this sentinel the same way they join ErrInsufficientPrivileges, so callers
+// can skip the object instead of failing the sync.
+var ErrSharedDatabaseUnavailable = errors.New("baton-snowflake: shared database unavailable")
+
+// sharedDatabaseUnavailableMessage is the stable substring of Snowflake's canned SQL compilation
+// error for a database whose backing share has been revoked or pulled by the publisher. There is
+// no dedicated QueryFailureStatus code for this condition the way there is for access-control
+// denials (003001), so it is identified by its message text instead. Anchoring on the full canned
+// phrase - not just "no longer available for use" - keeps the predicate from swallowing an
+// unrelated 422 that happens to share that trailing wording; see
+// TestClient_NonAccessControl422StaysFatal, which pins that "Object does not exist" stays fatal.
+const sharedDatabaseUnavailableMessage = "Shared database is no longer available for use"
+
+// isSharedDatabaseUnavailable reports whether a response is the 422 Snowflake returns for a
+// revoked/unavailable shared database, rather than a genuine SQL-compilation bug.
+func isSharedDatabaseUnavailable(resp *http.Response, apiErr *SnowflakeError) bool {
+	return resp != nil &&
+		resp.StatusCode == http.StatusUnprocessableEntity &&
+		apiErr != nil &&
+		strings.Contains(apiErr.Message(), sharedDatabaseUnavailableMessage)
+}
+
+// IsSharedDatabaseUnavailable reports whether err is a Snowflake shared-database-unavailable
+// denial that the connector may skip (HTTP 422 whose body matches Snowflake's canned "no longer
+// available for use" message, joined as ErrSharedDatabaseUnavailable).
+func IsSharedDatabaseUnavailable(err error) bool {
+	return err != nil && errors.Is(err, ErrSharedDatabaseUnavailable)
+}
+
 // IsUnprocessableEntity reports whether the call failed with HTTP 422, regardless of Snowflake's
 // error code. It is a status-only helper for call sites that only have a raw statusCode (or a
 // legacy string-matched error) and treat "unprocessable" as "not resolvable" — e.g. shared/system
