@@ -154,7 +154,7 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 			}
 			// A database whose backing share was revoked or pulled by the publisher fails the
 			// same way: still listed by SHOW DATABASES, but nothing inside it is enumerable.
-			// That's equally unactionable by the connector's role, so skip it too (CXH-2253).
+			// That's equally unactionable by the connector's role, so skip it too.
 			if snowflake.IsSharedDatabaseUnavailable(err) {
 				l.Debug("skipping database: shared database is no longer available",
 					zap.String("database", databaseName))
@@ -206,14 +206,13 @@ func (o *tableBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		}
 		// Same shared-database-unavailable condition as the database-level skip above, just
 		// surfaced later - during a specific schema's table listing rather than enumeration.
+		// Unlike the privilege case above, this is database-scoped, not schema-scoped: every
+		// other schema still queued for this database will fail identically, so stop here
+		// instead of popping and re-discovering that one schema at a time.
 		if snowflake.IsSharedDatabaseUnavailable(err) {
 			l.Debug("skipping schema: shared database is no longer available",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
-			nextToken, tokenErr := bag.NextToken("")
-			if tokenErr != nil {
-				return nil, nil, wrapError(tokenErr, "failed to create next page token")
-			}
-			return nil, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+			return nil, nil, nil
 		}
 		return nil, nil, wrapError(err, "failed to list tables in schema")
 	}

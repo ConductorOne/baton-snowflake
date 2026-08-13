@@ -51,19 +51,17 @@ func IsInsufficientPrivileges(err error) bool {
 // object stays gone until the publisher restores the share.
 //
 // Client methods join this sentinel the same way they join ErrInsufficientPrivileges, so callers
-// can skip the object instead of failing the sync (CXH-2253: before this, that exact 422 on one
-// shared database cancelled the whole sync via the same unguarded-propagation bug CXH-2193 fixed
-// for the access-control case).
+// can skip the object instead of failing the sync.
 var ErrSharedDatabaseUnavailable = errors.New("baton-snowflake: shared database unavailable")
 
 // sharedDatabaseUnavailableMessage is the stable substring of Snowflake's canned SQL compilation
 // error for a database whose backing share has been revoked or pulled by the publisher. There is
 // no dedicated QueryFailureStatus code for this condition the way there is for access-control
-// denials (003001), so it is identified by its message text instead. Matching this specific
-// phrase - rather than "SQL compilation error" generally - keeps the predicate from swallowing an
-// unrelated compilation bug like a malformed identifier; see TestClient_NonAccessControl422StaysFatal,
-// which pins that "Object does not exist" stays fatal.
-const sharedDatabaseUnavailableMessage = "no longer available for use"
+// denials (003001), so it is identified by its message text instead. Anchoring on the full canned
+// phrase - not just "no longer available for use" - keeps the predicate from swallowing an
+// unrelated 422 that happens to share that trailing wording; see
+// TestClient_NonAccessControl422StaysFatal, which pins that "Object does not exist" stays fatal.
+const sharedDatabaseUnavailableMessage = "Shared database is no longer available for use"
 
 // isSharedDatabaseUnavailable reports whether a response is the 422 Snowflake returns for a
 // revoked/unavailable shared database, rather than a genuine SQL-compilation bug.
