@@ -685,6 +685,36 @@ func TestTableBuilder_List_SkipsDatabaseWhenSchemasAreNotVisible(t *testing.T) {
 	assert.Empty(t, results.NextPageToken, "skipping must not leave a page token that resumes the same database")
 }
 
+// TestTableBuilder_List_SkipsDatabaseWhenSharedDatabaseUnavailable pins CXH-2253. Snowflake
+// answers 422 for a database whose backing share was revoked or pulled by the publisher, same as
+// it does for an access-control denial, but with a SQL-compilation error code instead of 003001.
+// Before this fix that 422 was fatal - the connector had no fallback for it - and propagating it
+// cancelled the whole sync the same way the unguarded CXH-2193 case did.
+func TestTableBuilder_List_SkipsDatabaseWhenSharedDatabaseUnavailable(t *testing.T) {
+	server := newSchemaListMockServer(t, schemaListMock{
+		schemasStatus: http.StatusUnprocessableEntity,
+		schemasErrorBody: map[string]any{
+			"code": "001003",
+			"message": "SQL compilation error:\nShared database is no longer available for use. " +
+				"It will need to be re-created if and when the publisher makes it available again.",
+		},
+	})
+	defer server.Close()
+
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	builder := &tableBuilder{client: client}
+	parentID := &v2.ResourceId{ResourceType: databaseResourceType.Id, Resource: "DB"}
+
+	resources, results, err := builder.List(context.Background(), parentID, rs.SyncOpAttrs{})
+
+	require.NoError(t, err, "a revoked shared database must skip the database, not fail the sync")
+	assert.Empty(t, resources, "an unavailable shared database contributes no tables")
+	require.NotNil(t, results)
+	assert.Empty(t, results.NextPageToken, "skipping must not leave a page token that resumes the same database")
+}
+
 // TestTableBuilder_List_FailsOnNonAccessControl422 guards the blast radius of the fix above.
 // Snowflake also answers 422 for SQL compilation errors, which mean the connector sent a statement
 // the server could not run. Skipping those would turn a connector bug into a silently short sync

@@ -111,6 +111,135 @@ func TestIsUnprocessableEntity_DelegatesToSentinel(t *testing.T) {
 	assert.False(t, IsUnprocessableEntity(http.StatusNotFound, errors.New("not found")))
 }
 
+// sharedDatabaseUnavailableMessageBody is Snowflake's canned SQL compilation error for a database
+// whose backing share was revoked or pulled by the publisher (CXH-2253). There is no dedicated
+// QueryFailureStatus code for this the way there is for access-control denials, so a plausible but
+// otherwise-unused compilation code is paired with it here to prove the predicate keys off the
+// message, not the code.
+const sharedDatabaseUnavailableMessageBody = "SQL compilation error:\nShared database is no longer " +
+	"available for use. It will need to be re-created if and when the publisher makes it available again."
+
+func TestIsSharedDatabaseUnavailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error is not a shared-database denial",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "sentinel joined by a client method",
+			err: uhttp.WrapErrors(codes.NotFound, "baton-snowflake: shared database unavailable for SHOW SCHEMAS IN DATABASE DB",
+				ErrSharedDatabaseUnavailable, errors.New("rpc error: code = InvalidArgument desc = 422 Unprocessable Entity")),
+			want: true,
+		},
+		{
+			name: "same message without the sentinel is not recognised",
+			err:  status.Error(codes.InvalidArgument, sharedDatabaseUnavailableMessageBody),
+			want: false,
+		},
+		{
+			name: "an access-control denial is a different sentinel entirely",
+			err: uhttp.WrapErrors(codes.PermissionDenied, "baton-snowflake: insufficient privileges for SHOW SCHEMAS IN DATABASE DB",
+				ErrInsufficientPrivileges, errors.New("422")),
+			want: false,
+		},
+		{
+			// The blast-radius guard: a different SQL compilation error (e.g. a malformed
+			// statement bug) must not be swept up by this predicate.
+			name: "an unrelated SQL compilation error must stay fatal",
+			err:  status.Error(codes.InvalidArgument, "SQL compilation error:\nObject does not exist"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsSharedDatabaseUnavailable(tt.err))
+		})
+	}
+}
+
+// newSharedDatabaseUnavailableServer answers every POST with the 422 Snowflake returns for a
+// database whose backing share has been revoked or pulled by the publisher.
+func newSharedDatabaseUnavailableServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return new422Server(t, "001003", sharedDatabaseUnavailableMessageBody)
+}
+
+// TestClient_SharedDatabaseUnavailableIsSkippable is the CXH-2253 regression gate: this 422 must
+// be recognisable via the sentinel (not just tolerated by coincidence) on every client method that
+// scopes a statement into a specific database, mirroring the access-control contract pinned by
+// TestClient_InsufficientPrivilegesErrorContract.
+func TestClient_SharedDatabaseUnavailableIsSkippable(t *testing.T) {
+	t.Parallel()
+
+	server := newSharedDatabaseUnavailableServer(t)
+	t.Cleanup(server.Close)
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		call func(ctx context.Context) error
+	}{
+		{
+			name: "ListSchemasInDatabase",
+			call: func(ctx context.Context) error {
+				_, err := client.ListSchemasInDatabase(ctx, "DB")
+				return err
+			},
+		},
+		{
+			name: "ListTablesInSchema",
+			call: func(ctx context.Context) error {
+				_, _, err := client.ListTablesInSchema(ctx, "DB", publicSchema, "", 200)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.call(context.Background())
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrSharedDatabaseUnavailable),
+				"caller must be able to identify the condition without matching on message text")
+			assert.True(t, IsSharedDatabaseUnavailable(err))
+			assert.False(t, IsInsufficientPrivileges(err), "the two sentinels must stay distinct")
+		})
+	}
+}
+
+// TestListSecrets_SharedDatabaseUnavailableReturnsEmpty pins that SHOW SECRETS on a database whose
+// share was revoked degrades to an empty result, the same "nothing visible" contract as an
+// access-control denial (TestListSecrets_AccessControlDenialReturnsEmpty). Before CXH-2253 this
+// exact 422 was fatal because it does not carry error code 003001, and secretBuilder.List had no
+// fallback for it - propagating the error cancelled the whole sync.
+func TestListSecrets_SharedDatabaseUnavailableReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	server := newSharedDatabaseUnavailableServer(t)
+	t.Cleanup(server.Close)
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	secrets, err := client.ListSecrets(context.Background(), "DB")
+	require.NoError(t, err)
+	assert.Empty(t, secrets)
+}
+
 // newStatusServer answers every POST with the given HTTP status and a JSON error body carrying
 // code/message so WithErrorResponse can decode it the same way the real SQL API does.
 func newStatusServer(t *testing.T, statusCode int, code, message string) *httptest.Server {
@@ -234,6 +363,8 @@ func TestClient_NonSkippableHTTPStatusesStayFatal(t *testing.T) {
 					require.Error(t, err, "non-access-control failure must not be swallowed")
 					assert.False(t, IsInsufficientPrivileges(err),
 						"sentinel must only attach to access-control denials")
+					assert.False(t, IsSharedDatabaseUnavailable(err),
+						"sentinel must only attach to a revoked shared database, not auth/rate-limit/5xx")
 					assert.Equal(t, st.wantCode, status.Code(err),
 						"gRPC code must survive so the SDK can classify retry vs terminal")
 				})
@@ -391,6 +522,8 @@ func TestClient_NonAccessControl422StaysFatal(t *testing.T) {
 			assert.False(t, errors.Is(err, ErrInsufficientPrivileges),
 				"a SQL compilation error is not something the role may skip over")
 			assert.False(t, IsInsufficientPrivileges(err))
+			assert.False(t, IsSharedDatabaseUnavailable(err),
+				"an unrelated compilation error must not be mistaken for a revoked shared database")
 		})
 	}
 }
