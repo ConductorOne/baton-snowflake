@@ -34,6 +34,8 @@ type credentialUserBuilder struct {
 	*userBuilder
 }
 
+var _ connectorbuilder.CredentialIssuerV2 = (*credentialUserBuilder)(nil)
+
 const (
 	programmaticAccessTokenMinLifetime = 24 * time.Hour
 	programmaticAccessTokenMaxLifetime = 365 * 24 * time.Hour
@@ -81,7 +83,25 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	}
 
 	tokenName := "c1-" + input.RequestID
-	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, days)
+	user, _, err := o.client.GetUser(ctx, nil, input.IdentityID.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: get user for programmatic access token: %w", err)
+	}
+	roleRestriction := ""
+	if isServiceUserType(user.Type) {
+		roleRestriction = strings.TrimSpace(user.DefaultRole)
+		if roleRestriction == "" {
+			return nil, fmt.Errorf("baton-snowflake: service user %q has no default role; assign a role and set it as the user's default role before issuing a programmatic access token", input.IdentityID.Resource)
+		}
+		granted, err := o.client.RoleGrantedToUser(ctx, input.IdentityID.Resource, roleRestriction)
+		if err != nil {
+			return nil, fmt.Errorf("baton-snowflake: verify service user's default role: %w", err)
+		}
+		if !granted {
+			return nil, fmt.Errorf("baton-snowflake: service user %q default role %q is not granted to the user; grant it before issuing a programmatic access token", input.IdentityID.Resource, roleRestriction)
+		}
+	}
+	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, roleRestriction, days)
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: create programmatic access token: %w", err)
 	}
@@ -116,6 +136,15 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 		},
 		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 	}, nil
+}
+
+func isServiceUserType(userType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(userType)) {
+	case userTypeService, userTypeServiceAgent, userTypeLegacyService:
+		return true
+	default:
+		return false
+	}
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -194,8 +223,7 @@ const (
 )
 
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
-	switch strings.ToUpper(strings.TrimSpace(user.Type)) {
-	case userTypeService, userTypeServiceAgent, userTypeLegacyService:
+	if isServiceUserType(user.Type) {
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN

@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -11,6 +12,27 @@ import (
 type ProgrammaticAccessToken struct {
 	Name      string
 	ExpiresAt time.Time
+}
+
+func (c *Client) RoleGrantedToUser(ctx context.Context, userName, roleName string) (bool, error) {
+	result, err := c.executeStatement(ctx, fmt.Sprintf("SHOW GRANTS TO USER %s;", quoteIdentifier(userName)))
+	if err != nil {
+		return false, err
+	}
+	for _, row := range result.Data {
+		grantedOn, err := result.ResultSetMetadata.GetStringValueFromRow(row, "granted_on")
+		if err != nil {
+			return false, fmt.Errorf("snowflake: read user role grant type: %w", err)
+		}
+		name, err := result.ResultSetMetadata.GetStringValueFromRow(row, "name")
+		if err != nil {
+			return false, fmt.Errorf("snowflake: read user role grant name: %w", err)
+		}
+		if strings.EqualFold(grantedOn, "ROLE") && name == roleName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Client) ListProgrammaticAccessTokens(ctx context.Context, userName string) ([]ProgrammaticAccessToken, error) {
@@ -35,7 +57,7 @@ func (c *Client) ListProgrammaticAccessTokens(ctx context.Context, userName stri
 
 // CreateProgrammaticAccessToken creates a token and returns the secret supplied
 // by Snowflake in the one response where it is available. It never logs it.
-func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, tokenName string, daysToExpiry int) (string, error) {
+func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, tokenName, roleRestriction string, daysToExpiry int) (string, error) {
 	if daysToExpiry < 1 {
 		return "", fmt.Errorf("snowflake: days to expiry must be at least one")
 	}
@@ -43,6 +65,12 @@ func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s DAYS_TO_EXPIRY = %d;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName), daysToExpiry,
 	)
+	if roleRestriction != "" {
+		statement = fmt.Sprintf(
+			"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s ROLE_RESTRICTION = %s DAYS_TO_EXPIRY = %d;",
+			quoteIdentifier(userName), quoteIdentifier(tokenName), quoteIdentifier(roleRestriction), daysToExpiry,
+		)
+	}
 	result, err := c.executeStatement(ctx, statement)
 	if err != nil {
 		return "", err
