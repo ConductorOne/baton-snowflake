@@ -31,6 +31,15 @@ The Snowflake connector supports [account provisioning](/product/admin/account-p
 
 [This connector can sync secrets](/product/admin/inventory) and display them on the **Inventory** page.
 
+### Connector actions
+
+Connector actions are custom capabilities that extend C1 automations with app-specific operations. You can use connector actions in the [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) automation step.
+
+| Action name | Additional fields | Description |
+|-------------|-------------------|-------------|
+| `enable_user` | `user_id` (string, required) | Reactivates a Snowflake user |
+| `disable_user` | `user_id` (string, required) | Deactivates a Snowflake user |
+
 ## Gather Snowflake credentials 
 
 Configuring the connector requires you to pass in credentials generated in Snowflake. Gather these credentials before you move on. 

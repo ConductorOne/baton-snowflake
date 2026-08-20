@@ -1,0 +1,120 @@
+package connector
+
+import (
+	"context"
+	"fmt"
+
+	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
+	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
+)
+
+const (
+	actionDisableUser = "disable_user"
+	actionEnableUser  = "enable_user"
+
+	argUserIDKey     = "user_id"
+	argUserIDDisplay = "User Resource ID"
+	retSuccessKey    = "success"
+)
+
+// successReturnType is shared across all schemas - define once, reuse everywhere.
+var successReturnType = []*config.Field{
+	{Name: retSuccessKey, DisplayName: "Success", Field: &config.Field_BoolField{}},
+}
+
+var disableUserSchema = &v2.BatonActionSchema{
+	Name:        actionDisableUser,
+	DisplayName: "Disable User",
+	Description: "Deactivates a Snowflake user (sets DISABLED = TRUE). Reversible via enable_user.",
+	Arguments: []*config.Field{
+		{Name: argUserIDKey, DisplayName: argUserIDDisplay, Field: &config.Field_StringField{}, IsRequired: true},
+	},
+	ReturnTypes: successReturnType,
+	ActionType:  []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT, v2.ActionType_ACTION_TYPE_ACCOUNT_DISABLE},
+}
+
+var enableUserSchema = &v2.BatonActionSchema{
+	Name:        actionEnableUser,
+	DisplayName: "Enable User",
+	Description: "Reactivates a Snowflake user (sets DISABLED = FALSE).",
+	Arguments: []*config.Field{
+		{Name: argUserIDKey, DisplayName: argUserIDDisplay, Field: &config.Field_StringField{}, IsRequired: true},
+	},
+	ReturnTypes: successReturnType,
+	ActionType:  []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT, v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
+}
+
+// Compile-time interface assertion. Global: enable/disable are account-lifecycle
+// actions and MUST be registered as global actions so C1's account-lifecycle FSM
+// (which looks the v2 action schema up as global, resource_type_id="") can find
+// them. A resource-scoped registration via ResourceActionProvider on userBuilder
+// would be stored under "user|enable_user" and silently fail lifecycle automation
+// at execution time with "error getting connector action schema v2: dynamo: no
+// item found" - a failure invisible at build/sync time.
+var _ connectorbuilder.GlobalActionProvider = (*Connector)(nil)
+
+// GlobalActions registers the standalone, on-demand account lifecycle actions.
+// These are independent of account deprovisioning (Delete, in users.go) - see
+// CXP-923 for deprovisioning-specific work, which is out of scope here.
+func (c *Connector) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
+	if err := registry.Register(ctx, disableUserSchema, c.disableUserHandler); err != nil {
+		return fmt.Errorf("baton-snowflake: register disable_user: %w", err)
+	}
+	return registry.Register(ctx, enableUserSchema, c.enableUserHandler)
+}
+
+// successStruct returns the standard success response. Using direct construction
+// (not structpb.NewStruct) avoids an always-nil error for a simple bool value.
+func successStruct() *structpb.Struct {
+	return &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			retSuccessKey: {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+		},
+	}
+}
+
+// disableUserHandler is idempotent: ALTER USER ... SET DISABLED = TRUE succeeds
+// on a user that's already disabled, so no "already in this state" check is needed.
+func (c *Connector) disableUserHandler(
+	ctx context.Context,
+	args *structpb.Struct,
+) (*structpb.Struct, annotations.Annotations, error) {
+	if args == nil {
+		return nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: missing arguments")
+	}
+	userID, err := actions.RequireStringArg(args, argUserIDKey)
+	if err != nil {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-snowflake: user_id: %v", err)
+	}
+
+	if err := c.Client.SetUserDisabled(ctx, userID, true); err != nil {
+		return nil, nil, fmt.Errorf("baton-snowflake: disable user %s: %w", userID, err)
+	}
+	return successStruct(), nil, nil
+}
+
+// enableUserHandler is idempotent: ALTER USER ... SET DISABLED = FALSE succeeds
+// on a user that's already enabled, so no "already in this state" check is needed.
+func (c *Connector) enableUserHandler(
+	ctx context.Context,
+	args *structpb.Struct,
+) (*structpb.Struct, annotations.Annotations, error) {
+	if args == nil {
+		return nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: missing arguments")
+	}
+	userID, err := actions.RequireStringArg(args, argUserIDKey)
+	if err != nil {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-snowflake: user_id: %v", err)
+	}
+
+	if err := c.Client.SetUserDisabled(ctx, userID, false); err != nil {
+		return nil, nil, fmt.Errorf("baton-snowflake: enable user %s: %w", userID, err)
+	}
+	return successStruct(), nil, nil
+}

@@ -284,6 +284,31 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 	return user, resp.StatusCode, nil
 }
 
+// SetUserDisabled enables or disables a Snowflake user via ALTER USER SET DISABLED,
+// a targeted property-set statement (not a full-representation replace), so omitted
+// user attributes (login_name, default_role, comment, etc.) are left untouched.
+// Idempotent: setting the same DISABLED value on a user that's already in that state
+// succeeds, so no "already in this state" error handling is needed here.
+func (c *Client) SetUserDisabled(ctx context.Context, userName string, disabled bool) error {
+	queries := []string{
+		fmt.Sprintf("ALTER USER \"%s\" SET DISABLED = %t;", escapeDoubleQuotedIdentifier(userName), disabled),
+	}
+
+	req, err := c.PostStatementRequest(ctx, queries)
+	if err != nil {
+		return fmt.Errorf("baton-snowflake: failed to set user %s disabled=%t: %w", userName, disabled, err)
+	}
+
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp)
+	if err != nil {
+		return fmt.Errorf("baton-snowflake: failed to set user %s disabled=%t: %w", userName, disabled, dedupeAPIError(err))
+	}
+
+	return nil
+}
+
 func (r *ListSecretsRawResponse) ListSecrets() ([]Secret, error) {
 	var secrets []Secret
 	for _, row := range r.Data {
