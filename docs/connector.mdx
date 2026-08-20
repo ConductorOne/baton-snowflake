@@ -42,6 +42,8 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 
 <Note>
 **`enable_user`/`disable_user` require `OWNERSHIP` on the target user.** These actions run as the `USERADMIN` role. If the service account's `USERADMIN` role doesn't own the target user (for example, a user created by `ACCOUNTADMIN` or another role), the action fails with a privilege error. Grant `USERADMIN` ownership of the users it needs to manage, or have it inherit `MANAGE GRANTS`.
+
+**`enable_user` does not clear an account lockout.** Snowflake can independently lock a user out after repeated failed logins (tracked via `SNOWFLAKE_LOCK`/`MINS_TO_UNLOCK`), separately from the `DISABLED` property these actions toggle. `enable_user` only clears `DISABLED` - a locked-out user stays locked, and the C1 resource still reports a disabled status (`details: "locked"`) until an administrator clears the lockout directly in Snowflake.
 </Note>
 
 ## Gather Snowflake credentials 
