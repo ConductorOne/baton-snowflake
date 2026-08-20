@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -56,7 +57,10 @@ func (c *Connector) GlobalActions(ctx context.Context, registry actions.ActionRe
 	if err := registry.Register(ctx, disableUserSchema, c.disableUserHandler); err != nil {
 		return fmt.Errorf("baton-snowflake: register disable_user: %w", err)
 	}
-	return registry.Register(ctx, enableUserSchema, c.enableUserHandler)
+	if err := registry.Register(ctx, enableUserSchema, c.enableUserHandler); err != nil {
+		return fmt.Errorf("baton-snowflake: register enable_user: %w", err)
+	}
+	return nil
 }
 
 func successStruct() *structpb.Struct {
@@ -78,6 +82,9 @@ func (c *Connector) disableUserHandler(
 	if err != nil {
 		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-snowflake: user_id: %v", err)
 	}
+	if strings.TrimSpace(userID) == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user_id must not be empty")
+	}
 
 	if err := c.Client.SetUserDisabled(ctx, userID, true); err != nil {
 		return nil, nil, fmt.Errorf("baton-snowflake: disable user %s: %w", userID, err)
@@ -95,6 +102,9 @@ func (c *Connector) enableUserHandler(
 	userID, err := actions.RequireStringArg(args, argUserIDKey)
 	if err != nil {
 		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-snowflake: user_id: %v", err)
+	}
+	if strings.TrimSpace(userID) == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user_id must not be empty")
 	}
 
 	if err := c.Client.SetUserDisabled(ctx, userID, false); err != nil {

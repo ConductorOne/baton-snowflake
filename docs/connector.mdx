@@ -40,6 +40,10 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | `enable_user` | `user_id` (string, required) | Reactivates a Snowflake user |
 | `disable_user` | `user_id` (string, required) | Deactivates a Snowflake user |
 
+<Note>
+**`enable_user`/`disable_user` require `OWNERSHIP` on the target user.** These actions run as the `USERADMIN` role. If the service account's `USERADMIN` role doesn't own the target user (for example, a user created by `ACCOUNTADMIN` or another role), the action fails with a privilege error. Grant `USERADMIN` ownership of the users it needs to manage, or have it inherit `MANAGE GRANTS`.
+</Note>
+
 ## Gather Snowflake credentials 
 
 Configuring the connector requires you to pass in credentials generated in Snowflake. Gather these credentials before you move on. 
