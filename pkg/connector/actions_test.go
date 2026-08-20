@@ -114,3 +114,49 @@ func TestDisableEnableUserHandler_EmptyUserID(t *testing.T) {
 		})
 	}
 }
+
+// TestDisableEnableUserHandler_TrimsUserID verifies that a user_id with leading/trailing
+// whitespace is trimmed before being sent to Snowflake, not just when checking for
+// blankness - a padded value like "  bob  " must reach the API as "bob", since a quoted
+// Snowflake identifier is an exact match and would otherwise fail with an opaque
+// "user does not exist" error.
+func TestDisableEnableUserHandler_TrimsUserID(t *testing.T) {
+	var capturedSQL string
+	server := newSetUserDisabledMockServer(t, &capturedSQL)
+	defer server.Close()
+
+	c := newTestConnector(t, server.URL)
+
+	tests := []struct {
+		name    string
+		handler func(context.Context, *structpb.Struct) (*structpb.Struct, any, error)
+		want    string
+	}{
+		{
+			name: "disable_user",
+			handler: func(ctx context.Context, args *structpb.Struct) (*structpb.Struct, any, error) {
+				return c.disableUserHandler(ctx, args)
+			},
+			want: `ALTER USER "bob" SET DISABLED = true;`,
+		},
+		{
+			name: "enable_user",
+			handler: func(ctx context.Context, args *structpb.Struct) (*structpb.Struct, any, error) {
+				return c.enableUserHandler(ctx, args)
+			},
+			want: `ALTER USER "bob" SET DISABLED = false;`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capturedSQL = ""
+			args, err := structpb.NewStruct(map[string]any{"user_id": "  bob  "})
+			require.NoError(t, err)
+
+			_, _, err = tt.handler(context.Background(), args)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, capturedSQL)
+		})
+	}
+}

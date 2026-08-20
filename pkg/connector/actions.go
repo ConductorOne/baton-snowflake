@@ -82,7 +82,8 @@ func (c *Connector) disableUserHandler(
 	if err != nil {
 		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-snowflake: user_id: %v", err)
 	}
-	if strings.TrimSpace(userID) == "" {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
 		return nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user_id must not be empty")
 	}
 
@@ -103,7 +104,8 @@ func (c *Connector) enableUserHandler(
 	if err != nil {
 		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-snowflake: user_id: %v", err)
 	}
-	if strings.TrimSpace(userID) == "" {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
 		return nil, nil, status.Error(codes.InvalidArgument, "baton-snowflake: user_id must not be empty")
 	}
 
