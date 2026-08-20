@@ -50,18 +50,8 @@ var enableUserSchema = &v2.BatonActionSchema{
 	ActionType:  []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT, v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE},
 }
 
-// Compile-time interface assertion. Global: enable/disable are account-lifecycle
-// actions and MUST be registered as global actions so C1's account-lifecycle FSM
-// (which looks the v2 action schema up as global, resource_type_id="") can find
-// them. A resource-scoped registration via ResourceActionProvider on userBuilder
-// would be stored under "user|enable_user" and silently fail lifecycle automation
-// at execution time with "error getting connector action schema v2: dynamo: no
-// item found" - a failure invisible at build/sync time.
 var _ connectorbuilder.GlobalActionProvider = (*Connector)(nil)
 
-// GlobalActions registers the standalone, on-demand account lifecycle actions.
-// These are independent of account deprovisioning (Delete, in users.go) - see
-// CXP-923 for deprovisioning-specific work, which is out of scope here.
 func (c *Connector) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
 	if err := registry.Register(ctx, disableUserSchema, c.disableUserHandler); err != nil {
 		return fmt.Errorf("baton-snowflake: register disable_user: %w", err)
@@ -69,8 +59,6 @@ func (c *Connector) GlobalActions(ctx context.Context, registry actions.ActionRe
 	return registry.Register(ctx, enableUserSchema, c.enableUserHandler)
 }
 
-// successStruct returns the standard success response. Using direct construction
-// (not structpb.NewStruct) avoids an always-nil error for a simple bool value.
 func successStruct() *structpb.Struct {
 	return &structpb.Struct{
 		Fields: map[string]*structpb.Value{
@@ -79,8 +67,6 @@ func successStruct() *structpb.Struct {
 	}
 }
 
-// disableUserHandler is idempotent: ALTER USER ... SET DISABLED = TRUE succeeds
-// on a user that's already disabled, so no "already in this state" check is needed.
 func (c *Connector) disableUserHandler(
 	ctx context.Context,
 	args *structpb.Struct,
@@ -99,8 +85,6 @@ func (c *Connector) disableUserHandler(
 	return successStruct(), nil, nil
 }
 
-// enableUserHandler is idempotent: ALTER USER ... SET DISABLED = FALSE succeeds
-// on a user that's already enabled, so no "already in this state" check is needed.
 func (c *Connector) enableUserHandler(
 	ctx context.Context,
 	args *structpb.Struct,
