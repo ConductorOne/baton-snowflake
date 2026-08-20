@@ -133,8 +133,7 @@
       "capabilities": [
         "CAPABILITY_SYNC",
         "CAPABILITY_ACCOUNT_PROVISIONING",
-        "CAPABILITY_RESOURCE_DELETE",
-        "CAPABILITY_ACTIONS"
+        "CAPABILITY_RESOURCE_DELETE"
       ],
       "permissions": {}
     }
