@@ -289,12 +289,14 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 // user attributes (login_name, default_role, comment, etc.) are left untouched.
 // Idempotent: setting the same DISABLED value on a user that's already in that state
 // succeeds, so no "already in this state" error handling is needed here.
+// Runs as UserAdminRole, matching CreateUserREST/DeleteUserREST - the session's
+// default role is not guaranteed to have ALTER USER privilege on other users.
 func (c *Client) SetUserDisabled(ctx context.Context, userName string, disabled bool) error {
 	queries := []string{
 		fmt.Sprintf("ALTER USER \"%s\" SET DISABLED = %t;", escapeDoubleQuotedIdentifier(userName), disabled),
 	}
 
-	req, err := c.PostStatementRequest(ctx, queries)
+	req, err := c.PostStatementRequestWithRole(ctx, queries, UserAdminRole)
 	if err != nil {
 		return fmt.Errorf("baton-snowflake: failed to set user %s disabled=%t: %w", userName, disabled, err)
 	}
