@@ -18,12 +18,104 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *snowflake.Client
 	syncSecrets  bool
+}
+
+// credentialUserBuilder opts into credential issuance only when secret syncing
+// is enabled. The issued-token resource type is therefore registered alongside
+// the issuer, which is required by the SDK's build-time revoke validation.
+type credentialUserBuilder struct {
+	*userBuilder
+}
+
+const (
+	programmaticAccessTokenMinLifetime = 24 * time.Hour
+	programmaticAccessTokenMaxLifetime = 365 * 24 * time.Hour
+	programmaticAccessTokenDefaultDays = 15
+)
+
+func newCredentialUserBuilder(client *snowflake.Client, syncSecrets bool) *credentialUserBuilder {
+	return &credentialUserBuilder{userBuilder: newUserBuilder(client, syncSecrets)}
+}
+
+func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.CredentialDetailsCredentialIssue, annotations.Annotations, error) {
+	return v2.CredentialDetailsCredentialIssue_builder{
+		Options: []*v2.CredentialIssueOptionDescriptor{
+			v2.CredentialIssueOptionDescriptor_builder{
+				Option: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN,
+				Expiry: v2.IssuanceExpiryCapability_builder{
+					Min: durationpb.New(programmaticAccessTokenMinLifetime),
+					Max: durationpb.New(programmaticAccessTokenMaxLifetime),
+				}.Build(),
+				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+				SecretResourceTypeId: programmaticAccessTokenResourceType.Id,
+			}.Build(),
+		},
+		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN,
+	}.Build(), nil, nil
+}
+
+func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (*connectorbuilder.CredentialIssueOutput, error) {
+	if input == nil || input.IdentityID == nil || input.IdentityID.ResourceType != userResourceType.Id || input.IdentityID.Resource == "" {
+		return nil, fmt.Errorf("baton-snowflake: a Snowflake user identity is required")
+	}
+
+	// Snowflake accepts a whole number of days. Floor rather than round up so the
+	// provider's actual expiration is never later than the caller's deadline.
+	now := time.Now().UTC()
+	days := programmaticAccessTokenDefaultDays
+	expiresAt := now.AddDate(0, 0, days)
+	if input.ExpiresAt != nil {
+		remaining := input.ExpiresAt.AsTime().Sub(now)
+		days = int(remaining / (24 * time.Hour))
+		if days < 1 {
+			return nil, fmt.Errorf("baton-snowflake: requested expiry leaves less than Snowflake's one-day minimum")
+		}
+		expiresAt = now.AddDate(0, 0, days)
+	}
+
+	tokenName := "c1-" + input.RequestID
+	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, days)
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: create programmatic access token: %w", err)
+	}
+	issuedTokens, err := o.client.ListProgrammaticAccessTokens(ctx, input.IdentityID.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
+	}
+	found := false
+	for _, token := range issuedTokens {
+		if token.Name == tokenName {
+			expiresAt = token.ExpiresAt
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake")
+	}
+	if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
+		return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
+	}
+
+	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &connectorbuilder.CredentialIssueOutput{
+		Secret: secret,
+		PlaintextData: []*v2.PlaintextData{
+			v2.PlaintextData_builder{Name: "token", Bytes: []byte(plaintext)}.Build(),
+		},
+		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+	}, nil
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -89,6 +181,7 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 }
 
 // https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
+//
 //	TYPE = { PERSON | SERVICE | SERVICE_AGENT | LEGACY_SERVICE }
 const (
 	userTypeService       = "SERVICE"
