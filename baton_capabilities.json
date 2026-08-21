@@ -142,7 +142,8 @@
     "CAPABILITY_PROVISION",
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
-    "CAPABILITY_RESOURCE_DELETE"
+    "CAPABILITY_RESOURCE_DELETE",
+    "CAPABILITY_ACTIONS"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {
