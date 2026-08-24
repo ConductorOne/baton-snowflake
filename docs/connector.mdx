@@ -33,20 +33,17 @@ The Snowflake connector supports [account provisioning](/product/admin/account-p
 
 ### Connector actions
 
-Connector actions are custom capabilities that extend C1 automations with app-specific operations. Both Snowflake actions are reached from the **Account lifecycle action** automation step. Which step offers an action is determined by the action itself — you cannot choose.
+Connector actions are custom capabilities that extend C1 automations with app-specific operations.
 
 | Automation step | Actions offered | How the target is selected |
 |-----------------|-----------------|----------------------------|
 | Account lifecycle action | `enable_user`, `disable_user` | The step's own target-account selector — either the account in context or a specific account. C1 resolves `user_id` from that account. |
 
-Neither action appears in the [Perform connector action](/product/admin/automations-steps-reference#perform-connector-action) step, which lists actions scoped to a resource type.
 
 | Action name | Additional fields | Description |
 |-------------|-------------------|-------------|
 | `enable_user` | `user_id` (string, required) | Reactivates a Snowflake user by setting `DISABLED = FALSE` |
 | `disable_user` | `user_id` (string, required) | Deactivates a Snowflake user by setting `DISABLED = TRUE`. Reverse it with `enable_user` |
-
-When you invoke either action directly through the CLI, pass the Snowflake username as `user_id`. Repeating an action on a user already in the target state succeeds and changes nothing else.
 
 <Note>
 **`enable_user`/`disable_user` require `MODIFY` on the target user.** These actions run as the `USERADMIN` role. If that role holds neither `MODIFY` nor `OWNERSHIP` on the target user, Snowflake rejects the statement with `Insufficient privileges to operate on user '<name>'. Your primary role USERADMIN must have MODIFY granted on USER <name>.` Grant the privilege with `GRANT MODIFY ON USER <name> TO ROLE USERADMIN`, which does not transfer ownership.
