@@ -37,7 +37,7 @@ Token lifetime is set by the requester. Snowflake accepts whole days only, and t
 </Warning>
 
 <Note>
-**Service users must have a granted default role.** For a user of type `SERVICE`, `SERVICE_AGENT`, or `LEGACY_SERVICE`, the connector restricts the issued token to the user's `DEFAULT_ROLE` and verifies that role is actually granted to the user first. If the user has no default role, or the default role is not granted, issuance fails before any token is created.
+**Service users must have a granted default role.** For a user of type `SERVICE`, `SERVICE_AGENT`, or `LEGACY_SERVICE`, the connector restricts the issued token to the user's `DEFAULT_ROLE`, and verifies that role is granted to the user when its own role can read the user's grants. If the user has no default role, issuance fails before any token is created. If the default role is not granted, issuance fails either on that check or on Snowflake's own rejection of the statement.
 </Note>
 
 <Note>
