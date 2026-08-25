@@ -63,16 +63,14 @@ func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, to
 	if daysToExpiry < 1 {
 		return "", fmt.Errorf("snowflake: days to expiry must be at least one")
 	}
-	statement := fmt.Sprintf(
-		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s DAYS_TO_EXPIRY = %d;",
-		quoteIdentifier(userName), quoteIdentifier(tokenName), daysToExpiry,
-	)
+	roleClause := ""
 	if roleRestriction != "" {
-		statement = fmt.Sprintf(
-			"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s ROLE_RESTRICTION = %s DAYS_TO_EXPIRY = %d;",
-			quoteIdentifier(userName), quoteIdentifier(tokenName), quoteIdentifier(roleRestriction), daysToExpiry,
-		)
+		roleClause = fmt.Sprintf(" ROLE_RESTRICTION = %s", quoteIdentifier(roleRestriction))
 	}
+	statement := fmt.Sprintf(
+		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s%s DAYS_TO_EXPIRY = %d;",
+		quoteIdentifier(userName), quoteIdentifier(tokenName), roleClause, daysToExpiry,
+	)
 	result, err := c.executeStatement(ctx, statement)
 	if err != nil {
 		return "", err
