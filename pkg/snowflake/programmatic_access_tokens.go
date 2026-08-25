@@ -3,10 +3,12 @@ package snowflake
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"google.golang.org/grpc/codes"
 )
 
 type ProgrammaticAccessToken struct {
@@ -75,10 +77,19 @@ func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, to
 	if err != nil {
 		return "", err
 	}
-	if len(result.Data) != 1 || len(result.Data[0]) < 2 || result.Data[0][1] == "" {
+	if len(result.Data) != 1 {
+		return "", fmt.Errorf("snowflake: programmatic access token response did not return exactly one row")
+	}
+	// By column name, not position: a reordered or inserted column would otherwise
+	// return some other field as the credential instead of failing.
+	secret, err := result.ResultSetMetadata.GetStringValueFromRow(result.Data[0], "token_secret")
+	if err != nil {
+		return "", fmt.Errorf("snowflake: read programmatic access token secret: %w", err)
+	}
+	if secret == "" {
 		return "", fmt.Errorf("snowflake: programmatic access token response did not include token_secret")
 	}
-	return result.Data[0][1], nil
+	return secret, nil
 }
 
 func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, tokenName string) error {
@@ -100,7 +111,7 @@ func (c *Client) executeStatement(ctx context.Context, statement string) (*State
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&result), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, classifyStatementError(resp, &apiErr, err)
 	}
 	if result.StatementHandle == "" {
 		return &result, nil
@@ -115,6 +126,20 @@ func (c *Client) executeStatement(ctx context.Context, statement string) (*State
 		return nil, dedupeAPIError(err)
 	}
 	return &result, nil
+}
+
+// classifyStatementError joins ErrInsufficientPrivileges when Snowflake refused the statement
+// because the connector's role may not observe the object, so callers can skip it with
+// IsInsufficientPrivileges instead of failing the whole sync. Every other error is unchanged.
+func classifyStatementError(resp *http.Response, apiErr *SnowflakeError, err error) error {
+	if isAccessControlDenial(resp, apiErr) {
+		return uhttp.WrapErrors(
+			codes.PermissionDenied,
+			"baton-snowflake: insufficient privileges to run statement",
+			ErrInsufficientPrivileges, err,
+		)
+	}
+	return dedupeAPIError(err)
 }
 
 func quoteIdentifier(identifier string) string {

@@ -11,6 +11,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type programmaticAccessTokenBuilder struct {
@@ -31,7 +33,15 @@ func (o *programmaticAccessTokenBuilder) List(ctx context.Context, parentID *v2.
 	}
 	tokens, err := o.client.ListProgrammaticAccessTokens(ctx, parentID.GetResource())
 	if err != nil {
-		return nil, nil, err
+		// SHOW USER PROGRAMMATIC ACCESS TOKENS needs ownership or MONITOR on the target
+		// user. Without it Snowflake answers 422/003001, which means "nothing visible
+		// here" rather than a failure - one unprivileged user must not abort the sync.
+		if snowflake.IsInsufficientPrivileges(err) {
+			ctxzap.Extract(ctx).Debug("skipping programmatic access tokens: insufficient privileges",
+				zap.String("username", parentID.GetResource()))
+			return nil, &rs.SyncOpResults{}, nil
+		}
+		return nil, nil, fmt.Errorf("baton-snowflake: list programmatic access tokens: %w", err)
 	}
 	resources := make([]*v2.Resource, 0, len(tokens))
 	for _, token := range tokens {

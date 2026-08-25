@@ -21,9 +21,24 @@ sidebarTitle: Snowflake
 | Integrations | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 | Secrets | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 | RSA Public Keys | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
+| Programmatic access tokens | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
 | Licenses | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 
 The Snowflake connector supports [account provisioning](/product/admin/account-provisioning).
+
+### Issuing programmatic access tokens
+
+The connector can issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and can revoke one it has issued. Issued tokens are synced back as **Programmatic access token** resources, so they appear in your inventory alongside the user they belong to.
+
+Token lifetime is set by the requester. Snowflake accepts whole days only, and the connector rounds down so a token never outlives the requested expiry. The minimum is one day and the maximum is one year; when no expiry is requested the token lasts 15 days.
+
+<Warning>
+**Snowflake requires a network policy on the user before it will issue a programmatic access token.** If the target user has no network policy attached, Snowflake rejects the request with `Network Policy is required when creating a programmatic access token for user <name>`. Attach a network policy to the user (or set one at the account level) before issuing. Creating a network policy requires a role with `CREATE NETWORK POLICY` on the account, which is more than the connector's own role needs.
+</Warning>
+
+<Note>
+**Service users must have a granted default role.** For a user of type `SERVICE`, `SERVICE_AGENT`, or `LEGACY_SERVICE`, the connector restricts the issued token to the user's `DEFAULT_ROLE` and verifies that role is actually granted to the user first. If the user has no default role, or the default role is not granted, issuance fails before any token is created.
+</Note>
 
 <Note>
 **License data is opt-in and requires an organization account.** License resources report the Snowflake edition (Standard, Enterprise, or Business Critical) and, for single-account organizations, the number of users as consumed seats. Reading it requires connecting with an account that can view organization-level details, so enable this capability only when that access is available.
