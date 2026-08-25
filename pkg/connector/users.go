@@ -68,20 +68,6 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 		return nil, fmt.Errorf("baton-snowflake: a Snowflake user identity is required")
 	}
 
-	// Snowflake accepts a whole number of days. Floor rather than round up so the
-	// provider's actual expiration is never later than the caller's deadline.
-	now := time.Now().UTC()
-	days := programmaticAccessTokenDefaultDays
-	expiresAt := now.AddDate(0, 0, days)
-	if input.ExpiresAt != nil {
-		remaining := input.ExpiresAt.AsTime().Sub(now)
-		days = int(remaining / (24 * time.Hour))
-		if days < 1 {
-			return nil, fmt.Errorf("baton-snowflake: requested expiry leaves less than Snowflake's one-day minimum")
-		}
-		expiresAt = now.AddDate(0, 0, days)
-	}
-
 	tokenName := "c1-" + input.RequestID
 	user, _, err := o.client.GetUser(ctx, nil, input.IdentityID.Resource)
 	if err != nil {
@@ -100,17 +86,38 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			)
 		}
 		granted, err := o.client.RoleGrantedToUser(ctx, input.IdentityID.Resource, roleRestriction)
-		if err != nil {
-			return nil, fmt.Errorf("baton-snowflake: verify service user's default role: %w", err)
-		}
-		if !granted {
+		switch {
+		case err == nil && !granted:
 			return nil, fmt.Errorf(
 				"baton-snowflake: service user %q default role %q is not granted to the user; "+
 					"grant it before issuing a programmatic access token",
 				input.IdentityID.Resource, roleRestriction,
 			)
+		case snowflake.IsInsufficientPrivileges(err):
+			// SHOW GRANTS TO USER needs privileges that creating the token does not.
+			// This check only turns a Snowflake rejection into a better message, so a
+			// role that cannot run it must still be allowed to issue.
+			ctxzap.Extract(ctx).Debug("baton-snowflake: skipping default-role check: insufficient privileges",
+				zap.String("username", input.IdentityID.Resource))
+		case err != nil:
+			return nil, fmt.Errorf("baton-snowflake: verify service user's default role: %w", err)
 		}
 	}
+
+	// Snowflake derives the expiry from its own clock at ALTER USER time, so sample
+	// as late as possible: every round-trip between here and the statement pushes the
+	// real expiry further past the one computed below. Floor rather than round up so
+	// the provider's expiration is never later than the caller's deadline.
+	now := time.Now().UTC()
+	days := programmaticAccessTokenDefaultDays
+	if input.ExpiresAt != nil {
+		days = int(input.ExpiresAt.AsTime().Sub(now) / (24 * time.Hour))
+		if days < 1 {
+			return nil, fmt.Errorf("baton-snowflake: requested expiry leaves less than Snowflake's one-day minimum")
+		}
+	}
+	expiresAt := now.AddDate(0, 0, days)
+
 	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, roleRestriction, days)
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: create programmatic access token: %w", err)
@@ -137,22 +144,33 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	}()
 
 	issuedTokens, err := o.client.ListProgrammaticAccessTokens(ctx, input.IdentityID.Resource)
-	if err != nil {
-		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
-	}
-	found := false
-	for _, token := range issuedTokens {
-		if token.Name == tokenName {
-			expiresAt = token.ExpiresAt
-			found = true
-			break
+	switch {
+	case err == nil:
+		found := false
+		for _, token := range issuedTokens {
+			if token.Name == tokenName {
+				expiresAt = token.ExpiresAt
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake")
-	}
-	if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
-		return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
+		if !found {
+			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake")
+		}
+		if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
+			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
+		}
+	case snowflake.IsInsufficientPrivileges(err):
+		// Reading the token back needs ownership or MONITOR on the target user, which
+		// creating it does not. Destroying a good credential because the connector's
+		// role cannot see it would make issuance impossible for such a tenant. The
+		// locally computed expiry is never later than Snowflake's, so reporting it
+		// errs towards early rotation rather than towards a credential that outlives
+		// what C1 believes.
+		ctxzap.Extract(ctx).Debug("baton-snowflake: cannot read back token expiry: insufficient privileges",
+			zap.String("username", input.IdentityID.Resource))
+	default:
+		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
 	}
 
 	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
