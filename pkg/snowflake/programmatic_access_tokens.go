@@ -30,7 +30,11 @@ func (c *Client) RoleGrantedToUser(ctx context.Context, userName, roleName strin
 		if err != nil {
 			return false, fmt.Errorf("snowflake: read user role grant name: %w", err)
 		}
-		if strings.EqualFold(grantedOn, "ROLE") && name == roleName {
+		// SHOW GRANTS wraps a mixed-case or spaced identifier in double quotes, while
+		// DESCRIBE USER reports DEFAULT_ROLE bare, so comparing the two raw strings
+		// reports a granted role as ungranted and blocks issuance entirely.
+		if strings.EqualFold(grantedOn, "ROLE") &&
+			strings.EqualFold(unquoteSnowflakeIdentifier(name), unquoteSnowflakeIdentifier(roleName)) {
 			return true, nil
 		}
 	}
@@ -71,7 +75,7 @@ func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s%s DAYS_TO_EXPIRY = %d;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName), roleClause, daysToExpiry,
 	)
-	result, err := c.executeStatement(ctx, statement)
+	result, err := c.executeStatementAsUserAdmin(ctx, statement)
 	if err != nil {
 		return "", err
 	}
@@ -95,12 +99,23 @@ func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER IF EXISTS %s REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS %s;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName),
 	)
-	_, err := c.executeStatement(ctx, statement)
+	_, err := c.executeStatementAsUserAdmin(ctx, statement)
 	return err
 }
 
 func (c *Client) executeStatement(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
-	req, err := c.PostStatementRequest(ctx, []string{statement})
+	return c.executeStatementWithRole(ctx, statement, "")
+}
+
+// executeStatementAsUserAdmin runs a statement that mutates another user. The session's
+// default role is not guaranteed to hold ALTER USER on other users, which is why
+// SetUserDisabled, CreateUserREST and DeleteUserREST all force UserAdminRole too.
+func (c *Client) executeStatementAsUserAdmin(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
+	return c.executeStatementWithRole(ctx, statement, UserAdminRole)
+}
+
+func (c *Client) executeStatementWithRole(ctx context.Context, statement, role string) (*StatementsApiResponseBase, error) {
+	req, err := c.PostStatementRequestWithRole(ctx, []string{statement}, role)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +136,10 @@ func (c *Client) executeStatement(ctx context.Context, statement string) (*State
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&result), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		// Same classification as the POST leg: Snowflake reports an access-control
+		// denial on whichever leg surfaces the statement's outcome, and a statement
+		// that went async reports it here.
+		return nil, classifyStatementError(resp, &apiErr, err)
 	}
 	return &result, nil
 }
