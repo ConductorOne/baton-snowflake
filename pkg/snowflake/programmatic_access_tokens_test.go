@@ -88,3 +88,43 @@ func newTokenCreateServer(t *testing.T, statements *[]string) *httptest.Server {
 		})
 	}))
 }
+
+// A statement that goes async reports its outcome on the follow-up GET rather than
+// on the POST. Both legs must classify an access-control denial the same way, or a
+// denial that arrives asynchronously is indistinguishable from a real failure and
+// aborts the sync instead of skipping the object.
+func TestExecuteStatementClassifiesDenialOnEitherLeg(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		denyOnPost bool
+	}{
+		{name: "denied on the POST leg", denyOnPost: true},
+		{name: "denied on the follow-up GET leg", denyOnPost: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				deny := tc.denyOnPost == (r.Method == http.MethodPost)
+				w.Header().Set("Content-Type", "application/json")
+				if deny {
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"code":    "003001",
+						"message": "SQL access control error: Insufficient privileges to operate on user",
+					})
+					return
+				}
+				// Not the denying leg: hand back a handle so the client goes async.
+				_ = json.NewEncoder(w).Encode(map[string]any{"statementHandle": "handle-1"})
+			}))
+			defer server.Close()
+
+			client, err := New(server.URL, JWTConfig{}, server.Client())
+			require.NoError(t, err)
+
+			_, err = client.ListProgrammaticAccessTokens(context.Background(), "svc")
+			require.Error(t, err)
+			require.True(t, IsInsufficientPrivileges(err),
+				"denial should be classified as skippable, got %v", err)
+		})
+	}
+}

@@ -121,7 +121,10 @@ func (c *Client) executeStatement(ctx context.Context, statement string) (*State
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&result), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		// Same classification as the POST leg: Snowflake reports an access-control
+		// denial on whichever leg surfaces the statement's outcome, and a statement
+		// that went async reports it here.
+		return nil, classifyStatementError(resp, &apiErr, err)
 	}
 	return &result, nil
 }
