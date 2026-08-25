@@ -97,7 +97,7 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			// SHOW GRANTS TO USER needs privileges that creating the token does not.
 			// This check only turns a Snowflake rejection into a better message, so a
 			// role that cannot run it must still be allowed to issue.
-			ctxzap.Extract(ctx).Debug("baton-snowflake: skipping default-role check: insufficient privileges",
+			ctxzap.Extract(ctx).Warn("baton-snowflake: skipping default-role check: insufficient privileges",
 				zap.String("username", input.IdentityID.Resource))
 		case err != nil:
 			return nil, fmt.Errorf("baton-snowflake: verify service user's default role: %w", err)
@@ -167,8 +167,9 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 		// locally computed expiry is never later than Snowflake's, so reporting it
 		// errs towards early rotation rather than towards a credential that outlives
 		// what C1 believes.
-		ctxzap.Extract(ctx).Debug("baton-snowflake: cannot read back token expiry: insufficient privileges",
-			zap.String("username", input.IdentityID.Resource))
+		ctxzap.Extract(ctx).Warn("baton-snowflake: reporting a locally computed token expiry: insufficient privileges to read it back",
+			zap.String("username", input.IdentityID.Resource),
+			zap.Time("estimated_expires_at", expiresAt))
 	default:
 		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
 	}
