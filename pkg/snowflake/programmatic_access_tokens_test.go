@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,8 +34,8 @@ func TestCreateProgrammaticAccessTokenStatementShape(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var statements []string
-			server := newTokenCreateServer(t, &statements)
+			recorder := &statementRecorder{}
+			server := newTokenCreateServer(t, recorder)
 			defer server.Close()
 			client, err := New(server.URL, JWTConfig{}, server.Client())
 			require.NoError(t, err)
@@ -44,6 +45,7 @@ func TestCreateProgrammaticAccessTokenStatementShape(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.Equal(t, "the-secret", secret)
+			statements, _ := recorder.snapshot()
 			require.Equal(t, []string{tc.want}, statements)
 		})
 	}
@@ -57,11 +59,31 @@ func TestCreateProgrammaticAccessTokenRejectsNonPositiveExpiry(t *testing.T) {
 	require.ErrorContains(t, err, "days to expiry must be at least one")
 }
 
+// statementRecorder captures what each request carried. The handler runs on the
+// server's goroutine while the test reads from its own, so the mutex is load-bearing
+// under -race, not decoration.
+type statementRecorder struct {
+	mu         sync.Mutex
+	statements []string
+	roles      []string
+}
+
+func (r *statementRecorder) record(statement, role string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.statements = append(r.statements, statement)
+	r.roles = append(r.roles, role)
+}
+
+func (r *statementRecorder) snapshot() ([]string, []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.statements...), append([]string(nil), r.roles...)
+}
+
 // newTokenCreateServer records each statement it is sent and answers with the column
 // shape a live Snowflake ADD PROGRAMMATIC ACCESS TOKEN returns: [token_name, token_secret].
-var lastRole string
-
-func newTokenCreateServer(t *testing.T, statements *[]string) *httptest.Server {
+func newTokenCreateServer(t *testing.T, recorder *statementRecorder) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -76,8 +98,7 @@ func newTokenCreateServer(t *testing.T, statements *[]string) *httptest.Server {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		*statements = append(*statements, request.Statement)
-		lastRole = request.Role
+		recorder.record(request.Statement, request.Role)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"resultSetMetadata": map[string]any{
@@ -136,41 +157,45 @@ func TestExecuteStatementClassifiesDenialOnEitherLeg(t *testing.T) {
 // hold ALTER USER on other users. SetUserDisabled, CreateUserREST and DeleteUserREST all
 // force USERADMIN for the same reason; these statements must too.
 func TestTokenMutationsRunAsUserAdmin(t *testing.T) {
+	t.Parallel()
 	t.Run("create", func(t *testing.T) {
-		var statements []string
-		lastRole = ""
-		server := newTokenCreateServer(t, &statements)
+		t.Parallel()
+		recorder := &statementRecorder{}
+		server := newTokenCreateServer(t, recorder)
 		defer server.Close()
 		client, err := New(server.URL, JWTConfig{}, server.Client())
 		require.NoError(t, err)
 
 		_, err = client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", "", 7)
 		require.NoError(t, err)
-		require.Equal(t, UserAdminRole, lastRole)
+		_, roles := recorder.snapshot()
+		require.Equal(t, []string{UserAdminRole}, roles)
 	})
 
 	t.Run("remove", func(t *testing.T) {
-		var statements []string
-		lastRole = ""
-		server := newTokenCreateServer(t, &statements)
+		t.Parallel()
+		recorder := &statementRecorder{}
+		server := newTokenCreateServer(t, recorder)
 		defer server.Close()
 		client, err := New(server.URL, JWTConfig{}, server.Client())
 		require.NoError(t, err)
 
 		require.NoError(t, client.RemoveProgrammaticAccessToken(context.Background(), "svc", "c1-request-1"))
-		require.Equal(t, UserAdminRole, lastRole)
+		_, roles := recorder.snapshot()
+		require.Equal(t, []string{UserAdminRole}, roles)
 	})
 
 	t.Run("read-only statements do not force a role", func(t *testing.T) {
-		var statements []string
-		lastRole = "sentinel"
-		server := newTokenCreateServer(t, &statements)
+		t.Parallel()
+		recorder := &statementRecorder{}
+		server := newTokenCreateServer(t, recorder)
 		defer server.Close()
 		client, err := New(server.URL, JWTConfig{}, server.Client())
 		require.NoError(t, err)
 
 		_, _ = client.ListProgrammaticAccessTokens(context.Background(), "svc")
-		require.Empty(t, lastRole, "reads should run as the session's default role")
+		_, roles := recorder.snapshot()
+		require.Equal(t, []string{""}, roles, "reads should run as the session's default role")
 	})
 }
 
