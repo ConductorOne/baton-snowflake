@@ -45,6 +45,15 @@ var (
 		field.WithDescription("Enable synchronization of Snowflake secrets. When enabled, the connector will sync secrets from your Snowflake account."),
 		field.WithDefaultValue(false),
 	)
+	IssueCredentials = field.BoolField(
+		"issue-credentials",
+		field.WithDisplayName("Issue Credentials"),
+		field.WithDescription(
+			"Enable issuing Snowflake programmatic access tokens for existing users. Independent of "+
+				"Sync Secrets: this also syncs the tokens it issues so they can be revoked, but no other secrets.",
+		),
+		field.WithDefaultValue(false),
+	)
 	ExcludedDatabases = field.StringSliceField(
 		"excluded-databases",
 		field.WithDisplayName("Excluded Databases"),
@@ -69,6 +78,7 @@ var (
 		PrivateKeyPathField,
 		UserIdentifierField,
 		SyncSecrets,
+		IssueCredentials,
 		ExcludedDatabases,
 	}
 

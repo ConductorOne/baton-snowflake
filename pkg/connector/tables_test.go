@@ -879,7 +879,6 @@ func newDatabaseGrantsStatusMockServer(t *testing.T, owner string, rolesStatus i
 	}))
 }
 
-
 // TestTableBuilder_List_EnumeratesSchemasWhenVisible is the control for the test above: it
 // proves the mock drives the real code path, so the 422 case cannot pass for the wrong reason.
 func TestTableBuilder_List_EnumeratesSchemasWhenVisible(t *testing.T) {

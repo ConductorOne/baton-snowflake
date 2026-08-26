@@ -10,6 +10,7 @@ type Snowflake struct {
 	PrivateKeyPath string `mapstructure:"private-key-path"`
 	UserIdentifier string `mapstructure:"user-identifier"`
 	SyncSecrets bool `mapstructure:"sync-secrets"`
+	IssueCredentials bool `mapstructure:"issue-credentials"`
 	ExcludedDatabases []string `mapstructure:"excluded-databases"`
 }
 
