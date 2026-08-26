@@ -110,7 +110,7 @@ func TestUserResourceNHIAnnotation(t *testing.T) {
 	ctx := context.Background()
 
 	serviceUser := &snowflake.User{Username: "svc", Type: "SERVICE"}
-	res, err := userResource(ctx, serviceUser, false)
+	res, err := userResource(ctx, serviceUser, secretOptions{})
 	if err != nil {
 		t.Fatalf("userResource() error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestUserResourceNHIAnnotation(t *testing.T) {
 	}
 
 	personUser := &snowflake.User{Username: "alice", Type: "PERSON"}
-	res, err = userResource(ctx, personUser, false)
+	res, err = userResource(ctx, personUser, secretOptions{})
 	if err != nil {
 		t.Fatalf("userResource() error = %v", err)
 	}

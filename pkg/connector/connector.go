@@ -20,14 +20,16 @@ import (
 type Connector struct {
 	Client            *snowflake.Client
 	SyncSecrets       bool
+	IssueCredentials  bool
 	excludedDatabases []string
 }
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
-	userSyncer := connectorbuilder.ResourceSyncerV2(newUserBuilder(d.Client, d.SyncSecrets))
-	if d.SyncSecrets {
-		userSyncer = newCredentialUserBuilder(d.Client, d.SyncSecrets)
+	secrets := secretOptions{syncSecrets: d.SyncSecrets, issueCredentials: d.IssueCredentials}
+	userSyncer := connectorbuilder.ResourceSyncerV2(newUserBuilder(d.Client, secrets))
+	if d.IssueCredentials {
+		userSyncer = newCredentialUserBuilder(d.Client, secrets)
 	}
 	builders := []connectorbuilder.ResourceSyncerV2{
 		userSyncer,
@@ -39,12 +41,10 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 	}
 
 	if d.SyncSecrets {
-		builders = append(
-			builders,
-			newSecretBuilder(d.Client),
-			newRsaBuilder(d.Client),
-			newProgrammaticAccessTokenBuilder(d.Client),
-		)
+		builders = append(builders, newSecretBuilder(d.Client), newRsaBuilder(d.Client))
+	}
+	if secrets.tokensSynced() {
+		builders = append(builders, newProgrammaticAccessTokenBuilder(d.Client))
 	}
 
 	return builders
@@ -264,6 +264,7 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 	return &Connector{
 		Client:            client,
 		SyncSecrets:       cfg.SyncSecrets,
+		IssueCredentials:  cfg.IssueCredentials,
 		excludedDatabases: cfg.ExcludedDatabases,
 	}, nil, nil
 }
