@@ -70,6 +70,25 @@
     },
     {
       "resourceType": {
+        "id": "programmatic_access_token",
+        "displayName": "Programmatic Access Token",
+        "traits": [
+          "TRAIT_SECRET"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC",
+        "CAPABILITY_RESOURCE_DELETE"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
         "id": "rsa_public_key",
         "displayName": "RSA Public Key",
         "traits": [
@@ -133,9 +152,24 @@
       "capabilities": [
         "CAPABILITY_SYNC",
         "CAPABILITY_ACCOUNT_PROVISIONING",
-        "CAPABILITY_RESOURCE_DELETE"
+        "CAPABILITY_RESOURCE_DELETE",
+        "CAPABILITY_CREDENTIAL_ISSUE"
       ],
-      "permissions": {}
+      "permissions": {},
+      "credentialIssue": {
+        "options": [
+          {
+            "option": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN",
+            "expiry": {
+              "min": "86400s",
+              "max": "31536000s"
+            },
+            "resourceMode": "CREDENTIAL_RESOURCE_MODE_DISCOVERABLE",
+            "secretResourceTypeId": "programmatic_access_token"
+          }
+        ],
+        "preferredOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN"
+      }
     }
   ],
   "connectorCapabilities": [
@@ -143,7 +177,8 @@
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
     "CAPABILITY_RESOURCE_DELETE",
-    "CAPABILITY_ACTIONS"
+    "CAPABILITY_ACTIONS",
+    "CAPABILITY_CREDENTIAL_ISSUE"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {

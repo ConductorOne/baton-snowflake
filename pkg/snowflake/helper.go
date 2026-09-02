@@ -32,6 +32,18 @@ func isAccessControlDenial(resp *http.Response, apiErr *SnowflakeError) bool {
 		apiErr.Code == sqlAccessControlErrorCode
 }
 
+// NormalizeNullValue maps Snowflake's textual rendering of a NULL cell to an empty string.
+// The SQL API returns every column as text, so an unset property such as DEFAULT_ROLE arrives
+// as the literal "null" rather than as "". Callers testing a string column for absence must go
+// through this, or the absence test silently never matches.
+func NormalizeNullValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == rowNull {
+		return ""
+	}
+	return trimmed
+}
+
 // IsInsufficientPrivileges reports whether err is a Snowflake access-control denial that the
 // connector may skip (HTTP 422 with Snowflake code 003001, joined as ErrInsufficientPrivileges).
 //

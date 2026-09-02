@@ -18,12 +18,184 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *snowflake.Client
 	syncSecrets  bool
+}
+
+// credentialUserBuilder opts into credential issuance only when secret syncing
+// is enabled. The issued-token resource type is therefore registered alongside
+// the issuer, which is required by the SDK's build-time revoke validation.
+type credentialUserBuilder struct {
+	*userBuilder
+}
+
+var _ connectorbuilder.CredentialIssuerV2 = (*credentialUserBuilder)(nil)
+
+const (
+	programmaticAccessTokenMinLifetime = 24 * time.Hour
+	programmaticAccessTokenMaxLifetime = 365 * 24 * time.Hour
+	programmaticAccessTokenDefaultDays = 15
+)
+
+func newCredentialUserBuilder(client *snowflake.Client, syncSecrets bool) *credentialUserBuilder {
+	return &credentialUserBuilder{userBuilder: newUserBuilder(client, syncSecrets)}
+}
+
+func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.CredentialDetailsCredentialIssue, annotations.Annotations, error) {
+	return v2.CredentialDetailsCredentialIssue_builder{
+		Options: []*v2.CredentialIssueOptionDescriptor{
+			v2.CredentialIssueOptionDescriptor_builder{
+				Option: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN,
+				Expiry: v2.IssuanceExpiryCapability_builder{
+					Min: durationpb.New(programmaticAccessTokenMinLifetime),
+					Max: durationpb.New(programmaticAccessTokenMaxLifetime),
+				}.Build(),
+				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+				SecretResourceTypeId: programmaticAccessTokenResourceType.Id,
+			}.Build(),
+		},
+		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN,
+	}.Build(), nil, nil
+}
+
+func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (*connectorbuilder.CredentialIssueOutput, error) {
+	if input == nil || input.IdentityID == nil || input.IdentityID.ResourceType != userResourceType.Id || input.IdentityID.Resource == "" {
+		return nil, fmt.Errorf("baton-snowflake: a Snowflake user identity is required")
+	}
+
+	tokenName := "c1-" + input.RequestID
+	user, _, err := o.client.GetUser(ctx, nil, input.IdentityID.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: get user for programmatic access token: %w", err)
+	}
+	roleRestriction := ""
+	if isServiceUserType(user.Type) {
+		// DESCRIBE USER renders an unset DEFAULT_ROLE as Snowflake's textual NULL,
+		// not as an empty string, so this must normalize before testing for absence.
+		roleRestriction = snowflake.NormalizeNullValue(user.DefaultRole)
+		if roleRestriction == "" {
+			return nil, fmt.Errorf(
+				"baton-snowflake: service user %q has no default role; assign a role and set it as "+
+					"the user's default role before issuing a programmatic access token",
+				input.IdentityID.Resource,
+			)
+		}
+		granted, err := o.client.RoleGrantedToUser(ctx, input.IdentityID.Resource, roleRestriction)
+		switch {
+		case err == nil && !granted:
+			return nil, fmt.Errorf(
+				"baton-snowflake: service user %q default role %q is not granted to the user; "+
+					"grant it before issuing a programmatic access token",
+				input.IdentityID.Resource, roleRestriction,
+			)
+		case snowflake.IsInsufficientPrivileges(err):
+			// SHOW GRANTS TO USER needs privileges that creating the token does not.
+			// This check only turns a Snowflake rejection into a better message, so a
+			// role that cannot run it must still be allowed to issue.
+			ctxzap.Extract(ctx).Warn("baton-snowflake: skipping default-role check: insufficient privileges",
+				zap.String("username", input.IdentityID.Resource))
+		case err != nil:
+			return nil, fmt.Errorf("baton-snowflake: verify service user's default role: %w", err)
+		}
+	}
+
+	// Snowflake derives the expiry from its own clock at ALTER USER time, so sample
+	// as late as possible: every round-trip between here and the statement pushes the
+	// real expiry further past the one computed below. Floor rather than round up so
+	// the provider's expiration is never later than the caller's deadline.
+	now := time.Now().UTC()
+	days := programmaticAccessTokenDefaultDays
+	if input.ExpiresAt != nil {
+		days = int(input.ExpiresAt.AsTime().Sub(now) / (24 * time.Hour))
+		if days < 1 {
+			return nil, fmt.Errorf("baton-snowflake: requested expiry leaves less than Snowflake's one-day minimum")
+		}
+	}
+	expiresAt := now.AddDate(0, 0, days)
+
+	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, roleRestriction, days)
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: create programmatic access token: %w", err)
+	}
+
+	// The token now exists in Snowflake. Every failure below discards the plaintext
+	// without recording a secret resource, so without this the credential is left
+	// live and unreferenced: the SDK does not retry issuance, and nothing else
+	// holds a handle to revoke it.
+	issued := false
+	defer func() {
+		if issued {
+			return
+		}
+		// Detached from ctx so cleanup still runs when the caller's context is done.
+		if rmErr := o.client.RemoveProgrammaticAccessToken(
+			context.WithoutCancel(ctx), input.IdentityID.Resource, tokenName,
+		); rmErr != nil {
+			ctxzap.Extract(ctx).Error("baton-snowflake: failed to remove orphaned programmatic access token",
+				zap.String("username", input.IdentityID.Resource),
+				zap.String("token_name", tokenName),
+				zap.Error(rmErr))
+		}
+	}()
+
+	issuedTokens, err := o.client.ListProgrammaticAccessTokens(ctx, input.IdentityID.Resource)
+	switch {
+	case err == nil:
+		found := false
+		for _, token := range issuedTokens {
+			if token.Name == tokenName {
+				expiresAt = token.ExpiresAt
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake")
+		}
+		if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
+			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
+		}
+	case snowflake.IsInsufficientPrivileges(err):
+		// Reading the token back needs ownership or MONITOR on the target user, which
+		// creating it does not. Destroying a good credential because the connector's
+		// role cannot see it would make issuance impossible for such a tenant. The
+		// locally computed expiry is never later than Snowflake's, so reporting it
+		// errs towards early rotation rather than towards a credential that outlives
+		// what C1 believes.
+		ctxzap.Extract(ctx).Warn("baton-snowflake: reporting a locally computed token expiry: insufficient privileges to read it back",
+			zap.String("username", input.IdentityID.Resource),
+			zap.Time("estimated_expires_at", expiresAt))
+	default:
+		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
+	}
+
+	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+
+	issued = true
+	return &connectorbuilder.CredentialIssueOutput{
+		Secret: secret,
+		PlaintextData: []*v2.PlaintextData{
+			v2.PlaintextData_builder{Name: "token", Bytes: []byte(plaintext)}.Build(),
+		},
+		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+	}, nil
+}
+
+func isServiceUserType(userType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(userType)) {
+	case userTypeService, userTypeServiceAgent, userTypeLegacyService:
+		return true
+	default:
+		return false
+	}
 }
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -67,7 +239,14 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 		rs.WithResourceStatus(getUserStatus(user), getUserDetailedStatus(user)),
 	}
 	if syncSecrets {
-		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+		// The syncer only calls a child type's List with a parent when the parent
+		// carries this annotation. Without the token entry an issued programmatic
+		// access token is never discovered by a sync, which contradicts the
+		// DISCOVERABLE resource mode the issuer advertises.
+		opts = append(opts,
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
+			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: programmaticAccessTokenResourceType.Id}),
+		)
 	}
 	if nhiType, nhiDetail, isNHI := classifyUserNHI(user.Type); isNHI {
 		opts = append(opts, rs.WithNHIType(nhiType, nhiDetail))
@@ -89,6 +268,7 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 }
 
 // https://docs.snowflake.com/en/sql-reference/sql/create-user#label-user-type-property
+//
 //	TYPE = { PERSON | SERVICE | SERVICE_AGENT | LEGACY_SERVICE }
 const (
 	userTypeService       = "SERVICE"
@@ -101,8 +281,7 @@ const (
 )
 
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
-	switch strings.ToUpper(strings.TrimSpace(user.Type)) {
-	case userTypeService, userTypeServiceAgent, userTypeLegacyService:
+	if isServiceUserType(user.Type) {
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
