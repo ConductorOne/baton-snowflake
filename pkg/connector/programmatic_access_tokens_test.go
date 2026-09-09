@@ -28,7 +28,7 @@ func TestCredentialUserBuilderIssueServiceUserUsesDefaultRoleRestriction(t *test
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -49,7 +49,7 @@ func TestCredentialUserBuilderIssueServiceUserWithUnassignedDefaultRoleFailsBefo
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -212,7 +212,7 @@ func TestProgrammaticAccessTokenIDRoundTrip(t *testing.T) {
 }
 
 func TestCredentialIssuanceCapabilitiesRegisterWithDeleter(t *testing.T) {
-	server, err := connectorbuilder.NewConnector(context.Background(), &Connector{SyncSecrets: true})
+	server, err := connectorbuilder.NewConnector(context.Background(), &Connector{IssueCredentials: true})
 	if err != nil {
 		t.Fatalf("NewConnector() error = %v", err)
 	}
@@ -242,7 +242,7 @@ func TestCredentialIssuanceCapabilitiesRegisterWithDeleter(t *testing.T) {
 }
 
 func TestIssueCapabilityDetails(t *testing.T) {
-	details, _, err := newCredentialUserBuilder(nil, true).IssueCapabilityDetails(context.Background())
+	details, _, err := newCredentialUserBuilder(nil, secretOptions{issueCredentials: true}).IssueCapabilityDetails(context.Background())
 	if err != nil {
 		t.Fatalf("IssueCapabilityDetails() error = %v", err)
 	}
@@ -268,7 +268,7 @@ func TestCredentialUserBuilderIssueServiceUserWithNullDefaultRoleReportsMissingR
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -292,7 +292,7 @@ func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *te
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -310,28 +310,26 @@ func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *te
 func TestUserResourceAdvertisesTokenAsChildResourceType(t *testing.T) {
 	// The syncer walks a child type per parent only when the parent carries this
 	// annotation. Without it an issued token is never discovered by a sync, which
-	// contradicts the DISCOVERABLE mode the issuer advertises.
-	resource, err := userResource(context.Background(), &snowflake.User{Username: "service-user", Type: "SERVICE"}, true)
+	// contradicts the DISCOVERABLE mode the issuer advertises. issue-credentials alone
+	// must be enough: it is the flag that makes tokens exist in the first place.
+	resource, err := userResource(context.Background(), &snowflake.User{Username: "service-user", Type: "SERVICE"}, secretOptions{issueCredentials: true})
 	if err != nil {
 		t.Fatalf("userResource() error = %v", err)
 	}
-	want := map[string]bool{
-		rsaPublicKeyResourceType.Id:            false,
-		programmaticAccessTokenResourceType.Id: false,
-	}
+	found := false
 	for _, annotation := range resource.GetAnnotations() {
 		child := &v2.ChildResourceType{}
 		if annotation.MessageIs(child) {
 			if err := annotation.UnmarshalTo(child); err != nil {
 				t.Fatalf("unmarshal child resource type: %v", err)
 			}
-			want[child.GetResourceTypeId()] = true
+			if child.GetResourceTypeId() == programmaticAccessTokenResourceType.Id {
+				found = true
+			}
 		}
 	}
-	for id, found := range want {
-		if !found {
-			t.Fatalf("user resource is missing ChildResourceType %q", id)
-		}
+	if !found {
+		t.Fatalf("user resource is missing ChildResourceType %q", programmaticAccessTokenResourceType.Id)
 	}
 }
 
@@ -352,7 +350,7 @@ func TestCredentialUserBuilderIssueKeepsTokenWhenReadBackIsDenied(t *testing.T) 
 		t.Fatalf("new client: %v", err)
 	}
 
-	output, err := newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	output, err := newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -391,7 +389,7 @@ func TestCredentialUserBuilderIssueProceedsWhenRoleCheckIsDenied(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -422,7 +420,7 @@ func TestCredentialUserBuilderIssueSamplesExpiryAfterPreflight(t *testing.T) {
 	}
 
 	requested := time.Now().UTC().Add(2*24*time.Hour + 50*time.Millisecond)
-	_, err = newCredentialUserBuilder(client, true).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 		ExpiresAt:  timestamppb.New(requested),

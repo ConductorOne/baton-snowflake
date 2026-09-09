@@ -284,6 +284,7 @@ Flags:
 --excluded-databases strings  Database names to exclude from sync, case-insensitive. Can be specified multiple times. ($BATON_EXCLUDED_DATABASES)
 -f, --file string             The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
 -h, --help                    help for baton-snowflake
+--issue-credentials           Enable issuing Snowflake programmatic access tokens for existing users. ($BATON_ISSUE_CREDENTIALS)
 --log-format string           The output format for logs: json, console ($BATON_LOG_FORMAT) (default "json")
 --log-level string            The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
 --private-key string          Private Key (PEM format). ($BATON_PRIVATE_KEY)

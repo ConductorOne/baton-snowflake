@@ -28,7 +28,9 @@ The Snowflake connector supports [account provisioning](/product/admin/account-p
 
 ### Issuing programmatic access tokens
 
-The connector can issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and can revoke one it has issued. Issued tokens are synced back as **Programmatic access token** resources, so they appear in your inventory alongside the user they belong to.
+Enable **Issue credentials** to let the connector issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and revoke one it has issued. Issued tokens are synced back as **Programmatic access token** resources, so they appear in your inventory alongside the user they belong to.
+
+**Issue credentials** and **Sync secrets** are independent. Enabling **Issue credentials** syncs the programmatic access tokens the connector can revoke, and nothing else; enabling **Sync secrets** inventories Snowflake secrets and RSA public keys without granting the ability to mint tokens. Enable both if you want a full secret inventory and issuance.
 
 Token lifetime is set by the requester. Snowflake accepts whole days only, and the connector rounds down so a token never outlives the requested expiry. The minimum is one day and the maximum is one year; when no expiry is requested the token lasts 15 days.
 
@@ -44,7 +46,7 @@ Token lifetime is set by the requester. Snowflake accepts whole days only, and t
 **License data is opt-in and requires an organization account.** License resources report the Snowflake edition (Standard, Enterprise, or Business Critical) and, for single-account organizations, the number of users as consumed seats. Reading it requires connecting with an account that can view organization-level details, so enable this capability only when that access is available.
 </Note>
 
-[This connector can sync secrets](/product/admin/inventory) and display them on the **Inventory** page.
+[This connector can sync secrets](/product/admin/inventory) and display them on the **Inventory** page, and can issue programmatic access tokens. Both are opt-in and configured separately.
 
 ### Connector actions
 
@@ -174,7 +176,10 @@ In the **Username** field, enter your Snowflake username.
 In the **RSA Private Key (PEM Format)** field, upload the private key file.
 </Step>
 <Step>
-**Optional.** Enable **Sync secrets** to display them on the [Inventory page](/product/admin/inventory). 
+**Optional.** Enable **Sync secrets** to inventory Snowflake secrets and RSA public keys on the [Inventory page](/product/admin/inventory).
+</Step>
+<Step>
+**Optional.** Enable **Issue credentials** to allow issuing and revoking programmatic access tokens. This is separate from **Sync secrets** — see [Issuing programmatic access tokens](#issuing-programmatic-access-tokens) for the prerequisites.
 </Step>
 <Step>
 **Optional.** In the **Excluded Databases** field, enter the names of any Snowflake databases you want to skip during sync. You can add multiple names. Matching is case-insensitive. Excluded databases and all their tables are omitted from every sync.

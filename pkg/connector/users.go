@@ -24,12 +24,29 @@ import (
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *snowflake.Client
-	syncSecrets  bool
+	secrets      secretOptions
 }
 
-// credentialUserBuilder opts into credential issuance only when secret syncing
-// is enabled. The issued-token resource type is therefore registered alongside
-// the issuer, which is required by the SDK's build-time revoke validation.
+// secretOptions carries the two independent gates for secret-bearing behaviour:
+// sync-secrets lists secrets that already exist, and issue-credentials mints
+// programmatic access tokens. A tenant may want inventory without minting, or
+// minting without a full secret inventory, so neither implies the other.
+type secretOptions struct {
+	syncSecrets      bool
+	issueCredentials bool
+}
+
+// tokensSynced reports whether the programmatic access token type is synced.
+// Issuance advertises DISCOVERABLE, so turning it on has to make issued tokens
+// syncable even when the broader secret sync is off; otherwise the credential
+// exists with nothing holding a handle to revoke it.
+func (s secretOptions) tokensSynced() bool {
+	return s.syncSecrets || s.issueCredentials
+}
+
+// credentialUserBuilder adds credential issuance to the user syncer, and is
+// registered only when issue-credentials is set. The issued-token resource type is
+// registered alongside it, which the SDK's build-time revoke validation requires.
 type credentialUserBuilder struct {
 	*userBuilder
 }
@@ -42,8 +59,8 @@ const (
 	programmaticAccessTokenDefaultDays = 15
 )
 
-func newCredentialUserBuilder(client *snowflake.Client, syncSecrets bool) *credentialUserBuilder {
-	return &credentialUserBuilder{userBuilder: newUserBuilder(client, syncSecrets)}
+func newCredentialUserBuilder(client *snowflake.Client, secrets secretOptions) *credentialUserBuilder {
+	return &credentialUserBuilder{userBuilder: newUserBuilder(client, secrets)}
 }
 
 func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.CredentialDetailsCredentialIssue, annotations.Annotations, error) {
@@ -202,7 +219,7 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
-func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v2.Resource, error) {
+func userResource(_ context.Context, user *snowflake.User, secrets secretOptions) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"email":           user.Email,
 		"login":           user.Login,
@@ -238,15 +255,15 @@ func userResource(_ context.Context, user *snowflake.User, syncSecrets bool) (*v
 		rs.WithResourceProfile(profile),
 		rs.WithResourceStatus(getUserStatus(user), getUserDetailedStatus(user)),
 	}
-	if syncSecrets {
+	if secrets.syncSecrets {
+		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
+	}
+	if secrets.tokensSynced() {
 		// The syncer only calls a child type's List with a parent when the parent
-		// carries this annotation. Without the token entry an issued programmatic
-		// access token is never discovered by a sync, which contradicts the
-		// DISCOVERABLE resource mode the issuer advertises.
-		opts = append(opts,
-			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}),
-			rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: programmaticAccessTokenResourceType.Id}),
-		)
+		// carries this annotation. Without it an issued programmatic access token is
+		// never discovered by a sync, which contradicts the DISCOVERABLE resource
+		// mode the issuer advertises.
+		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: programmaticAccessTokenResourceType.Id}))
 	}
 	if nhiType, nhiDetail, isNHI := classifyUserNHI(user.Type); isNHI {
 		opts = append(opts, rs.WithNHIType(nhiType, nhiDetail))
@@ -389,7 +406,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var resources []*v2.Resource
 	for _, user := range users {
-		resource, err := userResource(ctx, &user, o.syncSecrets) // #nosec G601
+		resource, err := userResource(ctx, &user, o.secrets) // #nosec G601
 		if err != nil {
 			return nil, nil, wrapError(err, "failed to create user resource")
 		}
@@ -511,7 +528,7 @@ func (o *userBuilder) CreateAccount(
 	}
 
 	// Build resource for the new user
-	resource, err := userResource(ctx, user, o.syncSecrets)
+	resource, err := userResource(ctx, user, o.secrets)
 	if err != nil {
 		return nil, nil, nil, wrapError(err, "failed to create user resource")
 	}
@@ -629,10 +646,10 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId, par
 	return nil, nil
 }
 
-func newUserBuilder(client *snowflake.Client, syncSecrets bool) *userBuilder {
+func newUserBuilder(client *snowflake.Client, secrets secretOptions) *userBuilder {
 	return &userBuilder{
 		resourceType: userResourceType,
 		client:       client,
-		syncSecrets:  syncSecrets,
+		secrets:      secrets,
 	}
 }
