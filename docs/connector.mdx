@@ -30,7 +30,11 @@ The Snowflake connector supports [account provisioning](/product/admin/account-p
 
 Enable **Issue credentials** to let the connector issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and revoke one it has issued. Issued tokens are synced back as **Programmatic access token** resources, so they appear in your inventory alongside the user they belong to.
 
-**Issue credentials** and **Sync secrets** are independent. Enabling **Issue credentials** syncs the programmatic access tokens the connector can revoke, and nothing else; enabling **Sync secrets** inventories Snowflake secrets and RSA public keys without granting the ability to mint tokens. Enable both if you want a full secret inventory and issuance.
+**Issue credentials** and **Sync secrets** are independent. Enabling **Issue credentials** lets the connector mint and revoke programmatic access tokens, and nothing else; enabling **Sync secrets** inventories Snowflake secrets, RSA public keys, and existing programmatic access tokens without granting the ability to mint tokens. Enable both if you want a full secret inventory and issuance.
+
+<Note>
+**Inventorying programmatic access tokens requires a privilege on each user.** Under either flag, the sync runs `SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER` for each user in the account, and Snowflake requires ownership of that user or the `MONITOR` privilege on it. When the connector's role has neither, it skips that user's tokens with a debug-level log and the sync completes, so the token inventory can be silently incomplete. If you are upgrading a connector that already enables **Sync secrets**, its role may not hold this privilege — grant the connector's role `MONITOR` on users to close the gap.
+</Note>
 
 Token lifetime is set by the requester. Snowflake accepts whole days only, and the connector rounds down so a token never outlives the requested expiry. The minimum is one day and the maximum is one year; when no expiry is requested the token lasts 15 days.
 
