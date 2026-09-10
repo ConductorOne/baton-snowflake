@@ -26,7 +26,7 @@ type Connector struct {
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
-	secrets := secretOptions{syncSecrets: d.SyncSecrets, issueCredentials: d.IssueCredentials}
+	secrets := secretOptions{syncSecrets: d.SyncSecrets}
 	userSyncer := connectorbuilder.ResourceSyncerV2(newUserBuilder(d.Client, secrets))
 	if d.IssueCredentials {
 		userSyncer = newCredentialUserBuilder(d.Client, secrets)
@@ -38,13 +38,15 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 		newTableBuilder(d.Client),
 		newIntegrationBuilder(d.Client),
 		newLicenseBuilder(d.Client),
+		// The programmatic_access_token type is opt-in (OptInRequired annotation on
+		// its resource type), so it is registered unconditionally: gating it behind
+		// --issue-credentials would make an on→off flag toggle delete every synced
+		// token, including the revocation handles for credentials C1 issued.
+		newProgrammaticAccessTokenBuilder(d.Client),
 	}
 
 	if d.SyncSecrets {
 		builders = append(builders, newSecretBuilder(d.Client), newRsaBuilder(d.Client))
-	}
-	if secrets.tokensSynced() {
-		builders = append(builders, newProgrammaticAccessTokenBuilder(d.Client))
 	}
 
 	return builders

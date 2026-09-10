@@ -39,11 +39,16 @@ var (
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
 		Annotations: getSkipEntitlementsAnnotation(),
 	}
+	// OptInRequired: a tenant that cannot grant OWNERSHIP or MODIFY PROGRAMMATIC
+	// AUTHENTICATION METHODS on every user must be able to keep this type off in
+	// the C1 UI. Syncing it without that privilege would fail every sync (the
+	// builder's List refuses to return an error-free empty result on a denial,
+	// which would silently delete previously synced tokens).
 	programmaticAccessTokenResourceType = &v2.ResourceType{
 		Id:          "programmatic_access_token",
 		DisplayName: "Programmatic Access Token",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
-		Annotations: getSkipEntitlementsAnnotation(),
+		Annotations: getOptInAnnotations(),
 	}
 	integrationResourceType = &v2.ResourceType{
 		Id:          "integration",
@@ -55,7 +60,7 @@ var (
 		Id:          "license",
 		DisplayName: "License",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_LICENSE_PROFILE},
-		Annotations: getLicenseAnnotations(),
+		Annotations: getOptInAnnotations(),
 	}
 )
 
@@ -66,7 +71,7 @@ func getSkipEntitlementsAnnotation() annotations.Annotations {
 	return annotations
 }
 
-func getLicenseAnnotations() annotations.Annotations {
+func getOptInAnnotations() annotations.Annotations {
 	annos := annotations.Annotations{}
 	annos.Update(&v2.SkipEntitlementsAndGrants{})
 	annos.Update(&v2.OptInRequired{})

@@ -41,10 +41,11 @@ func TestMissingLoginPrivilegeErr(t *testing.T) {
 	}
 }
 
-// sync-secrets and issue-credentials are independent, but not unrelated: issuance
-// advertises DISCOVERABLE, so turning it on has to make the token type syncable even
-// when the broader secret sync is off. Otherwise an issued credential exists with
-// nothing holding a handle to revoke it.
+// sync-secrets and issue-credentials are independent and neither one registers the
+// programmatic_access_token type: the builder is always registered and the type is
+// OptInRequired, so an on→off flag toggle can never delete synced tokens or their
+// revocation handles. The flags only choose the user syncer (issuance) and the
+// secret/RSA builders.
 func TestSecretFlagsGateIndependently(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -56,7 +57,7 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 	}{
 		{
 			name:      "neither",
-			wantTypes: []string{"account_role", "database", "integration", "license", "table", "user"},
+			wantTypes: []string{"account_role", "database", "integration", "license", "programmatic_access_token", "table", "user"},
 		},
 		{
 			name:        "inventory without minting",
@@ -96,13 +97,21 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 			require.NoError(t, err)
 
 			gotTypes, gotIssuer := []string{}, false
+			patOptIn := true
 			for _, capability := range response.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
 				gotTypes = append(gotTypes, capability.GetResourceType().GetId())
 				if capability.GetResourceType().GetId() == userResourceType.Id && capability.GetCredentialIssue() != nil {
 					gotIssuer = true
 				}
+				if capability.GetResourceType().GetId() == programmaticAccessTokenResourceType.Id {
+					// C1 keeps non-opted-in types out of the sync, which is what
+					// protects revocation handles from a flag toggle now that the
+					// builder is registered unconditionally.
+					patOptIn = capability.GetOptInRequired()
+				}
 			}
 			sort.Strings(gotTypes)
+			require.True(t, patOptIn, "programmatic_access_token must be opt-in in every flag combination")
 			require.Equal(t, tc.wantTypes, gotTypes)
 			require.Equal(t, tc.wantIssuer, gotIssuer, "credential issuance advertised")
 
@@ -110,7 +119,7 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 			// type is registered but never walked per user.
 			resource, err := userResource(context.Background(),
 				&snowflake.User{Username: "service-user", Type: "SERVICE"},
-				secretOptions{syncSecrets: tc.syncSecrets, issueCredentials: tc.issueCredentials})
+				secretOptions{syncSecrets: tc.syncSecrets})
 			require.NoError(t, err)
 			children := []string{}
 			for _, annotation := range resource.GetAnnotations() {
@@ -121,12 +130,9 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 				}
 			}
 			sort.Strings(children)
-			want := []string{}
+			want := []string{programmaticAccessTokenResourceType.Id}
 			if tc.syncSecrets {
 				want = append(want, rsaPublicKeyResourceType.Id)
-			}
-			if tc.syncSecrets || tc.issueCredentials {
-				want = append(want, programmaticAccessTokenResourceType.Id)
 			}
 			sort.Strings(want)
 			require.Equal(t, want, children)

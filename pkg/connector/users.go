@@ -27,21 +27,10 @@ type userBuilder struct {
 	secrets      secretOptions
 }
 
-// secretOptions carries the two independent gates for secret-bearing behaviour:
-// sync-secrets lists secrets that already exist, and issue-credentials mints
-// programmatic access tokens. A tenant may want inventory without minting, or
-// minting without a full secret inventory, so neither implies the other.
+// secretOptions carries the sync-secrets gate: when set, the user builder
+// advertises the RSA public key child type so per-user RSA keys get walked.
 type secretOptions struct {
-	syncSecrets      bool
-	issueCredentials bool
-}
-
-// tokensSynced reports whether the programmatic access token type is synced.
-// Issuance advertises DISCOVERABLE, so turning it on has to make issued tokens
-// syncable even when the broader secret sync is off; otherwise the credential
-// exists with nothing holding a handle to revoke it.
-func (s secretOptions) tokensSynced() bool {
-	return s.syncSecrets || s.issueCredentials
+	syncSecrets bool
 }
 
 // credentialUserBuilder adds credential issuance to the user syncer, and is
@@ -178,12 +167,12 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
 		}
 	case snowflake.IsInsufficientPrivileges(err):
-		// Reading the token back needs ownership or MONITOR on the target user, which
-		// creating it does not. Destroying a good credential because the connector's
-		// role cannot see it would make issuance impossible for such a tenant. The
-		// locally computed expiry is never later than Snowflake's, so reporting it
-		// errs towards early rotation rather than towards a credential that outlives
-		// what C1 believes.
+		// Reading the token back needs ownership or MODIFY PROGRAMMATIC AUTHENTICATION
+		// METHODS on the target user, which creating it does not. Destroying a good
+		// credential because the connector's role cannot see it would make issuance
+		// impossible for such a tenant. The locally computed expiry is never later
+		// than Snowflake's, so reporting it errs towards early rotation rather than
+		// towards a credential that outlives what C1 believes.
 		ctxzap.Extract(ctx).Warn("baton-snowflake: reporting a locally computed token expiry: insufficient privileges to read it back",
 			zap.String("username", input.IdentityID.Resource),
 			zap.Time("estimated_expires_at", expiresAt))
@@ -258,13 +247,11 @@ func userResource(_ context.Context, user *snowflake.User, secrets secretOptions
 	if secrets.syncSecrets {
 		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: rsaPublicKeyResourceType.Id}))
 	}
-	if secrets.tokensSynced() {
-		// The syncer only calls a child type's List with a parent when the parent
-		// carries this annotation. Without it an issued programmatic access token is
-		// never discovered by a sync, which contradicts the DISCOVERABLE resource
-		// mode the issuer advertises.
-		opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: programmaticAccessTokenResourceType.Id}))
-	}
+	// The syncer only calls a child type's List with a parent when the parent
+	// carries this annotation, so it moves with the always-registered
+	// programmatic_access_token builder; the type's OptInRequired annotation is
+	// what keeps it out of tenants that have not opted in.
+	opts = append(opts, rs.WithAnnotation(&v2.ChildResourceType{ResourceTypeId: programmaticAccessTokenResourceType.Id}))
 	if nhiType, nhiDetail, isNHI := classifyUserNHI(user.Type); isNHI {
 		opts = append(opts, rs.WithNHIType(nhiType, nhiDetail))
 	}

@@ -11,8 +11,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 )
 
 type programmaticAccessTokenBuilder struct {
@@ -33,13 +31,21 @@ func (o *programmaticAccessTokenBuilder) List(ctx context.Context, parentID *v2.
 	}
 	tokens, err := o.client.ListProgrammaticAccessTokens(ctx, parentID.GetResource())
 	if err != nil {
-		// SHOW USER PROGRAMMATIC ACCESS TOKENS needs ownership or MONITOR on the target
-		// user. Without it Snowflake answers 422/003001, which means "nothing visible
-		// here" rather than a failure - one unprivileged user must not abort the sync.
+		// SHOW USER PROGRAMMATIC ACCESS TOKENS needs ownership or MODIFY PROGRAMMATIC
+		// AUTHENTICATION METHODS on the target user. A sync is authoritative: an
+		// error-free empty result would make C1 delete the user's previously synced
+		// tokens and drop the revocation handles on credentials that stay live in
+		// Snowflake, so a denial has to fail the sync instead of degrading to empty.
+		// The resource type is OptInRequired, so a tenant that cannot grant the
+		// privilege leaves the type disabled rather than hitting this.
 		if snowflake.IsInsufficientPrivileges(err) {
-			ctxzap.Extract(ctx).Debug("skipping programmatic access tokens: insufficient privileges",
-				zap.String("username", parentID.GetResource()))
-			return nil, &rs.SyncOpResults{}, nil
+			return nil, nil, fmt.Errorf(
+				"baton-snowflake: listing programmatic access tokens for user %q requires "+
+					"OWNERSHIP or MODIFY PROGRAMMATIC AUTHENTICATION METHODS on the user; "+
+					"grant one of them to the connector's role, or leave the "+
+					"programmatic_access_token resource type disabled: %w",
+				parentID.GetResource(), err,
+			)
 		}
 		return nil, nil, fmt.Errorf("baton-snowflake: list programmatic access tokens: %w", err)
 	}

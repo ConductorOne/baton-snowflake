@@ -15,6 +15,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -28,7 +29,7 @@ func TestCredentialUserBuilderIssueServiceUserUsesDefaultRoleRestriction(t *test
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -49,7 +50,7 @@ func TestCredentialUserBuilderIssueServiceUserWithUnassignedDefaultRoleFailsBefo
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -242,7 +243,7 @@ func TestCredentialIssuanceCapabilitiesRegisterWithDeleter(t *testing.T) {
 }
 
 func TestIssueCapabilityDetails(t *testing.T) {
-	details, _, err := newCredentialUserBuilder(nil, secretOptions{issueCredentials: true}).IssueCapabilityDetails(context.Background())
+	details, _, err := newCredentialUserBuilder(nil, secretOptions{}).IssueCapabilityDetails(context.Background())
 	if err != nil {
 		t.Fatalf("IssueCapabilityDetails() error = %v", err)
 	}
@@ -268,7 +269,7 @@ func TestCredentialUserBuilderIssueServiceUserWithNullDefaultRoleReportsMissingR
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -292,7 +293,7 @@ func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *te
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -307,37 +308,12 @@ func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *te
 	}
 }
 
-func TestUserResourceAdvertisesTokenAsChildResourceType(t *testing.T) {
-	// The syncer walks a child type per parent only when the parent carries this
-	// annotation. Without it an issued token is never discovered by a sync, which
-	// contradicts the DISCOVERABLE mode the issuer advertises. issue-credentials alone
-	// must be enough: it is the flag that makes tokens exist in the first place.
-	resource, err := userResource(context.Background(), &snowflake.User{Username: "service-user", Type: "SERVICE"}, secretOptions{issueCredentials: true})
-	if err != nil {
-		t.Fatalf("userResource() error = %v", err)
-	}
-	found := false
-	for _, annotation := range resource.GetAnnotations() {
-		child := &v2.ChildResourceType{}
-		if annotation.MessageIs(child) {
-			if err := annotation.UnmarshalTo(child); err != nil {
-				t.Fatalf("unmarshal child resource type: %v", err)
-			}
-			if child.GetResourceTypeId() == programmaticAccessTokenResourceType.Id {
-				found = true
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("user resource is missing ChildResourceType %q", programmaticAccessTokenResourceType.Id)
-	}
-}
-
 func TestCredentialUserBuilderIssueKeepsTokenWhenReadBackIsDenied(t *testing.T) {
-	// SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER needs ownership or MONITOR on the
-	// target user; creating the token does not. A role holding one and not the other
-	// would otherwise create a good credential and immediately destroy it, so issuance
-	// could never succeed for that tenant.
+	// SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER needs ownership or MODIFY
+	// PROGRAMMATIC AUTHENTICATION METHODS on the target user; creating the token
+	// does not. A role holding one and not the other would otherwise create a good
+	// credential and immediately destroy it, so issuance could never succeed for
+	// that tenant.
 	var statements []string
 	server := serveCredentialIssueMock(t, credentialIssueMock{
 		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
@@ -350,7 +326,7 @@ func TestCredentialUserBuilderIssueKeepsTokenWhenReadBackIsDenied(t *testing.T) 
 		t.Fatalf("new client: %v", err)
 	}
 
-	output, err := newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	output, err := newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -389,7 +365,7 @@ func TestCredentialUserBuilderIssueProceedsWhenRoleCheckIsDenied(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 
-	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
@@ -420,7 +396,7 @@ func TestCredentialUserBuilderIssueSamplesExpiryAfterPreflight(t *testing.T) {
 	}
 
 	requested := time.Now().UTC().Add(2*24*time.Hour + 50*time.Millisecond)
-	_, err = newCredentialUserBuilder(client, secretOptions{issueCredentials: true}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 		ExpiresAt:  timestamppb.New(requested),
@@ -430,5 +406,36 @@ func TestCredentialUserBuilderIssueSamplesExpiryAfterPreflight(t *testing.T) {
 	}
 	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
 		t.Fatalf("Issue() created and then destroyed a token: %q", statements)
+	}
+}
+
+func TestProgrammaticAccessTokenListDeniedUserFailsSync(t *testing.T) {
+	// A full sync is authoritative: an error-free empty result on a per-user
+	// access-control denial would make C1 delete the user's previously synced
+	// tokens and drop the revocation handles on credentials that stay live in
+	// Snowflake. The denial therefore fails the sync, and the error carries the
+	// privilege to grant; the OptInRequired annotation is what lets a tenant
+	// without the privilege keep the type off.
+	var statements []string
+	server := serveCredentialIssueMock(t, credentialIssueMock{
+		denyPrefix: "SHOW USER PROGRAMMATIC ACCESS TOKENS",
+		statements: &statements,
+	})
+	defer server.Close()
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	resources, results, err := newProgrammaticAccessTokenBuilder(client).List(context.Background(),
+		v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "no-access-user"}.Build(), rs.SyncOpAttrs{})
+	if !snowflake.IsInsufficientPrivileges(err) {
+		t.Fatalf("List() error = %v, want the 003001 denial to fail the sync", err)
+	}
+	if resources != nil || results != nil {
+		t.Fatalf("List() = (%v, %v), want nil resources and results on a denial", resources, results)
+	}
+	if !strings.Contains(err.Error(), "MODIFY PROGRAMMATIC AUTHENTICATION METHODS") {
+		t.Fatalf("List() error %q does not name the privilege to grant", err)
 	}
 }
