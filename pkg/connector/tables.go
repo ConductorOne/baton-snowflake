@@ -464,7 +464,7 @@ func (o *tableBuilder) Grants(ctx context.Context, resource *v2.Resource, opts r
 			if user == nil {
 				continue
 			}
-			principalResource, err = userResource(ctx, user, false)
+			principalResource, err = userResource(ctx, user, secretOptions{})
 			if err != nil {
 				return nil, nil, wrapError(err, fmt.Sprintf("failed to build resource for user %q", tg.GranteeName))
 			}

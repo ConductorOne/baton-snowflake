@@ -146,6 +146,12 @@
       "boolField": {}
     },
     {
+      "name": "issue-credentials",
+      "displayName": "Issue Credentials",
+      "description": "Enable issuing Snowflake programmatic access tokens for existing users. Independent of Sync Secrets: this also syncs the tokens it issues so they can be revoked, but no other secrets.",
+      "boolField": {}
+    },
+    {
       "name": "excluded-databases",
       "displayName": "Excluded Databases",
       "description": "Database names to exclude from sync (case-insensitive). Can be specified multiple times. When set, matching databases and all their tables are skipped entirely.",

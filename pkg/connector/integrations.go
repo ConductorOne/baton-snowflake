@@ -68,7 +68,7 @@ func normalizeDetailToken(s string) string {
 func integrationResource(integration *snowflake.Integration) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		profileKeyName:    integration.Name,
-		"type":            integration.Type,
+		profileKeyType:    integration.Type,
 		"category":        integration.Category,
 		profileKeyComment: integration.Comment,
 	}

@@ -20,26 +20,33 @@ import (
 type Connector struct {
 	Client            *snowflake.Client
 	SyncSecrets       bool
+	IssueCredentials  bool
 	excludedDatabases []string
 }
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
+	secrets := secretOptions{syncSecrets: d.SyncSecrets}
+	userSyncer := connectorbuilder.ResourceSyncerV2(newUserBuilder(d.Client, secrets))
+	if d.IssueCredentials {
+		userSyncer = newCredentialUserBuilder(d.Client, secrets)
+	}
 	builders := []connectorbuilder.ResourceSyncerV2{
-		newUserBuilder(d.Client, d.SyncSecrets),
+		userSyncer,
 		newAccountRoleBuilder(d.Client),
 		newDatabaseBuilder(d.Client, d.SyncSecrets, d.excludedDatabases),
 		newTableBuilder(d.Client),
 		newIntegrationBuilder(d.Client),
 		newLicenseBuilder(d.Client),
+		// The programmatic_access_token type is opt-in (OptInRequired annotation on
+		// its resource type), so it is registered unconditionally: gating it behind
+		// --issue-credentials would make an on→off flag toggle delete every synced
+		// token, including the revocation handles for credentials C1 issued.
+		newProgrammaticAccessTokenBuilder(d.Client),
 	}
 
 	if d.SyncSecrets {
-		builders = append(
-			builders,
-			newSecretBuilder(d.Client),
-			newRsaBuilder(d.Client),
-		)
+		builders = append(builders, newSecretBuilder(d.Client), newRsaBuilder(d.Client))
 	}
 
 	return builders
@@ -259,6 +266,7 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 	return &Connector{
 		Client:            client,
 		SyncSecrets:       cfg.SyncSecrets,
+		IssueCredentials:  cfg.IssueCredentials,
 		excludedDatabases: cfg.ExcludedDatabases,
 	}, nil, nil
 }

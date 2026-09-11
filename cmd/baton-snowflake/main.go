@@ -23,6 +23,6 @@ func main() {
 		cfg.ConfigurationSchema(),
 		connector.New,
 		connectorrunner.WithSessionStoreEnabled(),
-		connectorrunner.WithDefaultCapabilitiesConnectorBuilderV2(&connector.Connector{SyncSecrets: true}),
+		connectorrunner.WithDefaultCapabilitiesConnectorBuilderV2(&connector.Connector{SyncSecrets: true, IssueCredentials: true}),
 	)
 }
