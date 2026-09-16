@@ -116,9 +116,6 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageRolesView, resp1, &apiErr, err)
 	}
-	if err := errIfStatementIncomplete(resp1, "the account role listing"); err != nil {
-		return nil, err
-	}
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListAccountRoles", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
@@ -192,9 +189,6 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		defer closeResponseBody(resp1)
 		if err != nil {
 			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp1, &apiErr, err)
-		}
-		if err := errIfStatementIncomplete(resp1, "the role grantee read"); err != nil {
-			return nil, "", err
 		}
 
 		handle := response.StatementHandle

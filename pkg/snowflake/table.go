@@ -81,9 +81,6 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		}
 		return nil, c.classifyReadError(accountUsageSchemataView, resp1, &apiErr, err)
 	}
-	if err := errIfStatementIncomplete(resp1, "the schema listing"); err != nil {
-		return nil, err
-	}
 
 	// Captured before the statement-result GET: that response reuses this struct and does
 	// not necessarily carry the handle, so reading it afterwards can see an empty string.
@@ -244,9 +241,6 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 		}
 		return nil, "", c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
-	if err := errIfStatementIncomplete(resp1, "the table listing"); err != nil {
-		return nil, "", err
-	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -339,9 +333,6 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 			return nil, nil
 		}
 		return nil, c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
-	}
-	if err := errIfStatementIncomplete(resp1, "the single-table lookup"); err != nil {
-		return nil, err
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
@@ -551,9 +542,6 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 		}
 
 		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp1, &apiErr, err)
-	}
-	if err := errIfStatementIncomplete(resp1, "the table grant read"); err != nil {
-		return tableGrantsFirstPage{}, err
 	}
 
 	handle := response.StatementHandle

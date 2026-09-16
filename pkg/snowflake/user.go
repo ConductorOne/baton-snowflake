@@ -213,9 +213,6 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageUsersView, resp1, &apiErr, err)
 	}
-	if err := errIfStatementIncomplete(resp1, "SHOW USERS"); err != nil {
-		return nil, err
-	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -418,9 +415,6 @@ func (c *Client) getUserFromAccountUsage(ctx context.Context, ss sessions.Sessio
 	defer closeResponseBody(resp1)
 	if err != nil {
 		return nil, statusCodeOf(resp1), classifyAccountUsageError(accountUsageUsersView, resp1, &apiErr, err)
-	}
-	if err := errIfStatementIncomplete(resp1, "the ACCOUNT_USAGE user read"); err != nil {
-		return nil, statusCodeOf(resp1), err
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)

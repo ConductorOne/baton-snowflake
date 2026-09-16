@@ -267,6 +267,13 @@ func IsStatementNotComplete(err error) bool {
 
 // errIfStatementIncomplete converts a 202 into ErrStatementNotComplete. It is called on the
 // success path of a statements request, where err is nil precisely because 202 is a 2xx.
+//
+// Only on the leg that surfaces the outcome, never on a POST that a statement-result GET
+// follows. Snowflake's async contract IS "POST answers 202 with a handle, then GET the
+// handle", so a 202 there is the normal path for a statement that outran the synchronous
+// window - failing on it would break exactly the large ACCOUNT_USAGE reads this guard exists
+// to protect. A 202 on the GET, or on a POST whose response is parsed directly (GetDatabase,
+// GetAccountRole), is the one that means "still not finished".
 func errIfStatementIncomplete(resp *http.Response, what string) error {
 	if resp == nil || resp.StatusCode != http.StatusAccepted {
 		return nil

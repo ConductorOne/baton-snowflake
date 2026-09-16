@@ -908,3 +908,39 @@ func TestIncompleteStatementIsAnErrorNotAnEmptyResult(t *testing.T) {
 		})
 	}
 }
+
+// The counterpart to TestIncompleteStatementIsAnErrorNotAnEmptyResult: a 202 on the POST is
+// Snowflake's normal async contract, not a failure. The API answers 202 with a handle when a
+// statement outruns the synchronous window, and the caller is then supposed to GET the
+// handle - which every read path already does. Failing on the POST leg would break exactly
+// the large ACCOUNT_USAGE reads the guard exists to protect.
+func TestAsyncStatementSucceedsWhenTheResultArrivesOnTheGet(t *testing.T) {
+	t.Parallel()
+
+	var posted, fetched bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			posted = true
+			// Outran the synchronous window: handle only, no rows.
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprint(w, `{"statementHandle":"handle-1"}`)
+			return
+		}
+		fetched = true
+		rows := [][]string{append([]string{"ALICE", "alice@example.com"}, make([]string, 13)...)}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"statementHandle":   "handle-1",
+			"resultSetMetadata": map[string]any{"numRows": 1, "rowType": accountUsageUserRowTypes()},
+			"data":              rows,
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	client := accountUsageClient(t, server.URL, server.Client())
+	users, err := client.ListUsers(context.Background(), "", 50)
+	require.NoError(t, err, "a 202 on the POST must not fail: the GET is the next step")
+	require.True(t, posted && fetched, "both legs must be exercised")
+	require.Len(t, users, 1)
+	assert.Equal(t, "ALICE", users[0].Username)
+}

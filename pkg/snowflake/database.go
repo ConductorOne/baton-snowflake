@@ -99,9 +99,6 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageDatabasesView, resp1, &apiErr, err)
 	}
-	if err := errIfStatementIncomplete(resp1, "the database listing"); err != nil {
-		return nil, err
-	}
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListDatabases", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
