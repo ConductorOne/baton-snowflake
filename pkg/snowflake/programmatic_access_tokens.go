@@ -142,12 +142,14 @@ func (c *Client) executeStatementWithRole(ctx context.Context, statement, role s
 		// that went async reports it here.
 		return nil, classifyStatementError(resp, &apiErr, err)
 	}
-	// A 202 here means the statement is still executing. SetUserDisabled and
-	// RemoveProgrammaticAccessToken discard the result entirely, so without this an
-	// unfinished ALTER USER is reported to C1 as applied - a write claimed as done when its
-	// outcome is simply not known yet. Reporting "not known" as success is worse than
-	// failing, because the caller has no reason to retry.
-	if err := errIfStatementIncomplete(resp, "the statement"); err != nil {
+	// A 202 here means the statement is still executing. RemoveProgrammaticAccessToken
+	// discards the result entirely, so without this an unfinished
+	// ALTER USER ... REMOVE PROGRAMMATIC ACCESS TOKEN is reported to C1 as applied - a write
+	// claimed as done when its outcome is simply not known yet. Reporting "not known" as
+	// success is worse than failing, because the caller has no reason to retry.
+	// (SetUserDisabled, GrantAccountRole and RevokeAccountRole do not route through here;
+	// they build their own request and carry their own guard.)
+	if err := errIfWriteIncomplete(resp, "the statement"); err != nil {
 		return nil, err
 	}
 	return &result, nil

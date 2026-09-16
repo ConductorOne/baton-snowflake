@@ -255,6 +255,12 @@ func isInvalidIdentifier(resp *http.Response, apiErr *SnowflakeError) bool {
 // large, on a warehouse that may have to resume first, which is exactly the shape that
 // crosses the window.
 //
+// Guarded on every path that turns a 202 into a successful parse: the inventory reads, the
+// license user count, the always-SHOW reads (integrations, secrets, RSA keys - fast in
+// practice, but "fast" is not a guarantee and an empty parse there deletes a resource type
+// just the same), and the mutating statements, where a 202 would otherwise be reported to C1
+// as applied.
+//
 // This is the loud-failure floor, not full async support. Polling the handle to completion is
 // the real fix and is deliberately not attempted here: it needs a timeout and retry policy
 // that is a product decision rather than a bug fix.
@@ -265,30 +271,44 @@ func IsStatementNotComplete(err error) bool {
 	return err != nil && errors.Is(err, ErrStatementNotComplete)
 }
 
-// errIfStatementIncomplete converts a 202 into ErrStatementNotComplete. It is called on the
-// success path of a statements request, where err is nil precisely because 202 is a 2xx.
+// errIfStatementIncomplete converts a 202 on a read into ErrStatementNotComplete. It is
+// called on the success path of a statements request, where err is nil precisely because 202
+// is a 2xx.
 //
 // Only on the leg that surfaces the outcome, never on a POST that a statement-result GET
 // follows. Snowflake's async contract IS "POST answers 202 with a handle, then GET the
 // handle", so a 202 there is the normal path for a statement that outran the synchronous
 // window - failing on it would break exactly the large ACCOUNT_USAGE reads this guard exists
 // to protect. A 202 on the GET, or on a POST whose response is parsed directly (GetDatabase,
-// GetAccountRole), is the one that means "still not finished".
+// GetAccountRole, ListSecrets, UserRsa), is the one that means "still not finished".
 func errIfStatementIncomplete(resp *http.Response, what string) error {
+	return incompleteStatementError(resp, fmt.Sprintf(
+		"baton-snowflake: %s did not finish inside the SQL API's synchronous window (HTTP 202). "+
+			"Retry the sync; if it recurs, the warehouse is too small for the volume this "+
+			"statement reads, or --discovery-mode=show avoids the warehouse entirely for this "+
+			"resource type",
+		what,
+	))
+}
+
+// errIfWriteIncomplete is errIfStatementIncomplete for a mutating statement. The remedy is
+// different in kind: there is no sync to retry, no volume being read, and no discovery mode
+// involved - and crucially the statement may or may not have applied, which the operator has
+// to be told rather than left to infer.
+func errIfWriteIncomplete(resp *http.Response, what string) error {
+	return incompleteStatementError(resp, fmt.Sprintf(
+		"baton-snowflake: %s did not finish inside the SQL API's synchronous window (HTTP 202), "+
+			"so whether it applied is unknown. Verify the user's state in Snowflake before "+
+			"retrying the action",
+		what,
+	))
+}
+
+func incompleteStatementError(resp *http.Response, message string) error {
 	if resp == nil || resp.StatusCode != http.StatusAccepted {
 		return nil
 	}
-	return uhttp.WrapErrors(
-		codes.Unavailable,
-		fmt.Sprintf(
-			"baton-snowflake: %s did not finish inside the SQL API's synchronous window "+
-				"(HTTP 202). Retry the sync; if it recurs, the warehouse is too small for the "+
-				"volume this statement reads, or --discovery-mode=show avoids the warehouse "+
-				"entirely for this resource type",
-			what,
-		),
-		ErrStatementNotComplete,
-	)
+	return uhttp.WrapErrors(codes.Unavailable, message, ErrStatementNotComplete)
 }
 
 // skippableDenial reports whether a 422/003001 on an inventory read may be treated as

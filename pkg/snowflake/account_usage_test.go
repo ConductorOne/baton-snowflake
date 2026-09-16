@@ -944,3 +944,55 @@ func TestAsyncStatementSucceedsWhenTheResultArrivesOnTheGet(t *testing.T) {
 	require.Len(t, users, 1)
 	assert.Equal(t, "ALICE", users[0].Username)
 }
+
+// A 202 on a write is the worst shape of this bug: these functions return nil on success and
+// discard the statement result, so an unfinished ALTER USER / GRANT ROLE was reported to C1
+// as applied. Claiming a write succeeded when its outcome is merely unknown is worse than
+// failing, because the caller has no reason to retry. None of these issue a
+// statement-result GET, so the POST is the outcome leg.
+func TestIncompleteWriteIsAnErrorNotASuccess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{
+			name: "ALTER USER SET DISABLED",
+			call: func(c *Client) error { return c.SetUserDisabled(context.Background(), "svc", true) },
+		},
+		{
+			name: "GRANT ROLE",
+			call: func(c *Client) error { return c.GrantAccountRole(context.Background(), "ANALYST", "svc") },
+		},
+		{
+			name: "REVOKE ROLE",
+			call: func(c *Client) error { return c.RevokeAccountRole(context.Background(), "ANALYST", "svc") },
+		},
+		{
+			name: "REMOVE PROGRAMMATIC ACCESS TOKEN",
+			call: func(c *Client) error {
+				return c.RemoveProgrammaticAccessToken(context.Background(), "svc", "c1-request-1")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = fmt.Fprint(w, `{"statementHandle":"handle-1"}`)
+			}))
+			t.Cleanup(server.Close)
+
+			client, err := New(server.URL, JWTConfig{}, server.Client())
+			require.NoError(t, err)
+
+			err = tc.call(client)
+			require.Error(t, err, "an unfinished write must not be reported as applied")
+			require.True(t, IsStatementNotComplete(err), "got %v", err)
+			// The remedy has to be write-shaped: no sync to retry, no discovery-mode knob.
+			assert.Contains(t, err.Error(), "whether it applied is unknown")
+			assert.NotContains(t, err.Error(), "--discovery-mode")
+		})
+	}
+}

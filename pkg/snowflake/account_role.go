@@ -365,6 +365,11 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 	if err != nil {
 		return dedupeAPIError(err)
 	}
+	// This POST is the outcome leg - no statement-result GET follows - so a 202 would
+	// otherwise be reported to C1 as a completed grant change.
+	if err := errIfWriteIncomplete(resp, "GRANT ROLE"); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -384,6 +389,11 @@ func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName strin
 	defer closeResponseBody(resp)
 	if err != nil {
 		return dedupeAPIError(err)
+	}
+	// This POST is the outcome leg - no statement-result GET follows - so a 202 would
+	// otherwise be reported to C1 as a completed grant change.
+	if err := errIfWriteIncomplete(resp, "REVOKE ROLE"); err != nil {
+		return err
 	}
 
 	return nil

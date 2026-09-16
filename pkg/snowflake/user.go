@@ -377,6 +377,12 @@ func (c *Client) SetUserDisabled(ctx context.Context, userName string, disabled 
 	if err != nil {
 		return fmt.Errorf("baton-snowflake: failed to set user %s disabled=%t: %w", userName, disabled, dedupeAPIError(err))
 	}
+	// No statement-result GET follows, so this POST is the outcome leg. Without the guard a
+	// 202 returns nil and the enable_user / disable_user actions report success for an
+	// ALTER USER that has not executed.
+	if err := errIfWriteIncomplete(resp, "ALTER USER SET DISABLED"); err != nil {
+		return err
+	}
 
 	return nil
 }

@@ -46,6 +46,9 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 		}
 		return nil, dedupeAPIError(err)
 	}
+	if err := errIfStatementIncomplete(resp, "SHOW SECRETS IN DATABASE"); err != nil {
+		return nil, err
+	}
 
 	secrets, err := response.ListSecrets()
 	if err != nil {
@@ -83,6 +86,9 @@ func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error)
 			)
 		}
 		return nil, dedupeAPIError(err)
+	}
+	if err := errIfStatementIncomplete(resp, "DESCRIBE USER"); err != nil {
+		return nil, err
 	}
 
 	secrets, err := response.GetUserRsa(ctx)
