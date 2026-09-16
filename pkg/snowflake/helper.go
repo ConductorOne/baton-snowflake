@@ -2,8 +2,12 @@ package snowflake
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"google.golang.org/grpc/codes"
 )
 
 // ErrInsufficientPrivileges marks a Snowflake HTTP 422 that means "the connector role cannot see
@@ -88,6 +92,13 @@ func isSharedDatabaseUnavailable(resp *http.Response, apiErr *SnowflakeError) bo
 // denial that the connector may skip (HTTP 422 whose body matches Snowflake's canned "no longer
 // available for use" message, joined as ErrSharedDatabaseUnavailable).
 func IsSharedDatabaseUnavailable(err error) bool {
+	// An ACCOUNT_USAGE failure is never skippable, and classifyAccountUsageError joins this
+	// sentinel alongside ErrAccountUsageUnavailable for the shared-database shape. Joining
+	// alone is not enough: a call site that checks this predicate first would skip the
+	// database and continue. The fatal sentinel has to win here, not just be present.
+	if IsAccountUsageUnavailable(err) {
+		return false
+	}
 	return err != nil && errors.Is(err, ErrSharedDatabaseUnavailable)
 }
 
@@ -99,6 +110,15 @@ func IsSharedDatabaseUnavailable(err error) bool {
 // It is NOT the privilege-skip used by CXH-2193 paths. Those must call IsInsufficientPrivileges
 // so a SQL-compilation 422 cannot be swallowed as invisible data.
 func IsUnprocessableEntity(statusCode int, err error) bool {
+	// Same ordering problem as IsSharedDatabaseUnavailable, and worse here because this
+	// predicate keys on the raw status: classifyAccountUsageError preserves the underlying
+	// 422, so an account-wide ACCOUNT_USAGE failure would read as a per-object "not
+	// resolvable" and be swallowed. pkg/connector/tables.go then marks the database shared,
+	// which collapses every table under it to owner-only entitlements and zero grants - a
+	// silent deletion in place of a loud failure.
+	if IsAccountUsageUnavailable(err) {
+		return false
+	}
 	if statusCode == http.StatusUnprocessableEntity {
 		return true
 	}
@@ -112,4 +132,216 @@ func IsUnprocessableEntity(statusCode int, err error) bool {
 // sentinel.
 func IsUnprocessableEntityError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "422 Unprocessable Entity")
+}
+
+// ErrAccountUsageUnavailable marks a failure to read a SNOWFLAKE.ACCOUNT_USAGE view under
+// the ACCOUNT_USAGE discovery path. Unlike ErrInsufficientPrivileges this is never a
+// skippable "nothing visible here": the ACCOUNT_USAGE views are account-wide, so a role
+// that cannot read one cannot read any object of that kind, and continuing would sync an
+// empty resource type and delete everything previously synced under it.
+//
+// Snowflake reports a missing ACCOUNT_USAGE grant as a SQL compilation error ("Object
+// '<view>' does not exist or not authorized") rather than as an access-control denial, so
+// this sentinel is what turns that opaque message into a named, actionable one.
+var ErrAccountUsageUnavailable = errors.New("baton-snowflake: SNOWFLAKE.ACCOUNT_USAGE is not readable")
+
+// accountUsageViewerGrants names the database roles that make the ACCOUNT_USAGE views
+// readable, so the diagnostic tells the operator what to run instead of only what failed.
+const accountUsageViewerGrants = "GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector role> " +
+	"(USERS, ROLES, GRANTS_TO_USERS, GRANTS_TO_ROLES) and " +
+	"GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER TO ROLE <connector role> " +
+	"(DATABASES, SCHEMATA, TABLES)"
+
+// IsAccountUsageUnavailable reports whether err is a failed ACCOUNT_USAGE view read.
+func IsAccountUsageUnavailable(err error) bool {
+	return err != nil && errors.Is(err, ErrAccountUsageUnavailable)
+}
+
+// statusCodeOf returns resp's status code, or 0 for a nil response (a transport failure
+// that never produced one).
+func statusCodeOf(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
+}
+
+// classifyAccountUsageError turns a failed ACCOUNT_USAGE read into a named, actionable
+// error. Both of Snowflake's refusal shapes are covered: the access-control denial (422 /
+// 003001) and the SQL compilation error it uses when the view is simply not granted, which
+// is indistinguishable from a typo in the view name without this context.
+//
+// It also names the warehouse requirement. These are SELECTs, not metadata commands, so a
+// service account with no usable warehouse fails here with an unrelated-looking error.
+func classifyAccountUsageError(view string, resp *http.Response, apiErr *SnowflakeError, err error) error {
+	if err == nil {
+		return nil
+	}
+	// Only a 422 carries a Snowflake refusal this function can interpret. Anything else - a
+	// 429, a 5xx, or a transport failure that never produced a response - is a transient or
+	// infrastructural error, and labelling it PermissionDenied would both mislead the operator
+	// ("grant the viewer roles" for a 503) and strip the rate-limit gRPC details that
+	// dedupeAPIError carries over for the SDK's retry logic.
+	if resp == nil || resp.StatusCode != http.StatusUnprocessableEntity {
+		return dedupeAPIError(err)
+	}
+	if isSharedDatabaseUnavailable(resp, apiErr) {
+		// Both sentinels are joined: ErrSharedDatabaseUnavailable is a skip-this-object
+		// signal, which is the wrong shape for an account-wide view read, so
+		// ErrAccountUsageUnavailable rides along to keep the fatal predicate true no matter
+		// which one a call site checks first.
+		return uhttp.WrapErrors(
+			codes.NotFound,
+			fmt.Sprintf("baton-snowflake: shared database unavailable while reading %s", view),
+			ErrAccountUsageUnavailable, ErrSharedDatabaseUnavailable, err,
+		)
+	}
+	// An "invalid identifier" compilation error is a different failure with a different
+	// fix: the view is readable but does not expose a column this connector selects,
+	// because the account is on an ACCOUNT_USAGE schema version that predates it. Pointing
+	// the operator at the viewer grants there would send them after the wrong cause.
+	if isInvalidIdentifier(resp, apiErr) {
+		return uhttp.WrapErrors(
+			codes.FailedPrecondition,
+			fmt.Sprintf(
+				"baton-snowflake: %s is readable but rejected a column this connector selects, so "+
+					"this account's ACCOUNT_USAGE schema does not expose it. Use "+
+					"--discovery-mode=show instead, and report the Snowflake error below so the "+
+					"column list can be adjusted",
+				view,
+			),
+			ErrAccountUsageUnavailable, err,
+		)
+	}
+	return uhttp.WrapErrors(
+		codes.PermissionDenied,
+		fmt.Sprintf(
+			"baton-snowflake: failed to read %s under --discovery-mode=account_usage. Grant the "+
+				"viewer database roles (%s), and confirm the service account has USAGE on a "+
+				"warehouse that can resume - ACCOUNT_USAGE reads are SELECTs and need compute, "+
+				"unlike the SHOW commands the default discovery mode uses",
+			view, accountUsageViewerGrants,
+		),
+		ErrAccountUsageUnavailable, err,
+	)
+}
+
+// invalidIdentifierErrorCode is Snowflake's error code for "SQL compilation error: invalid
+// identifier", which is what a SELECT of a column the view does not have produces.
+const invalidIdentifierErrorCode = "000904"
+
+// isInvalidIdentifier reports whether a response is the 422 Snowflake returns for a column
+// that does not exist on the object being selected from.
+func isInvalidIdentifier(resp *http.Response, apiErr *SnowflakeError) bool {
+	return resp != nil &&
+		resp.StatusCode == http.StatusUnprocessableEntity &&
+		apiErr != nil &&
+		(apiErr.Code == invalidIdentifierErrorCode ||
+			strings.Contains(apiErr.Message(), "invalid identifier"))
+}
+
+// ErrStatementNotComplete marks a SQL API response for a statement that has not finished
+// executing.
+//
+// POST /api/v2/statements answers 202 - and GET /statements/<handle> keeps answering 202 -
+// when a statement exceeds the synchronous execution window, returning a handle with no rows
+// and no rowType. 202 is a 2xx, so uhttp does not treat it as an error, WithJSONResponse
+// decodes a body with no data, and every row parser turns that into an empty slice with a
+// nil error. A sync reads that as "this resource type is empty" and C1 reads it as a
+// deletion of everything under it, so an unfinished statement has to fail loudly instead.
+//
+// SHOW discovery barely reaches this: SHOW commands are metadata-only and return in
+// milliseconds. ACCOUNT_USAGE reads are warehouse-backed SELECTs over views that can be very
+// large, on a warehouse that may have to resume first, which is exactly the shape that
+// crosses the window.
+//
+// Guarded on every path that turns a 202 into a successful parse: the inventory reads, the
+// license user count, the always-SHOW reads (integrations, secrets, RSA keys - fast in
+// practice, but "fast" is not a guarantee and an empty parse there deletes a resource type
+// just the same), and the mutating statements, where a 202 would otherwise be reported to C1
+// as applied.
+//
+// This is the loud-failure floor, not full async support. Polling the handle to completion is
+// the real fix and is deliberately not attempted here: it needs a timeout and retry policy
+// that is a product decision rather than a bug fix.
+var ErrStatementNotComplete = errors.New("baton-snowflake: statement has not finished executing")
+
+// IsStatementNotComplete reports whether err is an unfinished-statement response.
+func IsStatementNotComplete(err error) bool {
+	return err != nil && errors.Is(err, ErrStatementNotComplete)
+}
+
+// errIfStatementIncomplete converts a 202 on a read into ErrStatementNotComplete. It is
+// called on the success path of a statements request, where err is nil precisely because 202
+// is a 2xx.
+//
+// Only on the leg that surfaces the outcome, never on a POST that a statement-result GET
+// follows. Snowflake's async contract IS "POST answers 202 with a handle, then GET the
+// handle", so a 202 there is the normal path for a statement that outran the synchronous
+// window - failing on it would break exactly the large ACCOUNT_USAGE reads this guard exists
+// to protect. A 202 on the GET, or on a POST whose response is parsed directly (GetDatabase,
+// GetAccountRole, ListSecrets, UserRsa), is the one that means "still not finished".
+func errIfStatementIncomplete(resp *http.Response, what string) error {
+	return incompleteStatementError(resp, fmt.Sprintf(
+		"baton-snowflake: %s did not finish inside the SQL API's synchronous window (HTTP 202). "+
+			"Retry the sync; if it recurs, the warehouse is too small for the volume this "+
+			"statement reads, or --discovery-mode=show avoids the warehouse entirely for this "+
+			"resource type",
+		what,
+	))
+}
+
+// errIfWriteIncomplete is errIfStatementIncomplete for a mutating statement. The remedy is
+// different in kind: there is no sync to retry, no volume being read, and no discovery mode
+// involved - and crucially the statement may or may not have applied, which the operator has
+// to be told rather than left to infer.
+func errIfWriteIncomplete(resp *http.Response, what string) error {
+	return incompleteStatementError(resp, fmt.Sprintf(
+		"baton-snowflake: %s did not finish inside the SQL API's synchronous window (HTTP 202), "+
+			"so whether it applied is unknown. Verify the user's state in Snowflake before "+
+			"retrying the action",
+		what,
+	))
+}
+
+func incompleteStatementError(resp *http.Response, message string) error {
+	if resp == nil || resp.StatusCode != http.StatusAccepted {
+		return nil
+	}
+	return uhttp.WrapErrors(codes.Unavailable, message, ErrStatementNotComplete)
+}
+
+// skippableDenial reports whether a 422/003001 on an inventory read may be treated as
+// "nothing visible here" and skipped.
+//
+// Under SHOW discovery it may: the denial is genuinely per-object, because a role can hold
+// USAGE on one database and not another. Under ACCOUNT_USAGE it never may - the views are
+// account-wide, so a role that cannot read one cannot read any object of that kind, and
+// skipping would sync an empty resource type and delete everything previously synced under
+// it. Callers on a read path that has no ACCOUNT_USAGE equivalent (secrets, RSA keys,
+// integrations, tokens) stay on isAccessControlDenial directly: those really are
+// per-object in both modes.
+func (c *Client) skippableDenial(resp *http.Response, apiErr *SnowflakeError) bool {
+	return !c.usesAccountUsage() && isAccessControlDenial(resp, apiErr)
+}
+
+// skippableSharedDatabase is the same discovery-mode gate for the shared-database-unavailable
+// shape, for the same reason.
+func (c *Client) skippableSharedDatabase(resp *http.Response, apiErr *SnowflakeError) bool {
+	return !c.usesAccountUsage() && isSharedDatabaseUnavailable(resp, apiErr)
+}
+
+// classifyReadError classifies a failed inventory read according to the active discovery
+// mode. Under ACCOUNT_USAGE a failure is never a skippable "nothing visible here" - the
+// views are account-wide, so a role that cannot read one cannot read any object of that
+// kind, and swallowing it would sync an empty resource type and delete everything
+// previously synced under it. Under SHOW discovery the behavior is unchanged.
+func (c *Client) classifyReadError(view string, resp *http.Response, apiErr *SnowflakeError, err error) error {
+	if err == nil {
+		return nil
+	}
+	if c.usesAccountUsage() {
+		return classifyAccountUsageError(view, resp, apiErr, err)
+	}
+	return dedupeAPIError(err)
 }

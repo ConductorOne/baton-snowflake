@@ -46,6 +46,9 @@ func (c *Client) ListSecrets(ctx context.Context, database string) ([]Secret, er
 		}
 		return nil, dedupeAPIError(err)
 	}
+	if err := errIfStatementIncomplete(resp, "SHOW SECRETS IN DATABASE"); err != nil {
+		return nil, err
+	}
 
 	secrets, err := response.ListSecrets()
 	if err != nil {
@@ -70,8 +73,11 @@ func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error)
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		// DESCRIBE USER requires MONITOR on the target user. Without it Snowflake answers 422
-		// with QueryFailureStatus code 003001 - same access-control shape as SHOW SCHEMAS.
+		// DESCRIBE USER requires OWNERSHIP on the target user (account-level MANAGE GRANTS
+		// satisfies it implicitly). There is no MONITOR privilege on a user object - an
+		// earlier version of this comment and the connector docs both claimed there was.
+		// Without the privilege Snowflake answers 422 with QueryFailureStatus code 003001 -
+		// same access-control shape as SHOW SCHEMAS.
 		if isAccessControlDenial(resp, &apiErr) {
 			return nil, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -80,6 +86,9 @@ func (c *Client) UserRsa(ctx context.Context, username string) (*UserRsa, error)
 			)
 		}
 		return nil, dedupeAPIError(err)
+	}
+	if err := errIfStatementIncomplete(resp, "DESCRIBE USER"); err != nil {
+		return nil, err
 	}
 
 	secrets, err := response.GetUserRsa(ctx)

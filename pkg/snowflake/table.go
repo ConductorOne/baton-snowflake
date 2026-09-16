@@ -51,10 +51,7 @@ func (r *ListSchemasRawResponse) ListSchemas() ([]Schema, error) {
 func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string) ([]Schema, error) {
 	l := ctxzap.Extract(ctx)
 
-	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
-	queries := []string{
-		fmt.Sprintf("SHOW SCHEMAS IN DATABASE \"%s\";", escapedDB),
-	}
+	queries := []string{c.listSchemasStatement(databaseName)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -66,7 +63,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if isAccessControlDenial(resp1, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -74,7 +71,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp1, &apiErr) {
+		if c.skippableSharedDatabase(resp1, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.NotFound,
@@ -82,17 +79,21 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageSchemataView, resp1, &apiErr, err)
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+	// Captured before the statement-result GET: that response reuses this struct and does
+	// not necessarily carry the handle, so reading it afterwards can see an empty string.
+	handle := response.StatementHandle
+
+	req, err = c.GetStatementResponse(ctx, handle)
 	if err != nil {
 		return nil, err
 	}
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		if isAccessControlDenial(resp2, &apiErr) {
+		if c.skippableDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -100,7 +101,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp2, &apiErr) {
+		if c.skippableSharedDatabase(resp2, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.NotFound,
@@ -108,10 +109,58 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageSchemataView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the schema listing"); err != nil {
+		return nil, err
 	}
 
-	return response.ListSchemas()
+	schemas, err := response.ListSchemas()
+	if err != nil {
+		return nil, err
+	}
+
+	// Walk the remaining partitions rather than returning partition 0 alone.
+	//
+	// This used to read partition 0 only. Under SHOW that truncation was mostly theoretical,
+	// because the statement returns just the schemas the role holds a privilege on. Under
+	// ACCOUNT_USAGE it is not: SCHEMATA returns every schema in the database account-wide, so
+	// a large database spills past partition 0 - and because tableBuilder.List pushes one
+	// page state per schema returned, a dropped schema takes every table under it out of the
+	// sync, which C1 reads as a deletion.
+	rowTypes := response.ResultSetMetadata.RowTypes
+	numPartitions := len(response.ResultSetMetadata.PartitionInfo)
+	// Bounded rather than cursored, unlike the grant walks in this package, which hand one
+	// partition per SDK page back through a cursor so the SDK drives and can checkpoint
+	// between them. Schemas do not warrant that: the statement projects two narrow text
+	// columns, so partition 0 alone holds thousands of rows and a real database is a single
+	// partition. The bound exists so a pathological account cannot turn the first
+	// tableBuilder.List call into an unbounded fetch; exceeding it is loud, because silently
+	// truncating is the bug this walk was added to fix.
+	if numPartitions > maxSchemaPartitions {
+		return nil, fmt.Errorf(
+			"baton-snowflake: %s returned %d partitions of schemas for database %q, over the %d "+
+				"this connector walks. Sync the database with fewer schemas, or open an issue so "+
+				"the schema listing can be paginated through the SDK instead",
+			c.schemaSourceLabel(), numPartitions, databaseName, maxSchemaPartitions,
+		)
+	}
+	for partitionID := 1; partitionID < numPartitions; partitionID++ {
+		more, err := c.listSchemasPartition(ctx, handle, partitionID, rowTypes, &apiErr)
+		if err != nil {
+			return nil, err
+		}
+		schemas = append(schemas, more...)
+	}
+
+	if numPartitions > 1 {
+		l.Debug("ListSchemasInDatabase walked multiple partitions",
+			zap.String("database", databaseName),
+			zap.Int("numPartitions", numPartitions),
+			zap.Int("schemas", len(schemas)))
+	}
+
+	return schemas, nil
 }
 
 var tableStructFieldToColumnMap = map[string]string{
@@ -160,15 +209,7 @@ func (r *ListTablesRawResponse) ListTables() ([]Table, error) {
 func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaName string, cursor string, limit int) ([]Table, string, error) {
 	l := ctxzap.Extract(ctx)
 
-	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
-	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
-	var q string
-	if cursor != "" {
-		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
-	} else {
-		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
-	}
-	queries := []string{q}
+	queries := []string{c.listTablesStatement(databaseName, schemaName, cursor, limit)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -180,7 +221,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if isAccessControlDenial(resp1, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -189,7 +230,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp1, &apiErr) {
+		if c.skippableSharedDatabase(resp1, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW TABLES IN SCHEMA",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -198,7 +239,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
@@ -208,7 +249,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		if isAccessControlDenial(resp2, &apiErr) {
+		if c.skippableDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA (statement result)",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -217,7 +258,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp2, &apiErr) {
+		if c.skippableSharedDatabase(resp2, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW TABLES IN SCHEMA (statement result)",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -226,7 +267,10 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageTablesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the table listing"); err != nil {
+		return nil, "", err
 	}
 
 	tables, err := response.ListTables()
@@ -270,12 +314,7 @@ func escapeDoubleQuotedIdentifier(s string) string {
 }
 
 func (c *Client) GetTable(ctx context.Context, database, schema, tableName string) (*Table, error) {
-	// SHOW TABLES' LIKE has no ESCAPE clause, so _ and % stay live wildcards; adding "ESCAPE '\'"
-	// here (a prior version did) makes Snowflake reject the query with a 422.
-	likePattern := escapeLikeStringLiteral(tableName)
-	queries := []string{
-		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit),
-	}
+	queries := []string{c.getTableStatement(database, schema, tableName)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -290,10 +329,10 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 		// Same contract as ListSchemasInDatabase: only an access-control 422 means the table
 		// is invisible to this role. Other 422s (SQL compilation from a bad LIKE/ESCAPE, etc.)
 		// must stay fatal so a connector bug cannot look like a missing table.
-		if isAccessControlDenial(resp1, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			return nil, nil
 		}
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
@@ -303,7 +342,10 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageTablesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the single-table lookup"); err != nil {
+		return nil, err
 	}
 
 	tables, err := response.ListTables()
@@ -368,11 +410,7 @@ func (r *ListTableGrantsRawResponse) GetTableGrants() ([]TableGrant, error) {
 }
 
 func tableGrantsCacheKey(database, schema, tableName, objectKind string) string {
-	kind := "TABLE"
-	if strings.EqualFold(objectKind, "VIEW") {
-		kind = "VIEW"
-	}
-	return fmt.Sprintf("%s|%s|%s|%s", database, schema, tableName, kind)
+	return fmt.Sprintf("%s|%s|%s|%s", database, schema, tableName, normalizeObjectKind(objectKind))
 }
 
 // tableGrantsCursor is the opaque page cursor for ListTableGrants. Unlike SHOW GRANTS OF ROLE
@@ -479,13 +517,7 @@ type tableGrantsFirstPage struct {
 // listTableGrantsPartition is a self-contained single-partition fetch for later pages.
 func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema, tableName, objectKind string) (tableGrantsFirstPage, error) {
 	l := ctxzap.Extract(ctx)
-	objectType := "TABLE"
-	if strings.EqualFold(objectKind, "VIEW") {
-		objectType = "VIEW"
-	}
-	queries := []string{
-		fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";", objectType, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), escapeDoubleQuotedIdentifier(tableName)),
-	}
+	queries := []string{c.tableGrantsStatement(database, schema, tableName, objectKind)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -494,12 +526,12 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 
 	var response ListTableGrantsRawResponse
 	var apiErr SnowflakeError
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp)
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp1)
 	if err != nil {
 		// uhttp already decoded the error body into apiErr, so the access-control code is read
 		// from there rather than by consuming resp.Body a second time.
-		if isAccessControlDenial(resp, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			tableRef := fmt.Sprintf("%s.%s.%s", database, schema, tableName)
 			l.Debug("Insufficient privileges to show grants on table", zap.String("table", tableRef))
 			return tableGrantsFirstPage{}, uhttp.WrapErrors(
@@ -509,7 +541,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 			)
 		}
 
-		return tableGrantsFirstPage{}, dedupeAPIError(err)
+		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp1, &apiErr, err)
 	}
 
 	handle := response.StatementHandle
@@ -518,10 +550,10 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	if err != nil {
 		return tableGrantsFirstPage{}, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp)
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp2)
 	if err != nil {
-		if isAccessControlDenial(resp, &apiErr) {
+		if c.skippableDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
 			return tableGrantsFirstPage{}, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -529,7 +561,10 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		return tableGrantsFirstPage{}, dedupeAPIError(err)
+		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the table grant read"); err != nil {
+		return tableGrantsFirstPage{}, err
 	}
 
 	grants, err := response.GetTableGrants()
@@ -570,7 +605,10 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the table grant partition read"); err != nil {
+		return nil, "", err
 	}
 
 	// Partitions after the first come back with data only, no resultSetMetadata - reuse the
@@ -622,4 +660,105 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	}
 
 	return grants, nextCursor, nil
+}
+
+// schemaSourceLabel names the surface the schema listing actually read, for a diagnostic
+// that does not point a SHOW-mode operator at an ACCOUNT_USAGE view the connector never
+// queried. The partition bound itself is mode-independent.
+func (c *Client) schemaSourceLabel() string {
+	if c.usesAccountUsage() {
+		return accountUsageSchemataView
+	}
+	return "SHOW SCHEMAS IN DATABASE"
+}
+
+// maxSchemaPartitions bounds the schema partition walk. Two narrow text columns per row put
+// thousands of schemas in a single partition, so this is far above any real database.
+const maxSchemaPartitions = 64
+
+// listSchemasPartition fetches one partition of a schema listing. It is a function rather
+// than an inline loop body so each response body is closed when the partition is done,
+// instead of every body staying open until the whole walk returns.
+func (c *Client) listSchemasPartition(
+	ctx context.Context,
+	handle string,
+	partitionID int,
+	rowTypes []RowType,
+	apiErr *SnowflakeError,
+) ([]Schema, error) {
+	req, err := c.GetStatementPartition(ctx, handle, partitionID)
+	if err != nil {
+		return nil, err
+	}
+
+	var partition ListSchemasRawResponse
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(apiErr))
+	defer closeResponseBody(resp)
+	if err != nil {
+		return nil, c.classifyReadError(accountUsageSchemataView, resp, apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the schema partition read"); err != nil {
+		return nil, err
+	}
+
+	// Partition-only responses carry no rowType metadata, so restore it from partition 0 or
+	// ParseRow cannot resolve column names by position.
+	if len(partition.ResultSetMetadata.RowTypes) == 0 {
+		partition.ResultSetMetadata.RowTypes = rowTypes
+	}
+	return partition.ListSchemas()
+}
+
+// listSchemasStatement is the discovery-mode-dependent statement for a database's schemas.
+func (c *Client) listSchemasStatement(databaseName string) string {
+	if c.usesAccountUsage() {
+		return accountUsageListSchemasStatement(databaseName)
+	}
+	return fmt.Sprintf("SHOW SCHEMAS IN DATABASE \"%s\";", escapeDoubleQuotedIdentifier(databaseName))
+}
+
+// listTablesStatement is the discovery-mode-dependent statement for one page of a schema's
+// tables. Both forms keyset-paginate on the table name, so the cursor ListTablesInSchema
+// returns means the same thing in either mode.
+//
+// They diverge on a non-positive limit: the ACCOUNT_USAGE form omits LIMIT and returns
+// everything, while this one emits "LIMIT 0", which Snowflake honours literally by returning
+// no rows. See accountUsageLimitClause for why that cannot be made symmetric - SHOW's keyset
+// clause is a sub-clause of LIMIT. No caller passes a non-positive limit.
+func (c *Client) listTablesStatement(databaseName, schemaName, cursor string, limit int) string {
+	if c.usesAccountUsage() {
+		return accountUsageListTablesStatement(databaseName, schemaName, cursor, limit)
+	}
+	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
+	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
+	if cursor != "" {
+		return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
+	}
+	return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
+}
+
+// getTableStatement is the discovery-mode-dependent single-table lookup. The SHOW form's
+// LIKE has no ESCAPE clause, so _ and % stay live wildcards and GetTable has to filter the
+// result for an exact match; the ACCOUNT_USAGE form matches exactly in SQL and has no such
+// hazard, but it goes through the same filter so the two modes behave identically.
+func (c *Client) getTableStatement(database, schema, tableName string) string {
+	if c.usesAccountUsage() {
+		return accountUsageGetTableStatement(database, schema, tableName)
+	}
+	return fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;",
+		escapeLikeStringLiteral(tableName), escapeDoubleQuotedIdentifier(database),
+		escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit)
+}
+
+// tableGrantsStatement is the discovery-mode-dependent statement for a table's or view's
+// grants. Only the statement differs: the ACCOUNT_USAGE form aliases its columns to the
+// SHOW GRANTS ON TABLE/VIEW names, so the response parsing, partition walk, page cursor and
+// session-store caching in ListTableGrants are shared verbatim between the two modes.
+func (c *Client) tableGrantsStatement(database, schema, tableName, objectKind string) string {
+	if c.usesAccountUsage() {
+		return accountUsageTableGrantsStatement(database, schema, tableName, objectKind)
+	}
+	return fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";",
+		normalizeObjectKind(objectKind), escapeDoubleQuotedIdentifier(database),
+		escapeDoubleQuotedIdentifier(schema), escapeDoubleQuotedIdentifier(tableName))
 }
