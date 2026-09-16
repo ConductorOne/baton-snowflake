@@ -156,7 +156,7 @@ func (c *Client) CreateUserREST(ctx context.Context, req *CreateUserRequest) (bo
 	}
 
 	var response CreateUserResponse
-	_, rateLimitDesc, statusCode, err := c.doRequest(ctx, http.MethodPost, usersApiUrl, &response, req, uhttp.WithHeader(RoleHeaderKey, UserAdminRole))
+	_, rateLimitDesc, statusCode, err := c.doRequest(ctx, http.MethodPost, usersApiUrl, &response, req, uhttp.WithHeader(RoleHeaderKey, c.writeRole()))
 	if err != nil {
 		return false, rateLimitDesc, err
 	}
@@ -193,7 +193,7 @@ func (c *Client) DeleteUserREST(ctx context.Context, userName string, options *D
 		userApiUrl.RawQuery = query.Encode()
 	}
 
-	_, rateLimitDesc, _, err := c.doRequest(ctx, http.MethodDelete, userApiUrl, nil, nil, uhttp.WithHeader(RoleHeaderKey, UserAdminRole))
+	_, rateLimitDesc, _, err := c.doRequest(ctx, http.MethodDelete, userApiUrl, nil, nil, uhttp.WithHeader(RoleHeaderKey, c.writeRole()))
 	if err != nil {
 		l.Error("baton-snowflake: failed to delete user",
 			zap.String("user_name", userName),

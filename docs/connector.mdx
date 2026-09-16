@@ -70,7 +70,7 @@ Both actions accept the following fields:
 | `disable_user` | `user_id` (string, required) | Deactivates a Snowflake user by setting `DISABLED = TRUE`. Reverse it with `enable_user` |
 
 <Note>
-**`enable_user`/`disable_user` require `MODIFY` on the target user.** These actions run as the `USERADMIN` role. If that role holds neither `MODIFY` nor `OWNERSHIP` on the target user, Snowflake rejects the statement with `Insufficient privileges to operate on user '<name>'. Your primary role USERADMIN must have MODIFY granted on USER <name>.` Grant the privilege with `GRANT MODIFY ON USER <name> TO ROLE USERADMIN`, which does not transfer ownership.
+**`enable_user`/`disable_user` require `MODIFY` on the target user.** These actions run as the connector's **Write Role**, which defaults to `USERADMIN`. If that role holds neither `MODIFY` nor `OWNERSHIP` on the target user, Snowflake rejects the statement with `Insufficient privileges to operate on user '<name>'. Your primary role USERADMIN must have MODIFY granted on USER <name>.` Grant the privilege with `GRANT MODIFY ON USER <name> TO ROLE <write role>`, which does not transfer ownership. To avoid granting the `USERADMIN` system role to the service account at all, set **Write Role** to a role of your own — see [Privileges required for provisioning](#privileges-required-for-provisioning).
 
 This restriction stays hidden when the service account keeps Snowflake's default `DEFAULT_SECONDARY_ROLES = ALL`: a higher secondary role such as `ACCOUNTADMIN` remains active alongside the `USERADMIN` primary role and supplies the privilege. Accounts restricted to `USERADMIN` alone are the ones that hit it.
 
@@ -82,10 +82,118 @@ This restriction stays hidden when the service account keeps Snowflake's default
 Configuring the connector requires you to pass in credentials generated in Snowflake. Gather these credentials before you move on. 
 
 <Tip>
-**For best results, use a dedicated service account.** C1 will use the `DEFAULT_WAREHOUSE`, `DEFAULT_NAMESPACE`, and `DEFAULT_ROLE` properties of the user used for the integration. For this reason, we recommend creating a dedicated service account in Snowflake for integrating with C1 with these default user properties. 
+**For best results, use a dedicated service account.** C1 will use the `DEFAULT_WAREHOUSE`, `DEFAULT_NAMESPACE`, and `DEFAULT_ROLE` properties of the user used for the integration. For this reason, we recommend creating a dedicated service account in Snowflake for integrating with C1 with these default user properties.
 
-Give the service account the `MONITOR USAGE` and `MANAGE GRANTS` global permissions for the default warehouse and namespace, plus the `MONITOR` privilege on each user secret and database. 
+For what to grant that service account, see [Choose a privilege model](#choose-a-privilege-model) below. Do not grant `MANAGE GRANTS` by default — it is an account-wide privilege and the connector does not require it.
 </Tip>
+
+## Choose a privilege model
+
+The connector supports two discovery paths. They differ only in *which Snowflake surface the connector reads inventory from*, and therefore in what has to be granted. Pick one before you configure the connector.
+
+<Note>
+**`MANAGE GRANTS` is not scoped to a warehouse or a namespace.** `GRANT MANAGE GRANTS ON ACCOUNT` is an account-level global privilege: Snowflake defines it as the ability to grant or revoke privileges on **any** object in the account as if the granting role owned it, and Snowflake's documentation notes that a role holding it can grant further privileges to itself. Earlier versions of this page described it as applying to "the default warehouse and namespace." That was incorrect. If your security review rejects a standing account-wide privilege, use the ACCOUNT_USAGE model below, which needs no `MANAGE GRANTS` anywhere.
+</Note>
+
+### Model A: ACCOUNT_USAGE discovery (recommended for least privilege)
+
+Set **Discovery Mode** to `account_usage`. The connector then reads inventory from the `SNOWFLAKE.ACCOUNT_USAGE` schema, which is account-wide by construction and gated by two database roles instead of by per-object grants.
+
+```sql
+USE ROLE ACCOUNTADMIN;
+
+CREATE ROLE IF NOT EXISTS C1_CONNECTOR;
+GRANT ROLE C1_CONNECTOR TO USER <service account>;
+
+-- Users, roles, and role grants.
+GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE C1_CONNECTOR;
+-- Databases, schemas, tables, and object grants. Omit this if you disable
+-- "Sync databases and tables" (see Model C).
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER TO ROLE C1_CONNECTOR;
+
+-- ACCOUNT_USAGE reads are SELECT statements, so they need compute. The SHOW
+-- commands used by Model B are metadata-only and need no warehouse.
+GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE C1_CONNECTOR;
+ALTER USER <service account> SET DEFAULT_WAREHOUSE = '<warehouse>', DEFAULT_ROLE = 'C1_CONNECTOR';
+```
+
+Trade-offs, both documented by Snowflake:
+
+- **Latency.** `ACCOUNT_USAGE` views lag the live account by roughly 90 minutes to 3 hours depending on the view, so a sync reflects a slightly stale account. Model B is live.
+- **A running warehouse.** The connector issues `SELECT` statements on this path, so the service account needs `USAGE` on a warehouse that can resume.
+
+Integrations and RSA public key last-set timestamps have no `ACCOUNT_USAGE` equivalent and stay on the `SHOW`/`DESCRIBE` path in both models. Programmatic access tokens and Snowflake secrets likewise.
+
+### Model B: SHOW discovery with per-user ownership
+
+Leave **Discovery Mode** at the default `show`. Every `SHOW` command returns only the objects the session role holds at least one privilege on, so visibility has to be granted object by object. This still avoids `MANAGE GRANTS`, but role discovery covers only the roles explicitly handed to the connector rather than the whole account.
+
+```sql
+USE ROLE ACCOUNTADMIN;
+
+CREATE ROLE IF NOT EXISTS C1_CONNECTOR;
+GRANT ROLE C1_CONNECTOR TO USER <service account>;
+
+-- SHOW USERS returns every column but "name" as NULL unless the session role owns
+-- the user. There is no read-only alternative in Snowflake's access control model.
+GRANT OWNERSHIP ON USER <user> TO ROLE C1_CONNECTOR COPY CURRENT GRANTS;
+
+-- SHOW ROLES and SHOW GRANTS OF ROLE, per role C1 reviews or provisions.
+GRANT OWNERSHIP ON ROLE <role> TO ROLE C1_CONNECTOR COPY CURRENT GRANTS;
+
+-- Object-level inventory, metadata only: REFERENCES grants the ability to see an
+-- object's structure but never its data. Omit all of this if you disable
+-- "Sync databases and tables" (see Model C).
+GRANT USAGE ON DATABASE <db> TO ROLE C1_CONNECTOR;
+GRANT USAGE ON ALL SCHEMAS IN DATABASE <db> TO ROLE C1_CONNECTOR;
+GRANT REFERENCES ON ALL TABLES IN DATABASE <db> TO ROLE C1_CONNECTOR;
+GRANT REFERENCES ON ALL VIEWS IN DATABASE <db> TO ROLE C1_CONNECTOR;
+
+-- SHOW INTEGRATIONS, per integration you want inventoried.
+GRANT USAGE ON INTEGRATION <integration> TO ROLE C1_CONNECTOR;
+```
+
+<Warning>
+**Under Model B, users the connector's role does not own sync with blank attributes.** Snowflake suppresses every `SHOW USERS` column but `name` for those users, so their login, email, and `TYPE` arrive empty. The connector detects this per user, logs a warning naming the user, and reports the account type as *unspecified* rather than guessing — a service account with a suppressed `TYPE` is no longer silently classified as a person. Either grant `OWNERSHIP` on every in-scope user or switch to Model A, where no per-user privilege is required.
+</Warning>
+
+<Note>
+**Container-scoped `MANAGE GRANTS` is a third option that needs no connector change.** Snowflake supports granting `MANAGE GRANTS` on a single database or schema rather than on the account. If you want `SHOW`-path visibility across a bounded set of objects without account-wide privilege, grant it at the container level. See Snowflake's [container-level MANAGE GRANTS](https://docs.snowflake.com/en/user-guide/container-manage-grants-using) documentation.
+</Note>
+
+### Model C: users, roles, and grants only
+
+If you do not want object-level privileges granted at all, turn **Sync databases and tables** off. The connector then syncs users, account roles, role grants, integrations, and licenses, and never issues `SHOW DATABASES`, `SHOW SCHEMAS`, `SHOW TABLES`, or the object-grant queries — so none of the object-level grants in Model A or B are needed.
+
+This is different from **Excluded Databases**, which is a connector-side filter: it skips databases *after* the privileges have been granted and still requires every database you want skipped to be named. Model C removes the requirement entirely.
+
+<Note>
+Snowflake secrets are database-scoped. With **Sync databases and tables** off, the secret resource type is not synced even when **Sync secrets** is on; RSA public keys are user-scoped and are unaffected.
+</Note>
+
+### Privileges required for provisioning
+
+Provisioning (creating, deleting, enabling, and disabling users, and issuing or revoking programmatic access tokens) runs as a dedicated **Write Role**, which defaults to Snowflake's `USERADMIN` system role. To avoid granting `USERADMIN` to the service account, set **Write Role** to a role of your own:
+
+```sql
+USE ROLE ACCOUNTADMIN;
+
+CREATE ROLE IF NOT EXISTS C1_USER_LIFECYCLE;
+GRANT ROLE C1_USER_LIFECYCLE TO USER <service account>;
+
+GRANT CREATE USER ON ACCOUNT TO ROLE C1_USER_LIFECYCLE;            -- create / delete accounts
+GRANT MODIFY ON USER <user> TO ROLE C1_USER_LIFECYCLE;             -- enable / disable accounts
+GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <user>
+  TO ROLE C1_USER_LIFECYCLE;                                       -- issue / revoke tokens
+```
+
+Grant-and-revoke of account roles runs as the session's default role, not the write role, and requires `OWNERSHIP` of the role being granted (or `MANAGE GRANTS`).
+
+License sync reads `SHOW ORGANIZATION ACCOUNTS`, which runs as a dedicated **Organization Role** defaulting to `GLOBALORGADMIN`. Set **Organization Role** to a delegated organization role to avoid granting the top-level org admin role to the service account. License sync also counts users via `SELECT ... FROM SNOWFLAKE.ACCOUNT_USAGE.USERS`, so it needs `SNOWFLAKE.SECURITY_VIEWER` (or equivalent `SELECT`) and a running warehouse in **both** discovery modes. License sync is opt-in; if you do not enable it, none of this is needed.
+
+<Note>
+**Upgrade behavior.** **Write Role**, **Organization Role**, and **Discovery Mode** all default to exactly what the connector did before they existed (`USERADMIN`, `GLOBALORGADMIN`, and `show`), and **Sync databases and tables** defaults to on. An existing connector's behavior does not change until you change one of these.
+</Note>
 
 ### Generate a private key and set the public key on a Snowflake user
 
@@ -186,6 +294,18 @@ In the **RSA Private Key (PEM Format)** field, upload the private key file.
 </Step>
 <Step>
 **Optional.** In the **Excluded Databases** field, enter the names of any Snowflake databases you want to skip during sync. You can add multiple names. Matching is case-insensitive. Excluded databases and all their tables are omitted from every sync.
+</Step>
+<Step>
+**Optional.** In the **Discovery Mode** field, choose `show` (default) or `account_usage`. See [Choose a privilege model](#choose-a-privilege-model).
+</Step>
+<Step>
+**Optional.** Turn **Sync databases and tables** off to run a users, roles, and grants only sync, so no object-level privileges have to be granted at all. It is on by default.
+</Step>
+<Step>
+**Optional.** In the **Write Role** field, enter the Snowflake role to use for user lifecycle and token operations. Defaults to `USERADMIN`.
+</Step>
+<Step>
+**Optional.** In the **Organization Role** field, enter the Snowflake role to use for organization-scoped reads that back license sync. Defaults to `GLOBALORGADMIN`.
 </Step>
 <Step>
 Click **Save**.
@@ -332,14 +452,41 @@ For **cloud-hosted connectors**, C1 manages the connector infrastructure. Add C1
 
 For **self-hosted connectors**, the connector runs on your own infrastructure, so you should add the outbound IP addresses of your own environment instead.
 
-### User sync fails with "cannot determine user account types"
+### Validation fails with "no user attributes are visible to the connector's role"
 
-Snowflake blanks most user fields, including the one used to detect service accounts, when the connector's role lacks sufficient privilege. The connector fails the sync in this state rather than silently classifying every user as human. Check the following:
+Snowflake returns every `SHOW USERS` column but `name` as NULL — including the `TYPE` column used to detect service accounts — unless the session role owns the user or holds account-level `MANAGE GRANTS`. When *no* sampled user's attributes are readable, the connector fails startup rather than syncing users with blank attributes. Fix it with any one of the following, in increasing order of privilege:
 
-- Ensure that the service account has a role granted. If the service account has a default role set, but no roles granted, user data will not sync correctly. Grant the default role to the service account to resolve this issue.
+1. **Grant `OWNERSHIP` on each in-scope user** (Model B):
+   ```sql
+   USE ROLE ACCOUNTADMIN;
+   GRANT OWNERSHIP ON USER <user> TO ROLE <connector role> COPY CURRENT GRANTS;
+   ```
+2. **Switch to ACCOUNT_USAGE discovery** (Model A), which has no per-user privilege requirement at all. Set **Discovery Mode** to `account_usage` and grant:
+   ```sql
+   USE ROLE ACCOUNTADMIN;
+   GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector role>;
+   ```
+3. **Grant account-level `MANAGE GRANTS`.** This works, but it is an account-wide, self-escalating standing privilege; prefer option 1 or 2.
+   ```sql
+   USE ROLE ACCOUNTADMIN;
+   GRANT MANAGE GRANTS ON ACCOUNT TO ROLE <connector role>;
+   ```
 
-- Ensure the `MANAGE GRANTS` privilege is **granted directly to the service account user** (not inherited via a role). Use the following steps to grant the privilege directly:
-```
-USE ROLE ACCOUNTADMIN;
-GRANT MANAGE GRANTS ON ACCOUNT TO USER <SERVICE ACCOUNT>;
-```
+Also confirm the service account actually has a role **granted** to it. A `DEFAULT_ROLE` that was set but never granted produces this exact signature.
+
+### Some users sync with a blank login, email, and account type
+
+This is the partially visible case under `show` discovery: the connector's role owns some in-scope users but not others. Startup succeeds, because a tenant may legitimately hand over only a subset of users, but each affected user is logged as a warning naming the user, and its account type is reported as *unspecified* rather than guessed as human.
+
+Grant `OWNERSHIP` on the named users, or switch **Discovery Mode** to `account_usage`, to sync them fully.
+
+### ACCOUNT_USAGE discovery fails with "SNOWFLAKE.ACCOUNT_USAGE is not readable"
+
+The connector's role cannot read the `ACCOUNT_USAGE` views. Snowflake reports this as a SQL compilation error (`Object 'SNOWFLAKE.ACCOUNT_USAGE.USERS' does not exist or not authorized`) rather than as a privilege error. Check both of the following:
+
+- The viewer database roles are granted: `SNOWFLAKE.SECURITY_VIEWER` for users, roles, and grants, and `SNOWFLAKE.OBJECT_VIEWER` for databases, schemas, and tables.
+- The service account has `USAGE` on a warehouse that can resume. `ACCOUNT_USAGE` reads are `SELECT` statements and need compute, unlike the `SHOW` commands the default discovery mode uses.
+
+### ACCOUNT_USAGE discovery is missing a recently created user, role, or table
+
+`ACCOUNT_USAGE` views lag the live account by roughly 90 minutes to 3 hours depending on the view. This is expected. If you need live data, use `show` discovery instead — see [Choose a privilege model](#choose-a-privilege-model).

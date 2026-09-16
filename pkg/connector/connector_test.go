@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"testing"
 
@@ -11,32 +12,133 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMissingLoginPrivilegeErr(t *testing.T) {
+func TestInspectUserVisibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name    string
-		logins  []string
-		wantErr bool
+		name        string
+		logins      []string
+		wantNone    bool
+		wantPartial bool
 	}{
-		{name: "login_name populated", logins: []string{"alice"}, wantErr: false},
-		{name: "login_name blank", logins: []string{""}, wantErr: true},
-		{name: "login_name whitespace-only", logins: []string{"   "}, wantErr: true},
-		{name: "one of many populated", logins: []string{"", "bob", ""}, wantErr: false},
-		{name: "all blank", logins: []string{"", "  ", ""}, wantErr: true},
+		{name: "login_name populated", logins: []string{"alice"}},
+		{name: "login_name blank", logins: []string{""}, wantNone: true},
+		{name: "login_name whitespace-only", logins: []string{"   "}, wantNone: true},
+		{name: "all blank", logins: []string{"", "  ", ""}, wantNone: true},
+		// The all-or-nothing check this replaced passed here and then silently synced the
+		// two blanked users with no login, no email, and no TYPE.
+		{name: "one of many populated", logins: []string{"", "bob", ""}, wantPartial: true},
+		{name: "all populated", logins: []string{"alice", "bob"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			users := make([]snowflake.User, len(tt.logins))
 			for i, login := range tt.logins {
-				users[i] = snowflake.User{Login: login}
+				users[i] = snowflake.User{Username: fmt.Sprintf("user-%d", i), Login: login}
 			}
-			err := missingLoginPrivilegeErr(users)
-			if tt.wantErr && err == nil {
-				t.Fatal("missingLoginPrivilegeErr() = nil, want error")
+			got := inspectUserVisibility(users)
+			require.Equal(t, tt.wantNone, got.None(), "None()")
+			require.Equal(t, tt.wantPartial, got.Partial(), "Partial()")
+			require.Equal(t, !tt.wantNone && !tt.wantPartial, got.Complete(), "Complete()")
+		})
+	}
+}
+
+// The diagnostic has to be matchable by callers and has to name the fix, not just the
+// symptom - pointing only at MANAGE GRANTS is what sent the original customer's security
+// review off the rails.
+func TestNoUserVisibilityErrorIsNamedAndActionable(t *testing.T) {
+	t.Parallel()
+	err := noUserVisibilityError(snowflake.DiscoveryModeShow, 50)
+	require.ErrorIs(t, err, ErrNoUserVisibility)
+	for _, want := range []string{"GRANT OWNERSHIP ON USER", "discovery-mode=account_usage", "SECURITY_VIEWER", "MANAGE GRANTS"} {
+		require.Contains(t, err.Error(), want)
+	}
+
+	// Under ACCOUNT_USAGE there is no per-user privilege to grant, so the SHOW remedies
+	// would send the operator after a cause that cannot apply.
+	auErr := noUserVisibilityError(snowflake.DiscoveryModeAccountUsage, 50)
+	require.ErrorIs(t, auErr, ErrNoUserVisibility)
+	require.Contains(t, auErr.Error(), "SNOWFLAKE.ACCOUNT_USAGE.USERS")
+	require.NotContains(t, auErr.Error(), "GRANT OWNERSHIP ON USER")
+	require.NotContains(t, auErr.Error(), "MANAGE GRANTS")
+}
+
+// A blanked-user list from a large account must not end up unbounded in the log field.
+func TestUserVisibilityDescribeBlankedIsBounded(t *testing.T) {
+	t.Parallel()
+	users := make([]snowflake.User, 0, maxReportedBlankedUsers+5)
+	users = append(users, snowflake.User{Username: "visible", Login: "visible"})
+	for i := 0; i < maxReportedBlankedUsers+5; i++ {
+		users = append(users, snowflake.User{Username: fmt.Sprintf("blanked-%d", i)})
+	}
+	got := inspectUserVisibility(users)
+	require.True(t, got.Partial())
+	require.Equal(t, maxReportedBlankedUsers+5, got.Blanked)
+	require.Len(t, got.BlankedNames, maxReportedBlankedUsers)
+	require.Contains(t, got.describeBlanked(), "and 5 more")
+}
+
+// A user whose columns Snowflake suppressed must not be reported as a human: that is how an
+// unowned SERVICE account silently became a person in C1.
+func TestPartiallyVisibleUserAccountTypeIsUnspecified(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_UNSPECIFIED,
+		getUserAccountType(&snowflake.User{Username: "unowned"}))
+	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_HUMAN,
+		getUserAccountType(&snowflake.User{Username: "alice", Login: "alice"}))
+	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_SERVICE,
+		getUserAccountType(&snowflake.User{Username: "svc", Login: "svc", Type: "SERVICE"}))
+	// A SERVICE user whose TYPE did survive still classifies as a service account even
+	// though login_name is blank, so the suppression check must not outrank a known TYPE.
+	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_SERVICE,
+		getUserAccountType(&snowflake.User{Username: "svc", Type: "SERVICE"}))
+}
+
+// Object-level resource types are a group toggle: tables are children of databases, so
+// neither may be registered without the other, and database-scoped secrets move with them.
+func TestSyncObjectResourcesToggle(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		objects     bool
+		syncSecrets bool
+		wantTypes   []string
+	}{
+		{
+			name:      "objects off",
+			wantTypes: []string{"account_role", "integration", "license", "programmatic_access_token", "user"},
+		},
+		{
+			name:        "objects off with sync-secrets still leaves out the database-scoped secret type",
+			syncSecrets: true,
+			wantTypes: []string{
+				"account_role", "integration", "license", "programmatic_access_token",
+				"rsa_public_key", "user",
+			},
+		},
+		{
+			name:      "objects on",
+			objects:   true,
+			wantTypes: []string{"account_role", "database", "integration", "license", "programmatic_access_token", "table", "user"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, err := connectorbuilder.NewConnector(context.Background(), &Connector{
+				syncObjectResources: tc.objects, SyncSecrets: tc.syncSecrets,
+			})
+			require.NoError(t, err)
+			response, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
+			require.NoError(t, err)
+
+			gotTypes := []string{}
+			for _, capability := range response.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
+				gotTypes = append(gotTypes, capability.GetResourceType().GetId())
 			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("missingLoginPrivilegeErr() = %v, want nil", err)
-			}
+			sort.Strings(gotTypes)
+			require.Equal(t, tc.wantTypes, gotTypes)
 		})
 	}
 }
@@ -91,6 +193,7 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 			t.Parallel()
 			server, err := connectorbuilder.NewConnector(context.Background(), &Connector{
 				SyncSecrets: tc.syncSecrets, IssueCredentials: tc.issueCredentials,
+				syncObjectResources: true,
 			})
 			require.NoError(t, err)
 			response, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})

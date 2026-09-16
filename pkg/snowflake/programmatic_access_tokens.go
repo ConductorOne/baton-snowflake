@@ -75,7 +75,7 @@ func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s%s DAYS_TO_EXPIRY = %d;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName), roleClause, daysToExpiry,
 	)
-	result, err := c.executeStatementAsUserAdmin(ctx, statement)
+	result, err := c.executeStatementAsWriteRole(ctx, statement)
 	if err != nil {
 		return "", err
 	}
@@ -99,7 +99,7 @@ func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER IF EXISTS %s REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS %s;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName),
 	)
-	_, err := c.executeStatementAsUserAdmin(ctx, statement)
+	_, err := c.executeStatementAsWriteRole(ctx, statement)
 	return err
 }
 
@@ -107,11 +107,12 @@ func (c *Client) executeStatement(ctx context.Context, statement string) (*State
 	return c.executeStatementWithRole(ctx, statement, "")
 }
 
-// executeStatementAsUserAdmin runs a statement that mutates another user. The session's
+// executeStatementAsWriteRole runs a statement that mutates another user. The session's
 // default role is not guaranteed to hold ALTER USER on other users, which is why
-// SetUserDisabled, CreateUserREST and DeleteUserREST all force UserAdminRole too.
-func (c *Client) executeStatementAsUserAdmin(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
-	return c.executeStatementWithRole(ctx, statement, UserAdminRole)
+// SetUserDisabled, CreateUserREST and DeleteUserREST all pin the write role too. The role
+// is UserAdminRole unless the tenant overrode it (see WithWriteRole).
+func (c *Client) executeStatementAsWriteRole(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
+	return c.executeStatementWithRole(ctx, statement, c.writeRole())
 }
 
 func (c *Client) executeStatementWithRole(ctx context.Context, statement, role string) (*StatementsApiResponseBase, error) {

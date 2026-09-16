@@ -59,14 +59,33 @@ func (r *ListDatabasesRawResponse) GetDatabases() ([]Database, error) {
 	return databases, nil
 }
 
-func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([]Database, error) {
-	var queries []string
-
-	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor)))
-	} else {
-		queries = append(queries, fmt.Sprintf("SHOW DATABASES LIMIT %d;", limit))
+// listDatabasesStatement is the discovery-mode-dependent statement for one page of
+// databases. The ACCOUNT_USAGE form aliases its columns to the SHOW DATABASES names, so
+// both feed the same ListDatabasesRawResponse parser.
+func (c *Client) listDatabasesStatement(cursor string, limit int) string {
+	if c.usesAccountUsage() {
+		return accountUsageListDatabasesStatement(cursor, limit)
 	}
+	if cursor != "" {
+		return fmt.Sprintf("SHOW DATABASES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor))
+	}
+	return fmt.Sprintf("SHOW DATABASES LIMIT %d;", limit)
+}
+
+// getDatabaseStatement is the discovery-mode-dependent single-database lookup.
+func (c *Client) getDatabaseStatement(name string) string {
+	if c.usesAccountUsage() {
+		return accountUsageGetDatabaseStatement(name)
+	}
+	// SHOW DATABASES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
+	// The ACCOUNT_USAGE form above is an exact match and has no such hazard.
+	return fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT %d;", escapeLikeStringLiteral(name), wildcardLookupLimit)
+}
+
+func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([]Database, error) {
+	queries := []string{c.listDatabasesStatement(cursor, limit)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -78,7 +97,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageDatabasesView, resp1, &apiErr, err)
 	}
 
 	l := ctxzap.Extract(ctx)
@@ -91,7 +110,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageDatabasesView, resp2, &apiErr, err)
 	}
 
 	dbs, err := response.GetDatabases()
@@ -103,12 +122,7 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 }
 
 func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, error) {
-	// SHOW DATABASES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
-	// only the single quote needs escaping to keep the string literal well-formed. _ and %
-	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
-	queries := []string{
-		fmt.Sprintf("SHOW DATABASES LIKE '%s' LIMIT %d;", escapeLikeStringLiteral(name), wildcardLookupLimit),
-	}
+	queries := []string{c.getDatabaseStatement(name)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {

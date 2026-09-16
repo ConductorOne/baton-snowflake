@@ -89,7 +89,9 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 
 	user, err := o.client.UserRsa(ctx, userName)
 	if err != nil {
-		// DESCRIBE USER answers 422/003001 when the connector role lacks MONITOR on that user.
+		// DESCRIBE USER answers 422/003001 when the connector role lacks OWNERSHIP on that
+		// user (there is no MONITOR privilege on a user object; account-level MANAGE GRANTS
+		// satisfies the requirement implicitly).
 		// Matching the HTTP status text alone misses this: uhttp formats the body message, which
 		// never contains "422 Unprocessable Entity".
 		if snowflake.IsInsufficientPrivileges(err) {

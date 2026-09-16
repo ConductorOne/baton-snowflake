@@ -75,7 +75,10 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	}
 
 	tokenName := "c1-" + input.RequestID
-	user, _, err := o.client.GetUser(ctx, nil, input.IdentityID.Resource)
+	// DescribeUser, not GetUser: this is a provisioning read, and ACCOUNT_USAGE discovery
+	// would answer it from a view that lags the live account by up to three hours, so a
+	// user created moments ago would look absent or carry stale properties.
+	user, _, err := o.client.DescribeUser(ctx, nil, input.IdentityID.Resource)
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: get user for programmatic access token: %w", err)
 	}
@@ -208,7 +211,21 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
-func userResource(_ context.Context, user *snowflake.User, secrets secretOptions) (*v2.Resource, error) {
+func userResource(ctx context.Context, user *snowflake.User, secrets secretOptions) (*v2.Resource, error) {
+	if isPartiallyVisibleUser(user) {
+		// Not an error: a tenant on the per-user OWNERSHIP model may legitimately hand
+		// over only a subset of users. But the row's attributes are suppressed rather than
+		// genuinely empty, so say so per user instead of letting it look like a user who
+		// really has no login, no email, and no TYPE.
+		ctxzap.Extract(ctx).Warn(
+			"baton-snowflake: user is only partially visible to the connector's role; its "+
+				"login, email, and TYPE are suppressed by Snowflake, so account type is "+
+				"reported as unspecified rather than guessed as human. Grant OWNERSHIP on "+
+				"this user, or use --discovery-mode=account_usage, to sync it fully",
+			zap.String("user", user.Username),
+		)
+	}
+
 	profile := map[string]interface{}{
 		"email":           user.Email,
 		"login":           user.Login,
@@ -284,9 +301,25 @@ const (
 	nhiDetailLegacyService = "snowflake.user.legacy_service"
 )
 
+// isPartiallyVisibleUser reports whether a SHOW USERS row came back with its columns
+// suppressed because the connector's role holds neither OWNERSHIP on that user nor
+// account-level MANAGE GRANTS. Snowflake blanks every column but name in that case, and
+// login_name is mandatory for every user TYPE (not just PERSON), so an empty login_name on a
+// row that does carry a name is the signature. The ACCOUNT_USAGE discovery path is not
+// subject to this: it reads the columns directly and has no per-user privilege requirement.
+func isPartiallyVisibleUser(user *snowflake.User) bool {
+	return strings.TrimSpace(user.Username) != "" && strings.TrimSpace(user.Login) == ""
+}
+
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 	if isServiceUserType(user.Type) {
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
+	}
+	// A partially visible user has a suppressed TYPE, not an absent one. Falling through to
+	// HUMAN here is what silently misclassified unowned service accounts as people, so
+	// report the type as unknown instead of guessing.
+	if isPartiallyVisibleUser(user) {
+		return v2.UserTrait_ACCOUNT_TYPE_UNSPECIFIED
 	}
 	return v2.UserTrait_ACCOUNT_TYPE_HUMAN
 }
@@ -540,13 +573,17 @@ func (o *userBuilder) CreateAccount(
 
 // fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
 // Retries up to 5 times with exponential backoff if we get a 422 Unprocessable Entity error.
+//
+// This reads back a user the connector just created, so it uses DescribeUser rather than
+// GetUser: under ACCOUNT_USAGE discovery the view lags the live account by up to three
+// hours, and no amount of retrying inside this window would find the new user.
 func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string) (*snowflake.User, error) {
 	l := ctxzap.Extract(ctx)
 	maxRetries := 5
 	baseDelay := 500 * time.Millisecond
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		user, statusCode, err := o.client.GetUser(ctx, nil, userName)
+		user, statusCode, err := o.client.DescribeUser(ctx, nil, userName)
 		if err == nil && statusCode == http.StatusOK {
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),

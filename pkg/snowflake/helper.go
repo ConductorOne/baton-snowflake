@@ -2,8 +2,12 @@ package snowflake
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"google.golang.org/grpc/codes"
 )
 
 // ErrInsufficientPrivileges marks a Snowflake HTTP 422 that means "the connector role cannot see
@@ -112,4 +116,113 @@ func IsUnprocessableEntity(statusCode int, err error) bool {
 // sentinel.
 func IsUnprocessableEntityError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "422 Unprocessable Entity")
+}
+
+// ErrAccountUsageUnavailable marks a failure to read a SNOWFLAKE.ACCOUNT_USAGE view under
+// the ACCOUNT_USAGE discovery path. Unlike ErrInsufficientPrivileges this is never a
+// skippable "nothing visible here": the ACCOUNT_USAGE views are account-wide, so a role
+// that cannot read one cannot read any object of that kind, and continuing would sync an
+// empty resource type and delete everything previously synced under it.
+//
+// Snowflake reports a missing ACCOUNT_USAGE grant as a SQL compilation error ("Object
+// '<view>' does not exist or not authorized") rather than as an access-control denial, so
+// this sentinel is what turns that opaque message into a named, actionable one.
+var ErrAccountUsageUnavailable = errors.New("baton-snowflake: SNOWFLAKE.ACCOUNT_USAGE is not readable")
+
+// accountUsageViewerGrants names the database roles that make the ACCOUNT_USAGE views
+// readable, so the diagnostic tells the operator what to run instead of only what failed.
+const accountUsageViewerGrants = "GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector role> " +
+	"(USERS, ROLES, GRANTS_TO_USERS, GRANTS_TO_ROLES) and " +
+	"GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER TO ROLE <connector role> " +
+	"(DATABASES, SCHEMATA, TABLES)"
+
+// IsAccountUsageUnavailable reports whether err is a failed ACCOUNT_USAGE view read.
+func IsAccountUsageUnavailable(err error) bool {
+	return err != nil && errors.Is(err, ErrAccountUsageUnavailable)
+}
+
+// statusCodeOf returns resp's status code, or 0 for a nil response (a transport failure
+// that never produced one).
+func statusCodeOf(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
+}
+
+// classifyAccountUsageError turns a failed ACCOUNT_USAGE read into a named, actionable
+// error. Both of Snowflake's refusal shapes are covered: the access-control denial (422 /
+// 003001) and the SQL compilation error it uses when the view is simply not granted, which
+// is indistinguishable from a typo in the view name without this context.
+//
+// It also names the warehouse requirement. These are SELECTs, not metadata commands, so a
+// service account with no usable warehouse fails here with an unrelated-looking error.
+func classifyAccountUsageError(view string, resp *http.Response, apiErr *SnowflakeError, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isSharedDatabaseUnavailable(resp, apiErr) {
+		return uhttp.WrapErrors(
+			codes.NotFound,
+			fmt.Sprintf("baton-snowflake: shared database unavailable while reading %s", view),
+			ErrSharedDatabaseUnavailable, err,
+		)
+	}
+	// An "invalid identifier" compilation error is a different failure with a different
+	// fix: the view is readable but does not expose a column this connector selects,
+	// because the account is on an ACCOUNT_USAGE schema version that predates it. Pointing
+	// the operator at the viewer grants there would send them after the wrong cause.
+	if isInvalidIdentifier(resp, apiErr) {
+		return uhttp.WrapErrors(
+			codes.FailedPrecondition,
+			fmt.Sprintf(
+				"baton-snowflake: %s is readable but rejected a column this connector selects, so "+
+					"this account's ACCOUNT_USAGE schema does not expose it. Use "+
+					"--discovery-mode=show instead, and report the Snowflake error below so the "+
+					"column list can be adjusted",
+				view,
+			),
+			ErrAccountUsageUnavailable, err,
+		)
+	}
+	return uhttp.WrapErrors(
+		codes.PermissionDenied,
+		fmt.Sprintf(
+			"baton-snowflake: failed to read %s under --discovery-mode=account_usage. Grant the "+
+				"viewer database roles (%s), and confirm the service account has USAGE on a "+
+				"warehouse that can resume - ACCOUNT_USAGE reads are SELECTs and need compute, "+
+				"unlike the SHOW commands the default discovery mode uses",
+			view, accountUsageViewerGrants,
+		),
+		ErrAccountUsageUnavailable, err,
+	)
+}
+
+// invalidIdentifierErrorCode is Snowflake's error code for "SQL compilation error: invalid
+// identifier", which is what a SELECT of a column the view does not have produces.
+const invalidIdentifierErrorCode = "000904"
+
+// isInvalidIdentifier reports whether a response is the 422 Snowflake returns for a column
+// that does not exist on the object being selected from.
+func isInvalidIdentifier(resp *http.Response, apiErr *SnowflakeError) bool {
+	return resp != nil &&
+		resp.StatusCode == http.StatusUnprocessableEntity &&
+		apiErr != nil &&
+		(apiErr.Code == invalidIdentifierErrorCode ||
+			strings.Contains(apiErr.Message(), "invalid identifier"))
+}
+
+// classifyReadError classifies a failed inventory read according to the active discovery
+// mode. Under ACCOUNT_USAGE a failure is never a skippable "nothing visible here" - the
+// views are account-wide, so a role that cannot read one cannot read any object of that
+// kind, and swallowing it would sync an empty resource type and delete everything
+// previously synced under it. Under SHOW discovery the behavior is unchanged.
+func (c *Client) classifyReadError(view string, resp *http.Response, apiErr *SnowflakeError, err error) error {
+	if err == nil {
+		return nil
+	}
+	if c.usesAccountUsage() {
+		return classifyAccountUsageError(view, resp, apiErr, err)
+	}
+	return dedupeAPIError(err)
 }

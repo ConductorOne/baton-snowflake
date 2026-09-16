@@ -51,10 +51,7 @@ func (r *ListSchemasRawResponse) ListSchemas() ([]Schema, error) {
 func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string) ([]Schema, error) {
 	l := ctxzap.Extract(ctx)
 
-	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
-	queries := []string{
-		fmt.Sprintf("SHOW SCHEMAS IN DATABASE \"%s\";", escapedDB),
-	}
+	queries := []string{c.listSchemasStatement(databaseName)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -160,15 +157,7 @@ func (r *ListTablesRawResponse) ListTables() ([]Table, error) {
 func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaName string, cursor string, limit int) ([]Table, string, error) {
 	l := ctxzap.Extract(ctx)
 
-	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
-	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
-	var q string
-	if cursor != "" {
-		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
-	} else {
-		q = fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
-	}
-	queries := []string{q}
+	queries := []string{c.listTablesStatement(databaseName, schemaName, cursor, limit)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -270,12 +259,7 @@ func escapeDoubleQuotedIdentifier(s string) string {
 }
 
 func (c *Client) GetTable(ctx context.Context, database, schema, tableName string) (*Table, error) {
-	// SHOW TABLES' LIKE has no ESCAPE clause, so _ and % stay live wildcards; adding "ESCAPE '\'"
-	// here (a prior version did) makes Snowflake reject the query with a 422.
-	likePattern := escapeLikeStringLiteral(tableName)
-	queries := []string{
-		fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;", likePattern, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit),
-	}
+	queries := []string{c.getTableStatement(database, schema, tableName)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -368,11 +352,7 @@ func (r *ListTableGrantsRawResponse) GetTableGrants() ([]TableGrant, error) {
 }
 
 func tableGrantsCacheKey(database, schema, tableName, objectKind string) string {
-	kind := "TABLE"
-	if strings.EqualFold(objectKind, "VIEW") {
-		kind = "VIEW"
-	}
-	return fmt.Sprintf("%s|%s|%s|%s", database, schema, tableName, kind)
+	return fmt.Sprintf("%s|%s|%s|%s", database, schema, tableName, normalizeObjectKind(objectKind))
 }
 
 // tableGrantsCursor is the opaque page cursor for ListTableGrants. Unlike SHOW GRANTS OF ROLE
@@ -479,13 +459,7 @@ type tableGrantsFirstPage struct {
 // listTableGrantsPartition is a self-contained single-partition fetch for later pages.
 func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema, tableName, objectKind string) (tableGrantsFirstPage, error) {
 	l := ctxzap.Extract(ctx)
-	objectType := "TABLE"
-	if strings.EqualFold(objectKind, "VIEW") {
-		objectType = "VIEW"
-	}
-	queries := []string{
-		fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";", objectType, escapeDoubleQuotedIdentifier(database), escapeDoubleQuotedIdentifier(schema), escapeDoubleQuotedIdentifier(tableName)),
-	}
+	queries := []string{c.tableGrantsStatement(database, schema, tableName, objectKind)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -622,4 +596,53 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	}
 
 	return grants, nextCursor, nil
+}
+
+// listSchemasStatement is the discovery-mode-dependent statement for a database's schemas.
+func (c *Client) listSchemasStatement(databaseName string) string {
+	if c.usesAccountUsage() {
+		return accountUsageListSchemasStatement(databaseName)
+	}
+	return fmt.Sprintf("SHOW SCHEMAS IN DATABASE \"%s\";", escapeDoubleQuotedIdentifier(databaseName))
+}
+
+// listTablesStatement is the discovery-mode-dependent statement for one page of a schema's
+// tables. Both forms keyset-paginate on the table name and treat limit <= 0 as unbounded, so
+// the cursor ListTablesInSchema returns means the same thing in either mode.
+func (c *Client) listTablesStatement(databaseName, schemaName, cursor string, limit int) string {
+	if c.usesAccountUsage() {
+		return accountUsageListTablesStatement(databaseName, schemaName, cursor, limit)
+	}
+	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
+	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
+	if cursor != "" {
+		return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
+	}
+	return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
+}
+
+// getTableStatement is the discovery-mode-dependent single-table lookup. The SHOW form's
+// LIKE has no ESCAPE clause, so _ and % stay live wildcards and GetTable has to filter the
+// result for an exact match; the ACCOUNT_USAGE form matches exactly in SQL and has no such
+// hazard, but it goes through the same filter so the two modes behave identically.
+func (c *Client) getTableStatement(database, schema, tableName string) string {
+	if c.usesAccountUsage() {
+		return accountUsageGetTableStatement(database, schema, tableName)
+	}
+	return fmt.Sprintf("SHOW TABLES LIKE '%s' IN SCHEMA \"%s\".\"%s\" LIMIT %d;",
+		escapeLikeStringLiteral(tableName), escapeDoubleQuotedIdentifier(database),
+		escapeDoubleQuotedIdentifier(schema), wildcardLookupLimit)
+}
+
+// tableGrantsStatement is the discovery-mode-dependent statement for a table's or view's
+// grants. Only the statement differs: the ACCOUNT_USAGE form aliases its columns to the
+// SHOW GRANTS ON TABLE/VIEW names, so the response parsing, partition walk, page cursor and
+// session-store caching in ListTableGrants are shared verbatim between the two modes.
+func (c *Client) tableGrantsStatement(database, schema, tableName, objectKind string) string {
+	if c.usesAccountUsage() {
+		return accountUsageTableGrantsStatement(database, schema, tableName, objectKind)
+	}
+	return fmt.Sprintf("SHOW GRANTS ON %s \"%s\".\"%s\".\"%s\";",
+		normalizeObjectKind(objectKind), escapeDoubleQuotedIdentifier(database),
+		escapeDoubleQuotedIdentifier(schema), escapeDoubleQuotedIdentifier(tableName))
 }

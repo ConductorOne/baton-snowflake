@@ -236,10 +236,15 @@ baton resources
 
 ## Users
 
-`baton-snowflake` syncs users via `SHOW USERS`. Users with a Snowflake `TYPE` of `SERVICE`,
-`SERVICE_AGENT`, or `LEGACY_SERVICE` are marked as non-human identities (app registrations), since
-they authenticate with a self-custodied standing credential the account holds and rotates. `PERSON`
-and untyped users carry no non-human-identity tag.
+`baton-snowflake` syncs users via `SHOW USERS`, or from `SNOWFLAKE.ACCOUNT_USAGE.USERS` under
+`--discovery-mode=account_usage`. Users with a Snowflake `TYPE` of `SERVICE`, `SERVICE_AGENT`, or
+`LEGACY_SERVICE` are marked as non-human identities (app registrations), since they authenticate
+with a self-custodied standing credential the account holds and rotates. `PERSON` and untyped users
+carry no non-human-identity tag.
+
+A user whose `SHOW USERS` row came back with its columns suppressed (see
+[Privilege model](#privilege-model)) has no readable `TYPE`, so its account type is reported as
+unspecified rather than defaulted to human, and the connector logs a warning naming the user.
 
 ## Integrations
 
@@ -251,7 +256,94 @@ cloud IAM role).
 `SHOW INTEGRATIONS` returns only the integrations the connector's current role has been granted at
 least one privilege on. A role holding `MANAGE GRANTS` (e.g. `ACCOUNTADMIN` or `SECURITYADMIN`)
 sees every integration in the account; a more restricted role simply sees a smaller set. No
-integrations are returned (and the sync is unaffected) if the role can see none.
+integrations are returned (and the sync is unaffected) if the role can see none. There is no
+`ACCOUNT_USAGE` view for integrations, so this resource type stays on the `SHOW` path in both
+discovery modes.
+
+# Privilege model
+
+`baton-snowflake` does **not** require the account-level `MANAGE GRANTS` privilege. `GRANT MANAGE
+GRANTS ON ACCOUNT` is an account-wide global privilege — Snowflake defines it as the ability to
+grant or revoke privileges on any object in the account as if the granting role owned it, and
+documents that a role holding it can grant further privileges to itself. It is not scoped to a
+warehouse or a namespace.
+
+Pick one of two discovery paths with `--discovery-mode`.
+
+## `--discovery-mode=account_usage` (least privilege)
+
+Inventory is read from the `SNOWFLAKE.ACCOUNT_USAGE` schema, which is account-wide by construction
+and gated by two database roles rather than by per-object grants:
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector role>;  -- users, roles, role grants
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER   TO ROLE <connector role>;  -- databases, schemas, tables, object grants
+GRANT USAGE ON WAREHOUSE <warehouse>          TO ROLE <connector role>;
+```
+
+Trade-offs, both documented by Snowflake: `ACCOUNT_USAGE` views lag the live account by roughly 90
+minutes to 3 hours depending on the view, and the reads are `SELECT` statements so they need a
+warehouse that can resume. `SHOW` commands are metadata-only and need neither.
+
+## `--discovery-mode=show` (default, live data)
+
+Every `SHOW` command returns only the objects the session role holds at least one privilege on, so
+visibility is granted object by object:
+
+| Statement | Minimum privilege |
+| --- | --- |
+| `SHOW USERS` | `OWNERSHIP` on each user. Without it every column but `name` comes back NULL. There is no read-only alternative in Snowflake's access control model |
+| `SHOW ROLES`, `SHOW GRANTS OF ROLE` | `OWNERSHIP` of each role |
+| `SHOW DATABASES` / `SHOW SCHEMAS` / `SHOW TABLES` | `USAGE` on the database and schema, plus at least one privilege on the object. `REFERENCES` is sufficient and is metadata-only — it grants visibility of an object's structure but never its data |
+| `SHOW GRANTS ON TABLE` / `ON VIEW` | Same as above |
+| `SHOW INTEGRATIONS` | `USAGE` on each integration |
+| `DESCRIBE USER` (RSA public key timestamps, `--sync-secrets`) | `OWNERSHIP` on the user. There is no `MONITOR` privilege on a user object |
+| `SHOW USER PROGRAMMATIC ACCESS TOKENS` | `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` or `OWNERSHIP`, per user |
+
+Under this mode, users the connector's role does not own sync with a blank login, email, and
+`TYPE`. The connector detects this per user, logs a warning naming the user, and reports the
+account type as unspecified rather than guessing — so a service account with a suppressed `TYPE`
+is not silently classified as a person. If no sampled user's attributes are readable at all,
+startup fails with a named, actionable error instead of syncing blank users.
+
+Snowflake also supports granting `MANAGE GRANTS` on a single database or schema rather than on the
+account. That is a customer-side configuration choice and needs no connector setting; see
+Snowflake's [container-level MANAGE GRANTS](https://docs.snowflake.com/en/user-guide/container-manage-grants-using)
+documentation.
+
+## Narrowing the scope
+
+`--sync-object-resources=false` turns off the database, schema, and table resource types as a
+group, so a users-roles-and-grants-only sync needs none of the object-level privileges above. This
+is different from `--excluded-databases`, which is a connector-side filter applied after the
+privileges have already been granted and which requires every database you want skipped to be
+named. Snowflake secrets are database-scoped, so the `secret` resource type is not synced while
+object resources are off; RSA public keys are user-scoped and are unaffected.
+
+## Provisioning privileges
+
+User lifecycle (create, delete, enable, disable) and programmatic access token operations run as a
+dedicated write role, configurable with `--write-role` and defaulting to Snowflake's `USERADMIN`
+system role. To avoid granting `USERADMIN` to the service account:
+
+```sql
+GRANT CREATE USER ON ACCOUNT                                  TO ROLE <write role>;
+GRANT MODIFY ON USER <user>                                    TO ROLE <write role>;
+GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <user> TO ROLE <write role>;
+```
+
+Account role grant and revoke run as the session's default role, not the write role, and require
+`OWNERSHIP` of the role being granted.
+
+License sync reads `SHOW ORGANIZATION ACCOUNTS` as a dedicated organization role, configurable with
+`--organization-role` and defaulting to `GLOBALORGADMIN`. It also counts users via
+`SELECT ... FROM SNOWFLAKE.ACCOUNT_USAGE.USERS`, so it needs `SNOWFLAKE.SECURITY_VIEWER` (or an
+equivalent `SELECT` grant) and a running warehouse in both discovery modes. License sync is opt-in;
+none of this is needed unless you enable it.
+
+`--write-role`, `--organization-role`, and `--discovery-mode` all default to exactly what the
+connector did before they existed, and `--sync-object-resources` defaults to true, so an existing
+configuration's behavior is unchanged until one of them is set.
 
 # Contributing, Support and Issues
 
@@ -281,20 +373,24 @@ Flags:
 --account-url string          required: Account URL. ($BATON_ACCOUNT_URL)
 --client-id string            The client ID used to authenticate with ConductorOne ($BATON_CLIENT_ID)
 --client-secret string        The client secret used to authenticate with ConductorOne ($BATON_CLIENT_SECRET)
+--discovery-mode string       How the connector discovers inventory: "show" or "account_usage". ($BATON_DISCOVERY_MODE) (default "show")
 --excluded-databases strings  Database names to exclude from sync, case-insensitive. Can be specified multiple times. ($BATON_EXCLUDED_DATABASES)
 -f, --file string             The path to the c1z file to sync with ($BATON_FILE) (default "sync.c1z")
 -h, --help                    help for baton-snowflake
 --issue-credentials           Enable issuing Snowflake programmatic access tokens for existing users. ($BATON_ISSUE_CREDENTIALS)
 --log-format string           The output format for logs: json, console ($BATON_LOG_FORMAT) (default "json")
 --log-level string            The log level: debug, info, warn, error ($BATON_LOG_LEVEL) (default "info")
+--organization-role string    Snowflake role used for organization-scoped reads. ($BATON_ORGANIZATION_ROLE) (default "GLOBALORGADMIN")
 --private-key string          Private Key (PEM format). ($BATON_PRIVATE_KEY)
 --private-key-path string     Private Key Path. ($BATON_PRIVATE_KEY_PATH)
 -p, --provisioning            This must be set in order for provisioning actions to be enabled ($BATON_PROVISIONING)
 --skip-full-sync              This must be set to skip a full sync ($BATON_SKIP_FULL_SYNC)
+--sync-object-resources       Sync database, schema, and table resources and their grants. ($BATON_SYNC_OBJECT_RESOURCES) (default true)
 --sync-secrets                Enable synchronization of Snowflake secrets. ($BATON_SYNC_SECRETS)
 --ticketing                   This must be set to enable ticketing support ($BATON_TICKETING)
 --user-identifier string      required: User Identifier. ($BATON_USER_IDENTIFIER)
 -v, --version                 version for baton-snowflake
+--write-role string           Snowflake role used for user lifecycle and token operations. ($BATON_WRITE_ROLE) (default "USERADMIN")
 
 Use "baton-snowflake [command] --help" for more information about a command.
 

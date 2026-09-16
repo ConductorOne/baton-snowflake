@@ -28,11 +28,48 @@ const (
 	AuthTypeHeaderKey   = "X-Snowflake-Authorization-Token-Type"
 	AuthTypeHeaderValue = "KEYPAIR_JWT"
 	RoleHeaderKey       = "X-Snowflake-Role"
-	UserAdminRole       = "USERADMIN"
-	// GlobalOrgAdminRole is required by SHOW ORGANIZATION ACCOUNTS. The SQL API takes
-	// the role in the request body, not the RoleHeaderKey header.
+	// UserAdminRole is the default role for write operations (user lifecycle and
+	// programmatic access tokens). It is only a default: a tenant that cannot grant the
+	// USERADMIN system role to its service user overrides it with Client.WriteRole so a
+	// custom role holding just CREATE USER on the account and MODIFY on the in-scope
+	// users can be used instead. See ClientOption WithWriteRole.
+	UserAdminRole = "USERADMIN"
+	// GlobalOrgAdminRole is the default role for SHOW ORGANIZATION ACCOUNTS. The SQL API
+	// takes the role in the request body, not the RoleHeaderKey header. Overridable via
+	// Client.OrganizationRole so a delegated org role can be used in place of the
+	// top-level org admin.
 	GlobalOrgAdminRole = "GLOBALORGADMIN"
 )
+
+// DiscoveryMode selects which Snowflake surface the connector reads inventory from.
+type DiscoveryMode string
+
+const (
+	// DiscoveryModeShow is the default: discovery runs through SHOW commands. Every SHOW
+	// command returns only the objects the session role holds at least one privilege on,
+	// so full-account visibility requires either per-object OWNERSHIP or account-level
+	// MANAGE GRANTS.
+	DiscoveryModeShow DiscoveryMode = "show"
+	// DiscoveryModeAccountUsage reads inventory from the SNOWFLAKE.ACCOUNT_USAGE schema
+	// instead. It needs no MANAGE GRANTS and no per-object grants at all - only the
+	// SNOWFLAKE.ACCOUNT_USAGE SECURITY_VIEWER and OBJECT_VIEWER database roles - at the
+	// cost of Snowflake's documented ACCOUNT_USAGE latency (90 minutes to 3 hours
+	// depending on the view) and a running warehouse to execute the SELECTs.
+	DiscoveryModeAccountUsage DiscoveryMode = "account_usage"
+)
+
+// ParseDiscoveryMode maps a configured discovery-mode string to its DiscoveryMode.
+// An empty value is the SHOW path, so an unset config keeps today's behavior.
+func ParseDiscoveryMode(s string) (DiscoveryMode, error) {
+	switch DiscoveryMode(strings.ToLower(strings.TrimSpace(s))) {
+	case "", DiscoveryModeShow:
+		return DiscoveryModeShow, nil
+	case DiscoveryModeAccountUsage:
+		return DiscoveryModeAccountUsage, nil
+	default:
+		return "", fmt.Errorf("baton-snowflake: unknown discovery mode %q (expected %q or %q)", s, DiscoveryModeShow, DiscoveryModeAccountUsage)
+	}
+}
 
 const (
 	rowTypeString       = "text"
@@ -47,6 +84,17 @@ type (
 
 		AccountUrl       string
 		StatementsApiUrl *url.URL
+
+		// WriteRole is the Snowflake role the connector asks for on write operations:
+		// user create/delete (REST), ALTER USER SET DISABLED, and programmatic access
+		// token add/remove. Defaults to UserAdminRole.
+		WriteRole string
+		// OrganizationRole is the Snowflake role the connector asks for on
+		// organization-scoped reads (SHOW ORGANIZATION ACCOUNTS). Defaults to
+		// GlobalOrgAdminRole.
+		OrganizationRole string
+		// DiscoveryMode selects the inventory read path. Defaults to DiscoveryModeShow.
+		DiscoveryMode DiscoveryMode
 	}
 	PartitionInfo struct {
 		RowCount int `json:"rowCount"`
@@ -198,18 +246,85 @@ func createStatementsApiUrl(accountUrl string) (*url.URL, error) {
 	return url.Parse(stringUrl)
 }
 
-func New(accountUrl string, jwtConfig JWTConfig, httpClient *http.Client) (*Client, error) {
+// ClientOption customizes a Client at construction time. Options are variadic so the
+// three-argument New call used across the tests keeps working and keeps defaulting to the
+// Snowflake built-in system roles.
+type ClientOption func(*Client)
+
+// WithWriteRole overrides the role used for write operations. An empty or whitespace-only
+// role is ignored so a config field left blank falls back to UserAdminRole rather than
+// sending an empty role (which would silently run as the session's default role).
+func WithWriteRole(role string) ClientOption {
+	return func(c *Client) {
+		if r := strings.TrimSpace(role); r != "" {
+			c.WriteRole = r
+		}
+	}
+}
+
+// WithOrganizationRole overrides the role used for organization-scoped reads. Blank is
+// ignored, same rationale as WithWriteRole.
+func WithOrganizationRole(role string) ClientOption {
+	return func(c *Client) {
+		if r := strings.TrimSpace(role); r != "" {
+			c.OrganizationRole = r
+		}
+	}
+}
+
+// WithDiscoveryMode selects the inventory read path. An empty mode is ignored.
+func WithDiscoveryMode(mode DiscoveryMode) ClientOption {
+	return func(c *Client) {
+		if mode != "" {
+			c.DiscoveryMode = mode
+		}
+	}
+}
+
+func New(accountUrl string, jwtConfig JWTConfig, httpClient *http.Client, opts ...ClientOption) (*Client, error) {
 	statementsApiUrl, err := createStatementsApiUrl(accountUrl)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{
+	client := &Client{
 		BaseHttpClient:   *uhttp.NewBaseHttpClient(httpClient),
 		JWTConfig:        jwtConfig,
 		AccountUrl:       accountUrl,
 		StatementsApiUrl: statementsApiUrl,
-	}, nil
+		WriteRole:        UserAdminRole,
+		OrganizationRole: GlobalOrgAdminRole,
+		DiscoveryMode:    DiscoveryModeShow,
+	}
+	for _, opt := range opts {
+		opt(client)
+	}
+
+	return client, nil
+}
+
+// writeRole returns the role to send on write operations, falling back to the USERADMIN
+// default for a zero-valued Client (tests construct Client literals directly).
+func (c *Client) writeRole() string {
+	if r := strings.TrimSpace(c.WriteRole); r != "" {
+		return r
+	}
+	return UserAdminRole
+}
+
+// organizationRole returns the role to send on organization-scoped reads, falling back to
+// the GLOBALORGADMIN default for a zero-valued Client.
+func (c *Client) organizationRole() string {
+	if r := strings.TrimSpace(c.OrganizationRole); r != "" {
+		return r
+	}
+	return GlobalOrgAdminRole
+}
+
+// usesAccountUsage reports whether inventory reads should go through the
+// SNOWFLAKE.ACCOUNT_USAGE views rather than SHOW commands.
+func (c *Client) usesAccountUsage() bool {
+	return c.DiscoveryMode == DiscoveryModeAccountUsage
 }
 
 func (c *Client) PostStatementRequest(ctx context.Context, queries []string) (*http.Request, error) {

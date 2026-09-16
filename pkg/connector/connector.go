@@ -14,6 +14,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/conductorone/baton-snowflake/pkg/config"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 )
 
@@ -22,6 +24,12 @@ type Connector struct {
 	SyncSecrets       bool
 	IssueCredentials  bool
 	excludedDatabases []string
+	// syncObjectResources gates the database/schema/table resource types as a group.
+	// Off means the tenant never has to grant object-level privileges (USAGE on
+	// databases and schemas, REFERENCES on tables) to the service account at all -
+	// unlike excludedDatabases, which is a connector-side filter applied after the
+	// privileges have already been granted and every database enumerated.
+	syncObjectResources bool
 }
 
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
@@ -34,8 +42,6 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 	builders := []connectorbuilder.ResourceSyncerV2{
 		userSyncer,
 		newAccountRoleBuilder(d.Client),
-		newDatabaseBuilder(d.Client, d.SyncSecrets, d.excludedDatabases),
-		newTableBuilder(d.Client),
 		newIntegrationBuilder(d.Client),
 		newLicenseBuilder(d.Client),
 		// The programmatic_access_token type is opt-in (OptInRequired annotation on
@@ -45,8 +51,25 @@ func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.Reso
 		newProgrammaticAccessTokenBuilder(d.Client),
 	}
 
+	// Object-level types are registered as a group: table resources are children of
+	// database resources, so leaving the table builder registered without the database
+	// builder would only ever produce an empty type.
+	if d.syncObjectResources {
+		builders = append(builders,
+			newDatabaseBuilder(d.Client, d.SyncSecrets, d.excludedDatabases),
+			newTableBuilder(d.Client),
+		)
+	}
+
 	if d.SyncSecrets {
-		builders = append(builders, newSecretBuilder(d.Client), newRsaBuilder(d.Client))
+		// Snowflake secrets are database-scoped, so the secret builder only ever gets
+		// called with a database parent. Registering it without the database builder
+		// would leave a permanently empty type, so it moves with the object-level group;
+		// RSA public keys are user-scoped and are unaffected.
+		if d.syncObjectResources {
+			builders = append(builders, newSecretBuilder(d.Client))
+		}
+		builders = append(builders, newRsaBuilder(d.Client))
 	}
 
 	return builders
@@ -189,35 +212,144 @@ func (d *Connector) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error)
 	}, nil
 }
 
+// ErrNoUserVisibility is the named startup failure for "the connector can read the user
+// list but not any user's attributes". Snowflake blanks every SHOW USERS column but name
+// unless the session role holds OWNERSHIP on the user or account-level MANAGE GRANTS, so a
+// sync in this state would produce users with no login, no email, and no TYPE - which the
+// connector would then have to classify blind. Callers can match on it with errors.Is.
+var ErrNoUserVisibility = errors.New("baton-snowflake: no user attributes are visible to the connector's role")
+
+// userVisibility is the outcome of inspecting a sample of SHOW USERS rows for the
+// blanked-column signature of a missing user privilege.
+type userVisibility struct {
+	Total int
+	// Blanked counts sampled users whose login_name came back empty. login_name is
+	// mandatory for every Snowflake user TYPE (not just PERSON), so an empty one means
+	// the row was returned with its columns suppressed rather than genuinely unset.
+	Blanked int
+	// BlankedNames is the blanked users' names, which SHOW USERS always returns even when
+	// it suppresses everything else. Bounded by maxReportedBlankedUsers so a large
+	// partially-visible account cannot produce an unbounded error string.
+	BlankedNames []string
+}
+
+// maxReportedBlankedUsers bounds how many blanked user names a diagnostic names explicitly.
+const maxReportedBlankedUsers = 10
+
+func inspectUserVisibility(users []snowflake.User) userVisibility {
+	v := userVisibility{Total: len(users)}
+	for _, user := range users {
+		if strings.TrimSpace(user.Login) != "" {
+			continue
+		}
+		v.Blanked++
+		if len(v.BlankedNames) < maxReportedBlankedUsers {
+			v.BlankedNames = append(v.BlankedNames, user.Username)
+		}
+	}
+	return v
+}
+
+// Complete reports whether every sampled user's attributes were visible.
+func (v userVisibility) Complete() bool { return v.Blanked == 0 }
+
+// None reports whether NO sampled user's attributes were visible, which is the
+// all-or-nothing case that must fail startup.
+func (v userVisibility) None() bool { return v.Total > 0 && v.Blanked == v.Total }
+
+// Partial reports whether some but not all sampled users were visible. This is the state a
+// tenant using the per-user OWNERSHIP model lands in when some users were never handed over:
+// the sync can still run, but the unowned users would sync with blank attributes.
+func (v userVisibility) Partial() bool { return v.Blanked > 0 && v.Blanked < v.Total }
+
+// describeBlanked renders the blanked user names for a diagnostic, noting truncation.
+func (v userVisibility) describeBlanked() string {
+	if len(v.BlankedNames) == 0 {
+		return ""
+	}
+	s := strings.Join(v.BlankedNames, ", ")
+	if v.Blanked > len(v.BlankedNames) {
+		s = fmt.Sprintf("%s (and %d more)", s, v.Blanked-len(v.BlankedNames))
+	}
+	return s
+}
+
+// noUserVisibilityError is the actionable form of ErrNoUserVisibility. It names the exact
+// grants that fix the condition rather than pointing only at MANAGE GRANTS, because
+// per-user OWNERSHIP is the least-privilege alternative and ACCOUNT_USAGE discovery avoids
+// the requirement altogether. The remedies are mode-specific: under ACCOUNT_USAGE discovery
+// there is no per-user privilege to grant, so suggesting OWNERSHIP there would send the
+// operator after a privilege that cannot be the cause.
+func noUserVisibilityError(mode snowflake.DiscoveryMode, sampled int) error {
+	if mode == snowflake.DiscoveryModeAccountUsage {
+		return fmt.Errorf(
+			"%w: %s returned %d user(s) with an empty login_name. LOGIN_NAME is mandatory for every "+
+				"Snowflake user type and this view has no per-user privilege requirement, so this is "+
+				"not a missing grant. Check that the connector is reading the account you expect and "+
+				"that the view is populated - ACCOUNT_USAGE lags the live account by up to 3 hours, so "+
+				"a very recently provisioned account can legitimately read empty",
+			ErrNoUserVisibility, "SNOWFLAKE.ACCOUNT_USAGE.USERS", sampled,
+		)
+	}
+	return fmt.Errorf(
+		"%w: SHOW USERS returned %d user(s) but login_name was empty on every one, which is how "+
+			"Snowflake reports that the session role may not read user properties. Fix with any one of: "+
+			"(a) GRANT OWNERSHIP ON USER <name> TO ROLE <connector role> for each in-scope user, "+
+			"(b) set --discovery-mode=account_usage and grant the connector role the "+
+			"SNOWFLAKE.ACCOUNT_USAGE SECURITY_VIEWER database role, or "+
+			"(c) GRANT MANAGE GRANTS ON ACCOUNT TO ROLE <connector role> (account-wide and "+
+			"self-escalating - prefer (a) or (b)). Also confirm the service account actually has a "+
+			"role granted to it: a DEFAULT_ROLE that was never granted produces this same signature",
+		ErrNoUserVisibility, sampled,
+	)
+}
+
 // Validate is called to ensure that the connector is properly configured. It should exercise any API credentials
 // to be sure that they are valid.
+//
+// The check is deliberately a diagnostic, not a gate on full account visibility: it samples
+// one page of users and fails only when NO user's attributes are readable. A partially
+// visible account (the per-user OWNERSHIP model with some users unowned) is a warning, not
+// a failure - it is legitimate for a tenant to hand over a subset of users - and the
+// per-user detection in userResource marks each affected user at sync time.
 func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
 	users, err := d.Client.ListUsers(ctx, "", resourcePageSize)
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: validation request failed: %w", err)
 	}
 
 	if len(users) == 0 {
-		return nil, fmt.Errorf("no users found")
+		if d.Client.DiscoveryMode == snowflake.DiscoveryModeAccountUsage {
+			return nil, fmt.Errorf(
+				"baton-snowflake: SNOWFLAKE.ACCOUNT_USAGE.USERS returned no rows; check that the " +
+					"connector is reading the account you expect and that the view is populated",
+			)
+		}
+		return nil, fmt.Errorf(
+			"baton-snowflake: SHOW USERS returned no users; the connector's role cannot see any " +
+				"user in the account",
+		)
 	}
 
-	if err := missingLoginPrivilegeErr(users); err != nil {
-		return nil, err
+	visibility := inspectUserVisibility(users)
+	switch {
+	case visibility.None():
+		return nil, noUserVisibilityError(d.Client.DiscoveryMode, visibility.Total)
+	case visibility.Partial():
+		l.Warn(
+			"baton-snowflake: some users are only partially visible to the connector's role; "+
+				"their login, email, and TYPE will sync blank and their account type will be "+
+				"reported as unspecified rather than guessed. Grant OWNERSHIP on these users, or "+
+				"use --discovery-mode=account_usage, to sync them fully",
+			zap.Int("sampled_users", visibility.Total),
+			zap.Int("partially_visible_users", visibility.Blanked),
+			zap.String("examples", visibility.describeBlanked()),
+		)
 	}
 
 	return nil, nil
-}
-
-// Snowflake returns NULL for every SHOW USERS column but name unless the role holds OWNERSHIP or
-// account-level MANAGE GRANTS, and login_name is mandatory for every user TYPE, not just PERSON.
-// Fail only when every sampled user lacks it; a single user can lack it for unrelated reasons.
-func missingLoginPrivilegeErr(users []snowflake.User) error {
-	for _, user := range users {
-		if strings.TrimSpace(user.Login) != "" {
-			return nil
-		}
-	}
-	return errors.New("baton-snowflake: SHOW USERS returned no login_name; role likely lacks OWNERSHIP or account-level MANAGE GRANTS")
 }
 
 // New returns a new instance of the connector.
@@ -258,15 +390,25 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, baseHttpClient)
 	httpClient := oauth2.NewClient(ctx, ts)
 
-	client, err := snowflake.New(cfg.AccountUrl, jwtConfig, httpClient)
+	discoveryMode, err := snowflake.ParseDiscoveryMode(cfg.DiscoveryMode)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client, err := snowflake.New(cfg.AccountUrl, jwtConfig, httpClient,
+		snowflake.WithWriteRole(cfg.WriteRole),
+		snowflake.WithOrganizationRole(cfg.OrganizationRole),
+		snowflake.WithDiscoveryMode(discoveryMode),
+	)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return &Connector{
-		Client:            client,
-		SyncSecrets:       cfg.SyncSecrets,
-		IssueCredentials:  cfg.IssueCredentials,
-		excludedDatabases: cfg.ExcludedDatabases,
+		Client:              client,
+		SyncSecrets:         cfg.SyncSecrets,
+		IssueCredentials:    cfg.IssueCredentials,
+		excludedDatabases:   cfg.ExcludedDatabases,
+		syncObjectResources: cfg.SyncObjectResources,
 	}, nil, nil
 }
