@@ -82,7 +82,11 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		return nil, c.classifyReadError(accountUsageSchemataView, resp1, &apiErr, err)
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+	// Captured before the statement-result GET: that response reuses this struct and does
+	// not necessarily carry the handle, so reading it afterwards can see an empty string.
+	handle := response.StatementHandle
+
+	req, err = c.GetStatementResponse(ctx, handle)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +112,37 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		return nil, c.classifyReadError(accountUsageSchemataView, resp2, &apiErr, err)
 	}
 
-	return response.ListSchemas()
+	schemas, err := response.ListSchemas()
+	if err != nil {
+		return nil, err
+	}
+
+	// Walk the remaining partitions rather than returning partition 0 alone.
+	//
+	// This used to read partition 0 only. Under SHOW that truncation was mostly theoretical,
+	// because the statement returns just the schemas the role holds a privilege on. Under
+	// ACCOUNT_USAGE it is not: SCHEMATA returns every schema in the database account-wide, so
+	// a large database spills past partition 0 - and because tableBuilder.List pushes one
+	// page state per schema returned, a dropped schema takes every table under it out of the
+	// sync, which C1 reads as a deletion.
+	rowTypes := response.ResultSetMetadata.RowTypes
+	numPartitions := len(response.ResultSetMetadata.PartitionInfo)
+	for partitionID := 1; partitionID < numPartitions; partitionID++ {
+		more, err := c.listSchemasPartition(ctx, handle, partitionID, rowTypes, &apiErr)
+		if err != nil {
+			return nil, err
+		}
+		schemas = append(schemas, more...)
+	}
+
+	if numPartitions > 1 {
+		l.Debug("ListSchemasInDatabase walked multiple partitions",
+			zap.String("database", databaseName),
+			zap.Int("numPartitions", numPartitions),
+			zap.Int("schemas", len(schemas)))
+	}
+
+	return schemas, nil
 }
 
 var tableStructFieldToColumnMap = map[string]string{
@@ -596,6 +630,36 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	}
 
 	return grants, nextCursor, nil
+}
+
+// listSchemasPartition fetches one partition of a schema listing. It is a function rather
+// than an inline loop body so each response body is closed when the partition is done,
+// instead of every body staying open until the whole walk returns.
+func (c *Client) listSchemasPartition(
+	ctx context.Context,
+	handle string,
+	partitionID int,
+	rowTypes []RowType,
+	apiErr *SnowflakeError,
+) ([]Schema, error) {
+	req, err := c.GetStatementPartition(ctx, handle, partitionID)
+	if err != nil {
+		return nil, err
+	}
+
+	var partition ListSchemasRawResponse
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(apiErr))
+	defer closeResponseBody(resp)
+	if err != nil {
+		return nil, c.classifyReadError(accountUsageSchemataView, resp, apiErr, err)
+	}
+
+	// Partition-only responses carry no rowType metadata, so restore it from partition 0 or
+	// ParseRow cannot resolve column names by position.
+	if len(partition.ResultSetMetadata.RowTypes) == 0 {
+		partition.ResultSetMetadata.RowTypes = rowTypes
+	}
+	return partition.ListSchemas()
 }
 
 // listSchemasStatement is the discovery-mode-dependent statement for a database's schemas.

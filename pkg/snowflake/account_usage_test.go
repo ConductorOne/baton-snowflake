@@ -743,3 +743,117 @@ func TestAccountUsageSharedDatabaseFailureIsAlsoFatal(t *testing.T) {
 	require.True(t, IsAccountUsageUnavailable(err),
 		"an unavailable SNOWFLAKE share under ACCOUNT_USAGE must be fatal: %v", err)
 }
+
+// Joining ErrAccountUsageUnavailable alongside a skippable sentinel is not enough on its
+// own: a caller that checks the skippable predicate first would still skip. These predicates
+// have to answer false for an ACCOUNT_USAGE failure so the fatal classification wins
+// regardless of the order a call site checks them in.
+//
+// The concrete hazard is pkg/connector/tables.go: it swallows a 422 from GetDatabase and
+// then marks the database shared, which collapses every table under it to owner-only
+// entitlements and zero grants - a silent deletion in place of a loud failure.
+func TestAccountUsageFailuresAreNotSkippableByAnyPredicate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		code string
+		body string
+	}{
+		{
+			name: "missing viewer grant",
+			code: "002003",
+			body: `{"code":"002003","message":"SQL compilation error:\nObject does not exist or not authorized."}`,
+		},
+		{
+			name: "invalid identifier",
+			code: "000904",
+			body: `{"code":"000904","message":"SQL compilation error: error line 1 at position 7\ninvalid identifier 'HAS_MFA'"}`,
+		},
+		{
+			name: "shared database unavailable",
+			code: "002037",
+			body: `{"code":"002037","message":"Shared database is no longer available for use."}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+
+			client := accountUsageClient(t, server.URL, server.Client())
+			_, statusCode, err := client.GetDatabase(context.Background(), "DB")
+			require.Error(t, err)
+			require.True(t, IsAccountUsageUnavailable(err), "got %v", err)
+
+			// All three skip predicates the connector layer consults must decline, including
+			// the status-keyed one - classifyAccountUsageError preserves the underlying 422.
+			assert.False(t, IsUnprocessableEntity(statusCode, err),
+				"a 422 carrying the ACCOUNT_USAGE sentinel must not read as per-object")
+			assert.False(t, IsSharedDatabaseUnavailable(err),
+				"an account-wide failure must not read as a revoked share")
+			assert.False(t, IsInsufficientPrivileges(err),
+				"an account-wide failure must not read as a per-object denial")
+		})
+	}
+}
+
+// ListSchemasInDatabase used to return partition 0 only. Under SHOW that was nearly
+// theoretical - the statement returns just the schemas the role can see - but under
+// ACCOUNT_USAGE the view is account-wide, so a large database spills past partition 0. Since
+// tableBuilder.List pushes one page state per schema returned, a dropped schema takes every
+// table under it out of the sync, which C1 reads as a deletion.
+func TestListSchemasInDatabaseWalksEveryPartition(t *testing.T) {
+	t.Parallel()
+
+	rowTypes := []map[string]any{
+		{"name": "name", "type": "text"},
+		{"name": "database_name", "type": "text"},
+	}
+	var partitionsRequested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		partition := r.URL.Query().Get("partition")
+		partitionsRequested = append(partitionsRequested, partition)
+		switch partition {
+		case "1":
+			// A real partition response carries rows but no rowType metadata.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": [][]string{{"S1", "DB"}},
+			})
+		case "2":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": [][]string{{"S2", "DB"}},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"statementHandle": "handle-1",
+				"resultSetMetadata": map[string]any{
+					"numRows": 3,
+					"rowType": rowTypes,
+					"partitionInfo": []map[string]any{
+						{"rowCount": 1}, {"rowCount": 1}, {"rowCount": 1},
+					},
+				},
+				"data": [][]string{{"S0", "DB"}},
+			})
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := accountUsageClient(t, server.URL, server.Client())
+	schemas, err := client.ListSchemasInDatabase(context.Background(), "DB")
+	require.NoError(t, err)
+
+	var names []string
+	for _, s := range schemas {
+		names = append(names, s.Name)
+	}
+	assert.Equal(t, []string{"S0", "S1", "S2"}, names,
+		"every partition's schemas must be returned, not just partition 0")
+	assert.Contains(t, partitionsRequested, "1")
+	assert.Contains(t, partitionsRequested, "2")
+}

@@ -92,6 +92,13 @@ func isSharedDatabaseUnavailable(resp *http.Response, apiErr *SnowflakeError) bo
 // denial that the connector may skip (HTTP 422 whose body matches Snowflake's canned "no longer
 // available for use" message, joined as ErrSharedDatabaseUnavailable).
 func IsSharedDatabaseUnavailable(err error) bool {
+	// An ACCOUNT_USAGE failure is never skippable, and classifyAccountUsageError joins this
+	// sentinel alongside ErrAccountUsageUnavailable for the shared-database shape. Joining
+	// alone is not enough: a call site that checks this predicate first would skip the
+	// database and continue. The fatal sentinel has to win here, not just be present.
+	if IsAccountUsageUnavailable(err) {
+		return false
+	}
 	return err != nil && errors.Is(err, ErrSharedDatabaseUnavailable)
 }
 
@@ -103,6 +110,15 @@ func IsSharedDatabaseUnavailable(err error) bool {
 // It is NOT the privilege-skip used by CXH-2193 paths. Those must call IsInsufficientPrivileges
 // so a SQL-compilation 422 cannot be swallowed as invisible data.
 func IsUnprocessableEntity(statusCode int, err error) bool {
+	// Same ordering problem as IsSharedDatabaseUnavailable, and worse here because this
+	// predicate keys on the raw status: classifyAccountUsageError preserves the underlying
+	// 422, so an account-wide ACCOUNT_USAGE failure would read as a per-object "not
+	// resolvable" and be swallowed. pkg/connector/tables.go then marks the database shared,
+	// which collapses every table under it to owner-only entitlements and zero grants - a
+	// silent deletion in place of a loud failure.
+	if IsAccountUsageUnavailable(err) {
+		return false
+	}
 	if statusCode == http.StatusUnprocessableEntity {
 		return true
 	}
