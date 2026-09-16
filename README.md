@@ -305,7 +305,7 @@ visibility is granted object by object:
 | `SHOW SECRETS IN DATABASE` (`--sync-secrets`) | `USAGE` on the database plus a privilege on the secret; see Snowflake's [SHOW SECRETS access control](https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-control-requirements) |
 | `SHOW GRANTS TO USER` (`--issue-credentials`) | `OWNERSHIP` on the user, or `MANAGE GRANTS` |
 | `SHOW INTEGRATIONS` | `USAGE` on each integration |
-| `DESCRIBE USER` (RSA public key timestamps, `--sync-secrets`) | `OWNERSHIP` on the user. There is no `MONITOR` privilege on a user object |
+| `DESCRIBE USER` (RSA public key timestamps with `--sync-secrets`; the pre-issuance read with `--issue-credentials`) | `OWNERSHIP` on the user. There is no `MONITOR` privilege on a user object. Required in both discovery modes - `DESCRIBE USER` is always live |
 | `SHOW USER PROGRAMMATIC ACCESS TOKENS` | `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` or `OWNERSHIP`, per user |
 
 Under this mode, users the connector's role does not own sync with a blank login, email, and

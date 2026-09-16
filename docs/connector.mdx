@@ -138,6 +138,13 @@ GRANT USAGE ON DATABASE <db> TO ROLE C1_CONNECTOR;
 
 -- Programmatic access tokens, only if you enable that resource type.
 GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <user> TO ROLE C1_CONNECTOR;
+
+-- Token issuance ("Issue credentials") reads the target user with DESCRIBE USER before
+-- minting a token, and DESCRIBE USER is live in both discovery modes and requires
+-- OWNERSHIP. Grant this even under Model A, and even if you do not enable "Sync secrets" -
+-- it is the same grant as the first line above, listed again because the two settings are
+-- independent.
+GRANT OWNERSHIP ON USER <user> TO ROLE C1_CONNECTOR COPY CURRENT GRANTS;
 ```
 
 ### Model B: SHOW discovery with per-user ownership

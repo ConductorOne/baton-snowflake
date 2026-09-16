@@ -142,7 +142,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 			"baton-snowflake: %s returned %d partitions of schemas for database %q, over the %d "+
 				"this connector walks. Sync the database with fewer schemas, or open an issue so "+
 				"the schema listing can be paginated through the SDK instead",
-			accountUsageSchemataView, numPartitions, databaseName, maxSchemaPartitions,
+			c.schemaSourceLabel(), numPartitions, databaseName, maxSchemaPartitions,
 		)
 	}
 	for partitionID := 1; partitionID < numPartitions; partitionID++ {
@@ -660,6 +660,16 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	}
 
 	return grants, nextCursor, nil
+}
+
+// schemaSourceLabel names the surface the schema listing actually read, for a diagnostic
+// that does not point a SHOW-mode operator at an ACCOUNT_USAGE view the connector never
+// queried. The partition bound itself is mode-independent.
+func (c *Client) schemaSourceLabel() string {
+	if c.usesAccountUsage() {
+		return accountUsageSchemataView
+	}
+	return "SHOW SCHEMAS IN DATABASE"
 }
 
 // maxSchemaPartitions bounds the schema partition walk. Two narrow text columns per row put

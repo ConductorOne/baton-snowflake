@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -310,4 +311,47 @@ func TestGetUserStaysOnTheSessionDefaultRole(t *testing.T) {
 	_, roles := recorder.snapshot()
 	require.NotEmpty(t, roles)
 	assert.Empty(t, roles[0], "discovery reads must run as the session's default role")
+}
+
+// executeStatementWithRole serves both reads (via executeStatement, no role) and writes (via
+// executeStatementAsWriteRole). A 202 must produce the remedy that matches: nothing was
+// applied by a SHOW, and there is no sync to retry on an ALTER USER.
+func TestIncompleteStatementMessageMatchesReadOrWrite(t *testing.T) {
+	t.Parallel()
+
+	newServer := func(t *testing.T) *httptest.Server {
+		t.Helper()
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprint(w, `{"statementHandle":"handle-1"}`)
+		}))
+		t.Cleanup(s.Close)
+		return s
+	}
+
+	t.Run("read keeps the read remedy", func(t *testing.T) {
+		t.Parallel()
+		server := newServer(t)
+		client, err := New(server.URL, JWTConfig{}, server.Client())
+		require.NoError(t, err)
+
+		_, err = client.RoleGrantedToUser(context.Background(), "svc", "ANALYST")
+		require.Error(t, err)
+		require.True(t, IsStatementNotComplete(err), "got %v", err)
+		assert.NotContains(t, err.Error(), "whether it applied is unknown",
+			"a SHOW applied nothing, so the write remedy is wrong here")
+	})
+
+	t.Run("write keeps the write remedy", func(t *testing.T) {
+		t.Parallel()
+		server := newServer(t)
+		client, err := New(server.URL, JWTConfig{}, server.Client())
+		require.NoError(t, err)
+
+		err = client.RemoveProgrammaticAccessToken(context.Background(), "svc", "c1-request-1")
+		require.Error(t, err)
+		require.True(t, IsStatementNotComplete(err), "got %v", err)
+		assert.Contains(t, err.Error(), "whether it applied is unknown")
+	})
 }
