@@ -156,6 +156,44 @@
       "displayName": "Excluded Databases",
       "description": "Database names to exclude from sync (case-insensitive). Can be specified multiple times. When set, matching databases and all their tables are skipped entirely.",
       "stringSliceField": {}
+    },
+    {
+      "name": "sync-object-resources",
+      "displayName": "Sync Databases and Tables",
+      "description": "Sync database and table resources and their grants. Disable to run a users, roles, and role-grants only sync, so no object-level privileges (USAGE on databases and schemas, REFERENCES on tables) need to be granted to the service account at all. Snowflake secrets are database-scoped and are not synced while this is disabled.",
+      "boolField": {
+        "defaultValue": true
+      }
+    },
+    {
+      "name": "write-role",
+      "displayName": "Write Role",
+      "description": "Snowflake role used for user lifecycle (create, delete, enable, disable) and programmatic access token operations. Defaults to the USERADMIN system role. Set this to a customer-defined role holding only CREATE USER on the account and MODIFY on the in-scope users to avoid granting USERADMIN to the service account.",
+      "stringField": {
+        "defaultValue": "USERADMIN"
+      }
+    },
+    {
+      "name": "organization-role",
+      "displayName": "Organization Role",
+      "description": "Snowflake role used for organization-scoped reads (SHOW ORGANIZATION ACCOUNTS, which backs license sync). Defaults to the GLOBALORGADMIN system role. Set this to a delegated organization role to avoid granting the top-level org admin role to the service account.",
+      "stringField": {
+        "defaultValue": "GLOBALORGADMIN"
+      }
+    },
+    {
+      "name": "discovery-mode",
+      "displayName": "Discovery Mode",
+      "description": "How the connector discovers inventory. \"show\" (default) uses SHOW commands, which only return objects the service account's role holds a privilege on - full account visibility therefore needs per-object OWNERSHIP or account-level MANAGE GRANTS. \"account_usage\" reads the SNOWFLAKE.ACCOUNT_USAGE views instead, which needs no MANAGE GRANTS at all (only the ACCOUNT_USAGE SECURITY_VIEWER and OBJECT_VIEWER database roles) but is subject to Snowflake's documented ACCOUNT_USAGE latency of 90 minutes to 3 hours and requires a running warehouse.",
+      "stringField": {
+        "defaultValue": "show",
+        "rules": {
+          "in": [
+            "show",
+            "account_usage"
+          ]
+        }
+      }
     }
   ],
   "displayName": "Snowflake",

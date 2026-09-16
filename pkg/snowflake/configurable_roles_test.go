@@ -244,3 +244,50 @@ func TestRoleOverridesDoNotLeakIntoReads(t *testing.T) {
 		assert.Empty(t, role, "read %d must run as the session's default role", i)
 	}
 }
+
+// DescribeUser is the provisioning read: CreateAccount reads the new user back through it
+// and Issue looks up properties before minting a token. DESCRIBE USER requires OWNERSHIP on
+// the target user, and it is the write role that creates users, so the write role is the one
+// that owns them. Running it as the session's default role - which the documented
+// least-privilege setups never grant OWNERSHIP to - would create a user successfully and
+// then fail to read it back.
+func TestDescribeUserRunsAsTheWriteRole(t *testing.T) {
+	t.Parallel()
+	const customRole = "C1_USER_LIFECYCLE"
+
+	recorder := &statementRecorder{}
+	server := recordRoleServer(t, recorder)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client(), WithWriteRole(customRole))
+	require.NoError(t, err)
+
+	// The empty result set the recorder returns makes DescribeUser fail to parse a user;
+	// the role on the wire is what this test is about, so the error is not the subject.
+	_, _, _ = client.DescribeUser(context.Background(), nil, "svc")
+
+	statements, roles := recorder.snapshot()
+	require.NotEmpty(t, roles)
+	assert.Equal(t, `DESCRIBE USER "svc";`, statements[0])
+	assert.Equal(t, customRole, roles[0], "DescribeUser must pin the write role")
+}
+
+// The discovery counterpart: GetUser serves read-only sync, whose callers hold no write
+// privileges. Pinning the write role there would make a read-only sync depend on a
+// provisioning role, so it stays on the session's default role.
+func TestGetUserStaysOnTheSessionDefaultRole(t *testing.T) {
+	t.Parallel()
+
+	recorder := &statementRecorder{}
+	server := recordRoleServer(t, recorder)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client(), WithWriteRole("C1_USER_LIFECYCLE"))
+	require.NoError(t, err)
+
+	_, _, _ = client.GetUser(context.Background(), nil, "svc")
+
+	_, roles := recorder.snapshot()
+	require.NotEmpty(t, roles)
+	assert.Empty(t, roles[0], "discovery reads must run as the session's default role")
+}

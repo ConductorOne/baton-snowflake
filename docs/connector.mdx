@@ -72,7 +72,7 @@ Both actions accept the following fields:
 <Note>
 **`enable_user`/`disable_user` require `MODIFY` on the target user.** These actions run as the connector's **Write Role**, which defaults to `USERADMIN`. If that role holds neither `MODIFY` nor `OWNERSHIP` on the target user, Snowflake rejects the statement with `Insufficient privileges to operate on user '<name>'. Your primary role USERADMIN must have MODIFY granted on USER <name>.` Grant the privilege with `GRANT MODIFY ON USER <name> TO ROLE <write role>`, which does not transfer ownership. To avoid granting the `USERADMIN` system role to the service account at all, set **Write Role** to a role of your own — see [Privileges required for provisioning](#privileges-required-for-provisioning).
 
-This restriction stays hidden when the service account keeps Snowflake's default `DEFAULT_SECONDARY_ROLES = ALL`: a higher secondary role such as `ACCOUNTADMIN` remains active alongside the `USERADMIN` primary role and supplies the privilege. Accounts restricted to `USERADMIN` alone are the ones that hit it.
+This restriction stays hidden when the service account keeps Snowflake's default `DEFAULT_SECONDARY_ROLES = ALL`: a higher secondary role such as `ACCOUNTADMIN` remains active alongside the connector's **Write Role** as the primary role and supplies the privilege. Accounts restricted to `USERADMIN` alone are the ones that hit it.
 
 **`enable_user` does not clear an account lockout.** Snowflake can independently lock a user out after repeated failed logins (tracked via `SNOWFLAKE_LOCK`/`MINS_TO_UNLOCK`), separately from the `DISABLED` property these actions toggle. `enable_user` only clears `DISABLED` - a locked-out user stays locked, and the C1 resource still reports a disabled status (`details: "locked"`) until an administrator clears the lockout directly in Snowflake.
 </Note>
@@ -111,6 +111,10 @@ GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE C1_CONNECTOR;
 -- "Sync databases and tables" (see Model C).
 GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER TO ROLE C1_CONNECTOR;
 
+-- SHOW INTEGRATIONS has no ACCOUNT_USAGE equivalent, so integrations stay on the
+-- SHOW path in this model too. Omit if you do not sync integrations.
+GRANT USAGE ON INTEGRATION <integration> TO ROLE C1_CONNECTOR;
+
 -- ACCOUNT_USAGE reads are SELECT statements, so they need compute. The SHOW
 -- commands used by Model B are metadata-only and need no warehouse.
 GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE C1_CONNECTOR;
@@ -124,9 +128,23 @@ Trade-offs, both documented by Snowflake:
 
 Integrations and RSA public key last-set timestamps have no `ACCOUNT_USAGE` equivalent and stay on the `SHOW`/`DESCRIBE` path in both models. Programmatic access tokens and Snowflake secrets likewise.
 
+Because those paths are unchanged by the discovery mode, the opt-in capabilities that depend on them need their own grants in **either** model:
+
+```sql
+-- RSA public key timestamps and Snowflake secrets (DESCRIBE USER / SHOW SECRETS),
+-- only if you enable "Sync secrets".
+GRANT OWNERSHIP ON USER <user> TO ROLE C1_CONNECTOR COPY CURRENT GRANTS;
+GRANT USAGE ON DATABASE <db> TO ROLE C1_CONNECTOR;
+
+-- Programmatic access tokens, only if you enable that resource type.
+GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <user> TO ROLE C1_CONNECTOR;
+```
+
 ### Model B: SHOW discovery with per-user ownership
 
 Leave **Discovery Mode** at the default `show`. Every `SHOW` command returns only the objects the session role holds at least one privilege on, so visibility has to be granted object by object. This still avoids `MANAGE GRANTS`, but role discovery covers only the roles explicitly handed to the connector rather than the whole account.
+
+Weigh the trade-off before choosing this model over Model A: `OWNERSHIP` is Snowflake's most powerful object-level privilege. Owning a user implies the ability to alter and drop it, and owning a role implies the ability to grant it. Model B is bounded to the objects you hand over, where account-level `MANAGE GRANTS` is not — but on those objects it is not a read-only privilege.
 
 ```sql
 USE ROLE ACCOUNTADMIN;
@@ -144,17 +162,31 @@ GRANT OWNERSHIP ON ROLE <role> TO ROLE C1_CONNECTOR COPY CURRENT GRANTS;
 -- Object-level inventory, metadata only: REFERENCES grants the ability to see an
 -- object's structure but never its data. Omit all of this if you disable
 -- "Sync databases and tables" (see Model C).
+--
+-- REFERENCES is expected to satisfy SHOW GRANTS ON TABLE / ON VIEW, on the basis
+-- that SHOW returns objects the role holds at least one privilege on. That specific
+-- combination has NOT yet been confirmed against a live account. If table grants
+-- come back empty, grant SELECT on the tables instead and please open an issue.
 GRANT USAGE ON DATABASE <db> TO ROLE C1_CONNECTOR;
 GRANT USAGE ON ALL SCHEMAS IN DATABASE <db> TO ROLE C1_CONNECTOR;
 GRANT REFERENCES ON ALL TABLES IN DATABASE <db> TO ROLE C1_CONNECTOR;
 GRANT REFERENCES ON ALL VIEWS IN DATABASE <db> TO ROLE C1_CONNECTOR;
+
+-- ON ALL is a one-shot bulk grant over the objects that exist right now. Without
+-- the matching ON FUTURE grants, schemas and tables created later are invisible to
+-- the sync with no error.
+GRANT USAGE ON FUTURE SCHEMAS IN DATABASE <db> TO ROLE C1_CONNECTOR;
+GRANT REFERENCES ON FUTURE TABLES IN DATABASE <db> TO ROLE C1_CONNECTOR;
+GRANT REFERENCES ON FUTURE VIEWS IN DATABASE <db> TO ROLE C1_CONNECTOR;
 
 -- SHOW INTEGRATIONS, per integration you want inventoried.
 GRANT USAGE ON INTEGRATION <integration> TO ROLE C1_CONNECTOR;
 ```
 
 <Warning>
-**Under Model B, users the connector's role does not own sync with blank attributes.** Snowflake suppresses every `SHOW USERS` column but `name` for those users, so their login, email, and `TYPE` arrive empty. The connector detects this per user, logs a warning naming the user, and reports the account type as *unspecified* rather than guessing — a service account with a suppressed `TYPE` is no longer silently classified as a person. Either grant `OWNERSHIP` on every in-scope user or switch to Model A, where no per-user privilege is required.
+**Under Model B, users the connector's role does not own sync with blank attributes.** Snowflake suppresses every `SHOW USERS` column but `name` for those users, so their login, email, and `TYPE` arrive empty. The connector detects this per user and logs it, and startup emits a warning naming a bounded sample of the affected users.
+
+Because the `TYPE` column is suppressed, **a service account among those users cannot be distinguished from a person** and will appear in C1 as a human account. The connector declines to guess internally, but the Baton SDK currently defaults an unspecified account type back to human before the trait is emitted, so the distinction does not survive to C1 today. Either grant `OWNERSHIP` on every in-scope user or switch to Model A, where no per-user privilege is required and the `TYPE` column is read directly.
 </Warning>
 
 <Note>
@@ -166,6 +198,10 @@ GRANT USAGE ON INTEGRATION <integration> TO ROLE C1_CONNECTOR;
 If you do not want object-level privileges granted at all, turn **Sync databases and tables** off. The connector then syncs users, account roles, role grants, integrations, and licenses, and never issues `SHOW DATABASES`, `SHOW SCHEMAS`, `SHOW TABLES`, or the object-grant queries — so none of the object-level grants in Model A or B are needed.
 
 This is different from **Excluded Databases**, which is a connector-side filter: it skips databases *after* the privileges have been granted and still requires every database you want skipped to be named. Model C removes the requirement entirely.
+
+<Warning>
+**Turning this off removes already-synced object resources from C1.** Disabling **Sync databases and tables** de-registers the database, table, and secret resource types, and C1 treats a resource type that stops being synced as deleted — so the database, table, and secret resources previously synced by this connector, along with every entitlement and grant on them, are removed. Prefer setting this before the connector's first sync. Turning it back on re-syncs them, but any grant history attached to the removed resources does not come back.
+</Warning>
 
 <Note>
 Snowflake secrets are database-scoped. With **Sync databases and tables** off, the secret resource type is not synced even when **Sync secrets** is on; RSA public keys are user-scoped and are unaffected.

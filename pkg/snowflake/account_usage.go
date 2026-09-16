@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// The ACCOUNT_USAGE discovery path (CXH-2483).
+// The ACCOUNT_USAGE discovery path.
 //
 // Every SHOW command the connector issues returns only the objects the session role holds
 // at least one privilege on, so full-account visibility through SHOW requires either
@@ -20,12 +20,15 @@ import (
 //	GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector role>;  -- USERS, ROLES, GRANTS_TO_*
 //	GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER   TO ROLE <connector role>;  -- DATABASES, SCHEMATA, TABLES
 //
-// The trade-offs, both documented by Snowflake and both accepted by this ticket:
+// The trade-offs:
 //
 //   - Latency. ACCOUNT_USAGE views lag the live account by 90 minutes to 3 hours depending
 //     on the view, so a sync reflects a slightly stale account. The SHOW path is live.
 //   - A warehouse. These are SELECTs, so the service account needs USAGE on a warehouse and
 //     the warehouse must be able to resume. SHOW commands are metadata-only and need none.
+//
+// Both trade-offs are documented by Snowflake and are accepted as the cost of dropping the
+// MANAGE GRANTS requirement.
 //
 // Implementation note: rather than a parallel set of response types and parsers, each
 // statement below aliases its ACCOUNT_USAGE columns to the exact column names the
@@ -48,6 +51,9 @@ const (
 	accountUsageDatabasesView     = "SNOWFLAKE.ACCOUNT_USAGE.DATABASES"
 	accountUsageSchemataView      = "SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA"
 	accountUsageTablesView        = "SNOWFLAKE.ACCOUNT_USAGE.TABLES"
+	// accountUsageRoleGrantsViews names both views the role-grantee union reads, for a
+	// diagnostic that points at the pair rather than at an arbitrary half of it.
+	accountUsageRoleGrantsViews = "SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS and SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES"
 )
 
 // accountUsageUserColumns aliases ACCOUNT_USAGE.USERS onto the SHOW USERS column names in
@@ -113,7 +119,16 @@ const accountUsageTableGrantColumns = `CREATED_ON::TIMESTAMP_LTZ AS "created_on"
 // accountUsageNonViewTableTypes are the ACCOUNT_USAGE.TABLES TABLE_TYPE values excluded to
 // match SHOW TABLES, which lists neither views nor external tables (SHOW VIEWS and SHOW
 // EXTERNAL TABLES cover those, and the connector issues neither).
-const accountUsageNonViewTableTypes = `'VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE'`
+//
+// TEMPORARY TABLE is excluded for a different reason: SHOW TABLES only ever returns the
+// calling session's own temporary tables, so the connector never sees one on that path,
+// while the view retains every session's until they are tombstoned. Without this the
+// ACCOUNT_USAGE path would emit table resources for other sessions' temp tables that no
+// longer exist and then delete them on the following sync.
+//
+// This stays a denylist rather than an allowlist on purpose: an allowlist would silently
+// drop any TABLE_TYPE Snowflake adds later, and a dropped resource reads as a deletion.
+const accountUsageNonViewTableTypes = `'VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE', 'TEMPORARY TABLE'`
 
 // accountUsageKeysetPredicate renders the keyset-pagination predicate for an ACCOUNT_USAGE
 // list query. The SHOW path paginates with "LIMIT n FROM '<last name>'", which is keyset
@@ -128,8 +143,9 @@ func accountUsageKeysetPredicate(column, cursor string) string {
 }
 
 // accountUsageLimitClause renders a LIMIT clause, omitting it for a non-positive limit so a
-// caller that does not paginate gets the whole result set (matching the SHOW path, where
-// ListTablesInSchema treats limit <= 0 as unbounded).
+// caller that does not paginate gets the whole result set. listTablesStatement's SHOW branch
+// omits the clause for a non-positive limit too, so the two modes agree; no caller passes one
+// today (every list path passes a positive page size).
 func accountUsageLimitClause(limit int) string {
 	if limit <= 0 {
 		return ""
@@ -160,11 +176,22 @@ func accountUsageGetUserStatement(username string) string {
 	)
 }
 
+// accountUsageRoleTypePredicate restricts ACCOUNT_USAGE.ROLES to account roles.
+//
+// The view is a superset of SHOW ROLES: it also carries database roles, instance roles and
+// application roles, distinguished by ROLE_TYPE. SHOW ROLES lists account roles only (SHOW
+// DATABASE ROLES IN DATABASE <db> is the separate command, which this connector never
+// issues). Without this filter, ACCOUNT_USAGE discovery would sync every database role in
+// the account as an account_role resource with a grantable entitlement - and database-role
+// names are only unique within their database, so two databases each holding an ANALYST
+// role would collide on a single account_role::ANALYST id.
+const accountUsageRoleTypePredicate = " AND ROLE_TYPE = 'ROLE'"
+
 // accountUsageListRolesStatement is the ACCOUNT_USAGE equivalent of SHOW ROLES.
 func accountUsageListRolesStatement(cursor string, limit int) string {
 	return fmt.Sprintf(
-		"SELECT NAME::TEXT AS \"name\" FROM %s WHERE DELETED_ON IS NULL%s ORDER BY NAME%s;",
-		accountUsageRolesView,
+		"SELECT NAME::TEXT AS \"name\" FROM %s WHERE DELETED_ON IS NULL%s%s ORDER BY NAME%s;",
+		accountUsageRolesView, accountUsageRoleTypePredicate,
 		accountUsageKeysetPredicate("NAME", cursor), accountUsageLimitClause(limit),
 	)
 }
@@ -174,8 +201,8 @@ func accountUsageListRolesStatement(cursor string, limit int) string {
 // role name stay literal and cannot let a colliding role crowd out the real one.
 func accountUsageGetRoleStatement(roleName string) string {
 	return fmt.Sprintf(
-		"SELECT NAME::TEXT AS \"name\" FROM %s WHERE DELETED_ON IS NULL AND NAME = '%s' ORDER BY NAME LIMIT 1;",
-		accountUsageRolesView, escapeStringLiteral(roleName),
+		"SELECT NAME::TEXT AS \"name\" FROM %s WHERE DELETED_ON IS NULL%s AND NAME = '%s' ORDER BY NAME LIMIT 1;",
+		accountUsageRolesView, accountUsageRoleTypePredicate, escapeStringLiteral(roleName),
 	)
 }
 

@@ -161,9 +161,11 @@ permission https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-c
 The connector can sync a `license` resource that reports the Snowflake edition
 (Standard, Enterprise, or Business Critical) and, for single-account
 organizations, the account's user count as consumed seats. This resource type is
-opt-in and requires connecting with an account that can read organization-level
-details (`GLOBALORGADMIN` on the organization account). When that access is not
-available, license sync is skipped and the rest of the sync is unaffected.
+opt-in and requires an organization-level role. The connector uses `--organization-role`,
+which defaults to `GLOBALORGADMIN`; set it to a delegated organization role to avoid
+granting the top-level org admin role to the service account. When that access is not
+available, license sync is skipped and the rest of the sync is unaffected. See
+[Privilege model](#privilege-model) for the full requirements.
 
 ### Excluding Databases from Sync
 
@@ -243,8 +245,12 @@ with a self-custodied standing credential the account holds and rotates. `PERSON
 carry no non-human-identity tag.
 
 A user whose `SHOW USERS` row came back with its columns suppressed (see
-[Privilege model](#privilege-model)) has no readable `TYPE`, so its account type is reported as
-unspecified rather than defaulted to human, and the connector logs a warning naming the user.
+[Privilege model](#privilege-model)) has no readable `TYPE`, so a service account among those users
+cannot be distinguished from a person and appears in C1 as a human account. The connector declines
+to guess internally and logs the affected users, but the Baton SDK currently defaults an
+unspecified account type back to human before the trait is emitted, so the distinction does not
+survive to C1 today. Grant `OWNERSHIP` on those users, or use `--discovery-mode=account_usage`, to
+read `TYPE` directly.
 
 ## Integrations
 
@@ -294,17 +300,20 @@ visibility is granted object by object:
 | --- | --- |
 | `SHOW USERS` | `OWNERSHIP` on each user. Without it every column but `name` comes back NULL. There is no read-only alternative in Snowflake's access control model |
 | `SHOW ROLES`, `SHOW GRANTS OF ROLE` | `OWNERSHIP` of each role |
-| `SHOW DATABASES` / `SHOW SCHEMAS` / `SHOW TABLES` | `USAGE` on the database and schema, plus at least one privilege on the object. `REFERENCES` is sufficient and is metadata-only — it grants visibility of an object's structure but never its data |
-| `SHOW GRANTS ON TABLE` / `ON VIEW` | Same as above |
+| `SHOW DATABASES` / `SHOW SCHEMAS` / `SHOW TABLES` | `USAGE` on the database and schema, plus at least one privilege on the object. `REFERENCES` is metadata-only — it grants visibility of an object's structure but never its data |
+| `SHOW GRANTS ON TABLE` / `ON VIEW` | Same as above. **`REFERENCES` is expected to be sufficient here but is not yet confirmed against a live account** — if table grants sync empty, grant `SELECT` on the tables instead and open an issue |
+| `SHOW SECRETS IN DATABASE` (`--sync-secrets`) | `USAGE` on the database plus a privilege on the secret; see Snowflake's [SHOW SECRETS access control](https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-control-requirements) |
+| `SHOW GRANTS TO USER` (`--issue-credentials`) | `OWNERSHIP` on the user, or `MANAGE GRANTS` |
 | `SHOW INTEGRATIONS` | `USAGE` on each integration |
 | `DESCRIBE USER` (RSA public key timestamps, `--sync-secrets`) | `OWNERSHIP` on the user. There is no `MONITOR` privilege on a user object |
 | `SHOW USER PROGRAMMATIC ACCESS TOKENS` | `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` or `OWNERSHIP`, per user |
 
 Under this mode, users the connector's role does not own sync with a blank login, email, and
-`TYPE`. The connector detects this per user, logs a warning naming the user, and reports the
-account type as unspecified rather than guessing — so a service account with a suppressed `TYPE`
-is not silently classified as a person. If no sampled user's attributes are readable at all,
-startup fails with a named, actionable error instead of syncing blank users.
+`TYPE`. The connector detects this per user and logs it, and startup warns once with a bounded
+sample of the affected users. Because `TYPE` is suppressed, a service account among them cannot be
+distinguished from a person and appears in C1 as a human account — see [Users](#users). If no
+sampled user's attributes are readable at all, startup fails with a named, actionable error
+instead of syncing blank users.
 
 Snowflake also supports granting `MANAGE GRANTS` on a single database or schema rather than on the
 account. That is a customer-side configuration choice and needs no connector setting; see
@@ -313,12 +322,17 @@ documentation.
 
 ## Narrowing the scope
 
-`--sync-object-resources=false` turns off the database, schema, and table resource types as a
+`--sync-object-resources=false` turns off the database and table resource types as a
 group, so a users-roles-and-grants-only sync needs none of the object-level privileges above. This
 is different from `--excluded-databases`, which is a connector-side filter applied after the
 privileges have already been granted and which requires every database you want skipped to be
 named. Snowflake secrets are database-scoped, so the `secret` resource type is not synced while
 object resources are off; RSA public keys are user-scoped and are unaffected.
+
+**Turning this off removes already-synced object resources from C1.** De-registering the database,
+table, and secret resource types means C1 sees them stop being synced, which it treats as deletion —
+the resources previously synced by this connector and every entitlement and grant on them are
+removed. Prefer setting this before the connector's first sync.
 
 ## Provisioning privileges
 
@@ -385,7 +399,7 @@ Flags:
 --private-key-path string     Private Key Path. ($BATON_PRIVATE_KEY_PATH)
 -p, --provisioning            This must be set in order for provisioning actions to be enabled ($BATON_PROVISIONING)
 --skip-full-sync              This must be set to skip a full sync ($BATON_SKIP_FULL_SYNC)
---sync-object-resources       Sync database, schema, and table resources and their grants. ($BATON_SYNC_OBJECT_RESOURCES) (default true)
+--sync-object-resources       Sync database and table resources and their grants. ($BATON_SYNC_OBJECT_RESOURCES) (default true)
 --sync-secrets                Enable synchronization of Snowflake secrets. ($BATON_SYNC_SECRETS)
 --ticketing                   This must be set to enable ticketing support ($BATON_TICKETING)
 --user-identifier string      required: User Identifier. ($BATON_USER_IDENTIFIER)

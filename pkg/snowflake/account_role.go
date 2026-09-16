@@ -185,7 +185,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 		defer closeResponseBody(resp1)
 		if err != nil {
-			return nil, "", dedupeAPIError(err)
+			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp1, &apiErr, err)
 		}
 
 		handle := response.StatementHandle
@@ -197,7 +197,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 		defer closeResponseBody(resp2)
 		if err != nil {
-			return nil, "", dedupeAPIError(err)
+			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp2, &apiErr, err)
 		}
 
 		numPartitions := len(response.ResultSetMetadata.PartitionInfo)
@@ -238,7 +238,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp, &apiErr, err)
 	}
 
 	// Partition-only responses carry no rowType metadata - restore it from the cursor so
@@ -305,14 +305,14 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 			statusCode = resp.StatusCode
 		}
 		// SHOW ROLES LIKE on a system role the connector cannot observe returns 422/003001.
-		if isAccessControlDenial(resp, &apiErr) {
+		if c.skippableDenial(resp, &apiErr) {
 			return nil, statusCode, uhttp.WrapErrors(
 				codes.PermissionDenied,
 				fmt.Sprintf("baton-snowflake: insufficient privileges to describe role %s", roleName),
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		return nil, statusCode, dedupeAPIError(err)
+		return nil, statusCode, c.classifyReadError(accountUsageRolesView, resp, &apiErr, err)
 	}
 
 	accountRoles, err := response.GetAccountRoles()

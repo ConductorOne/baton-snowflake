@@ -267,32 +267,44 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 }
 
 // DescribeUser reads a single user through DESCRIBE USER regardless of the configured
-// discovery mode.
+// discovery mode, running as the configured write role.
 //
 // Provisioning must not read through ACCOUNT_USAGE. Those views lag the live account by up
 // to three hours, so a user the connector just created is reliably absent from them - a
 // post-create read-back or a pre-issuance property lookup would fail on a correct account.
-// DESCRIBE USER is live, and the creating role owns the user it created, so the privilege is
-// satisfied for exactly the users provisioning touches.
 //
-// Discovery reads go through GetUser, which honors the discovery mode.
-func (c *Client) DescribeUser(ctx context.Context, ss sessions.SessionStore, username string) (*User, int, error) {
-	if ss != nil {
-		if cached, found, err := session.GetJSON[*User](ctx, ss, username, userNamespace); err == nil && found {
-			return cached, http.StatusOK, nil
-		}
-	}
-	return c.describeUser(ctx, ss, username)
+// The role matters as much as the statement. DESCRIBE USER requires OWNERSHIP on the target
+// user, and it is the write role that creates users, so the write role is the one that owns
+// them. Sending no role would run the read as the session's default role, which the
+// documented least-privilege setups never grant OWNERSHIP to - so a tenant that moved user
+// lifecycle onto a dedicated --write-role would create a user successfully and then fail to
+// read it back.
+//
+// It deliberately does NOT consult the session store: that cache is shared with the
+// discovery path, which under ACCOUNT_USAGE populates it from a view that lags the live
+// account, and serving a provisioning read from there would defeat this function's whole
+// purpose. Discovery reads go through GetUser, which honors the discovery mode and the cache.
+func (c *Client) DescribeUser(ctx context.Context, _ sessions.SessionStore, username string) (*User, int, error) {
+	return c.describeUserAsRole(ctx, nil, username, c.writeRole())
 }
 
+// describeUser issues DESCRIBE USER as the session's default role. This is the discovery
+// path: GetUser's callers hold no write privileges, and requiring the write role here would
+// make a read-only sync depend on a provisioning role.
 func (c *Client) describeUser(ctx context.Context, ss sessions.SessionStore, username string) (*User, int, error) {
+	return c.describeUserAsRole(ctx, ss, username, "")
+}
+
+// describeUserAsRole is the shared DESCRIBE USER implementation. An empty role runs as the
+// session's default role; a non-empty one is sent in the SQL API request body.
+func (c *Client) describeUserAsRole(ctx context.Context, ss sessions.SessionStore, username, role string) (*User, int, error) {
 	// Escape double quotes in username by doubling them before quoting
 	escapedUsername := escapeDoubleQuotedIdentifier(username)
 	queries := []string{
 		fmt.Sprintf("DESCRIBE USER \"%s\";", escapedUsername),
 	}
 
-	req, err := c.PostStatementRequest(ctx, queries)
+	req, err := c.PostStatementRequestWithRole(ctx, queries, role)
 	if err != nil {
 		return nil, 0, err
 	}

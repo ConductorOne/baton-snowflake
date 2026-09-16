@@ -138,7 +138,7 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 		if resp != nil {
 			statusCode = resp.StatusCode
 		}
-		return nil, statusCode, dedupeAPIError(err)
+		return nil, statusCode, c.classifyReadError(accountUsageDatabasesView, resp, &apiErr, err)
 	}
 
 	databases, err := response.GetDatabases()

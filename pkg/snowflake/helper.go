@@ -161,11 +161,23 @@ func classifyAccountUsageError(view string, resp *http.Response, apiErr *Snowfla
 	if err == nil {
 		return nil
 	}
+	// Only a 422 carries a Snowflake refusal this function can interpret. Anything else - a
+	// 429, a 5xx, or a transport failure that never produced a response - is a transient or
+	// infrastructural error, and labelling it PermissionDenied would both mislead the operator
+	// ("grant the viewer roles" for a 503) and strip the rate-limit gRPC details that
+	// dedupeAPIError carries over for the SDK's retry logic.
+	if resp == nil || resp.StatusCode != http.StatusUnprocessableEntity {
+		return dedupeAPIError(err)
+	}
 	if isSharedDatabaseUnavailable(resp, apiErr) {
+		// Both sentinels are joined: ErrSharedDatabaseUnavailable is a skip-this-object
+		// signal, which is the wrong shape for an account-wide view read, so
+		// ErrAccountUsageUnavailable rides along to keep the fatal predicate true no matter
+		// which one a call site checks first.
 		return uhttp.WrapErrors(
 			codes.NotFound,
 			fmt.Sprintf("baton-snowflake: shared database unavailable while reading %s", view),
-			ErrSharedDatabaseUnavailable, err,
+			ErrAccountUsageUnavailable, ErrSharedDatabaseUnavailable, err,
 		)
 	}
 	// An "invalid identifier" compilation error is a different failure with a different
@@ -210,6 +222,26 @@ func isInvalidIdentifier(resp *http.Response, apiErr *SnowflakeError) bool {
 		apiErr != nil &&
 		(apiErr.Code == invalidIdentifierErrorCode ||
 			strings.Contains(apiErr.Message(), "invalid identifier"))
+}
+
+// skippableDenial reports whether a 422/003001 on an inventory read may be treated as
+// "nothing visible here" and skipped.
+//
+// Under SHOW discovery it may: the denial is genuinely per-object, because a role can hold
+// USAGE on one database and not another. Under ACCOUNT_USAGE it never may - the views are
+// account-wide, so a role that cannot read one cannot read any object of that kind, and
+// skipping would sync an empty resource type and delete everything previously synced under
+// it. Callers on a read path that has no ACCOUNT_USAGE equivalent (secrets, RSA keys,
+// integrations, tokens) stay on isAccessControlDenial directly: those really are
+// per-object in both modes.
+func (c *Client) skippableDenial(resp *http.Response, apiErr *SnowflakeError) bool {
+	return !c.usesAccountUsage() && isAccessControlDenial(resp, apiErr)
+}
+
+// skippableSharedDatabase is the same discovery-mode gate for the shared-database-unavailable
+// shape, for the same reason.
+func (c *Client) skippableSharedDatabase(resp *http.Response, apiErr *SnowflakeError) bool {
+	return !c.usesAccountUsage() && isSharedDatabaseUnavailable(resp, apiErr)
 }
 
 // classifyReadError classifies a failed inventory read according to the active discovery

@@ -64,13 +64,13 @@ var (
 	// SyncObjectResources gates the object-level resource types as a group. Excluded
 	// Databases is a connector-side filter that still requires the privileges to be
 	// granted and still requires every database to be enumerated; this turns the whole
-	// database/schema/table surface off so a tenant never has to grant object-level
+	// database and table surface off so a tenant never has to grant object-level
 	// privileges at all.
 	SyncObjectResources = field.BoolField(
 		"sync-object-resources",
 		field.WithDisplayName("Sync Databases and Tables"),
 		field.WithDescription(
-			"Sync database, schema, and table resources and their grants. Disable to run a "+
+			"Sync database and table resources and their grants. Disable to run a "+
 				"users, roles, and role-grants only sync, so no object-level privileges "+
 				"(USAGE on databases and schemas, REFERENCES on tables) need to be granted to "+
 				"the service account at all. Snowflake secrets are database-scoped and are not "+
@@ -79,7 +79,7 @@ var (
 		field.WithDefaultValue(true),
 	)
 	// WriteRoleField: the role the SQL/REST write paths run as. Defaults to Snowflake's
-	// USERADMIN system role, which is what the connector hard-coded before CXH-2483.
+	// USERADMIN system role, which is the role the connector previously hard-coded.
 	WriteRoleField = field.StringField(
 		"write-role",
 		field.WithDisplayName("Write Role"),
@@ -92,7 +92,7 @@ var (
 		field.WithDefaultValue(snowflake.UserAdminRole),
 	)
 	// OrganizationRoleField: the role organization-scoped reads run as. Defaults to
-	// GLOBALORGADMIN, which is what the connector hard-coded before CXH-2483.
+	// GLOBALORGADMIN, which is the role the connector previously hard-coded.
 	OrganizationRoleField = field.StringField(
 		"organization-role",
 		field.WithDisplayName("Organization Role"),
@@ -119,6 +119,16 @@ var (
 				"ACCOUNT_USAGE latency of 90 minutes to 3 hours and requires a running warehouse.",
 		),
 		field.WithDefaultValue(string(snowflake.DiscoveryModeShow)),
+		// The accepted values are declared as a rule so they reach the generated config
+		// schema and are rejected at config-validation time rather than only inside
+		// connector.New. ParseDiscoveryMode stays as defence in depth: it also folds case
+		// and trims whitespace, which this rule does not.
+		field.WithString(func(r *field.StringRuler) {
+			r.In([]string{
+				string(snowflake.DiscoveryModeShow),
+				string(snowflake.DiscoveryModeAccountUsage),
+			})
+		}),
 	)
 
 	fieldRelationships = []field.SchemaFieldRelationship{

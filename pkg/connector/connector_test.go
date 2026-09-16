@@ -2,12 +2,16 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
 )
@@ -94,6 +98,51 @@ func TestPartiallyVisibleUserAccountTypeIsUnspecified(t *testing.T) {
 	// though login_name is blank, so the suppression check must not outrank a known TYPE.
 	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_SERVICE,
 		getUserAccountType(&snowflake.User{Username: "svc", Type: "SERVICE"}))
+}
+
+// The boundary test that TestPartiallyVisibleUserAccountTypeIsUnspecified cannot be: what
+// getUserAccountType returns and what actually reaches C1 are two different things.
+// NewUserTrait in baton-sdk rewrites ACCOUNT_TYPE_UNSPECIFIED to ACCOUNT_TYPE_HUMAN before
+// the trait is emitted, so the suppressed-TYPE user is still delivered as a person.
+//
+// This pins the real, observable behavior so the documentation cannot drift away from it.
+// When the SDK stops defaulting, this test fails - at which point the fix is to flip the
+// expectation here and update the two docs sections that describe the behavior, not to
+// silence it.
+func TestPartiallyVisibleUserTraitIsHumanUntilSDKStopsDefaulting(t *testing.T) {
+	t.Parallel()
+	resource, err := userResource(context.Background(), &snowflake.User{Username: "unowned"}, secretOptions{})
+	require.NoError(t, err)
+
+	trait, err := rs.GetUserTrait(resource)
+	require.NoError(t, err)
+	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_UNSPECIFIED, getUserAccountType(&snowflake.User{Username: "unowned"}),
+		"the helper declines to guess")
+	require.Equal(t, v2.UserTrait_ACCOUNT_TYPE_HUMAN, trait.GetAccountType(),
+		"the SDK collapses UNSPECIFIED to HUMAN, so this is what C1 sees today")
+}
+
+// The capabilities literal is what generates baton_capabilities.json, and every gate on
+// Connector is a bool whose zero value drops a resource type. A hand-written literal that
+// missed a new gate is how database, table and secret once vanished from the committed
+// metadata while every real sync still produced them.
+func TestDefaultCapabilitiesConnectorAdvertisesEveryResourceType(t *testing.T) {
+	t.Parallel()
+	cb, err := connectorbuilder.NewConnector(context.Background(), DefaultCapabilitiesConnector())
+	require.NoError(t, err)
+
+	md, err := cb.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
+	require.NoError(t, err)
+
+	var gotTypes []string
+	for _, rtc := range md.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
+		gotTypes = append(gotTypes, rtc.GetResourceType().GetId())
+	}
+	sort.Strings(gotTypes)
+	require.Equal(t, []string{
+		"account_role", "database", "integration", "license",
+		"programmatic_access_token", "rsa_public_key", "secret", "table", "user",
+	}, gotTypes)
 }
 
 // Object-level resource types are a group toggle: tables are children of databases, so
@@ -241,4 +290,110 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 			require.Equal(t, want, children)
 		})
 	}
+}
+
+// serveUsers answers the Statements API with one SHOW USERS page built from the given
+// (name, login) pairs, so Validate can be driven end to end without credentials.
+func serveUsers(t *testing.T, pairs [][2]string) *httptest.Server {
+	t.Helper()
+	// ParseRow walks every column in userStructFieldToColumnMap and fails the whole read on
+	// the first one missing, so the fixture has to carry the full SHOW USERS column set.
+	columns := []string{
+		"name", "login_name", "display_name", "first_name", "last_name", "email",
+		"disabled", "snowflake_lock", "default_role", "has_rsa_public_key",
+		"has_password", "last_success_login", "type", "has_mfa", "comment",
+	}
+	rowTypes := make([]map[string]any, 0, len(columns))
+	for _, c := range columns {
+		columnType := "text"
+		if c == "last_success_login" {
+			columnType = "timestamp_ltz"
+		}
+		rowTypes = append(rowTypes, map[string]any{"name": c, "type": columnType})
+	}
+	rows := make([][]string, 0, len(pairs))
+	for _, p := range pairs {
+		row := make([]string, len(columns))
+		row[0], row[1] = p[0], p[1]
+		rows = append(rows, row)
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"statementHandle": "handle",
+			"resultSetMetadata": map[string]any{
+				"numRows":       len(rows),
+				"rowType":       rowTypes,
+				"partitionInfo": []map[string]any{{"rowCount": len(rows)}},
+			},
+			"data": rows,
+		})
+	}))
+}
+
+// Validate is the connector's startup gate and its error text is the whole deliverable of
+// the visibility work, but nothing exercised it. These cases cover each branch the rewrite
+// introduced.
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no users at all fails, naming the surface that was read", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name string
+			mode snowflake.DiscoveryMode
+			want string
+		}{
+			{name: "show", mode: snowflake.DiscoveryModeShow, want: "SHOW USERS"},
+			{name: "account_usage", mode: snowflake.DiscoveryModeAccountUsage, want: "SNOWFLAKE.ACCOUNT_USAGE.USERS"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				server := serveUsers(t, nil)
+				defer server.Close()
+				client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client(),
+					snowflake.WithDiscoveryMode(tc.mode))
+				require.NoError(t, err)
+
+				_, err = (&Connector{Client: client}).Validate(context.Background())
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.want)
+			})
+		}
+	})
+
+	t.Run("every login blanked fails as ErrNoUserVisibility", func(t *testing.T) {
+		t.Parallel()
+		server := serveUsers(t, [][2]string{{"alice", ""}, {"bob", ""}})
+		defer server.Close()
+		client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+		require.NoError(t, err)
+
+		_, err = (&Connector{Client: client}).Validate(context.Background())
+		require.ErrorIs(t, err, ErrNoUserVisibility)
+	})
+
+	t.Run("partial visibility is a warning, not a failure", func(t *testing.T) {
+		t.Parallel()
+		// A tenant on the per-user OWNERSHIP model may legitimately hand over a subset of
+		// users; failing here would make that configuration unusable.
+		server := serveUsers(t, [][2]string{{"alice", "alice"}, {"unowned", ""}})
+		defer server.Close()
+		client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+		require.NoError(t, err)
+
+		_, err = (&Connector{Client: client}).Validate(context.Background())
+		require.NoError(t, err)
+	})
+
+	t.Run("fully visible passes", func(t *testing.T) {
+		t.Parallel()
+		server := serveUsers(t, [][2]string{{"alice", "alice"}})
+		defer server.Close()
+		client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+		require.NoError(t, err)
+
+		_, err = (&Connector{Client: client}).Validate(context.Background())
+		require.NoError(t, err)
+	})
 }

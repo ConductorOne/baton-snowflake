@@ -63,7 +63,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if isAccessControlDenial(resp1, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -71,7 +71,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp1, &apiErr) {
+		if c.skippableSharedDatabase(resp1, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW SCHEMAS IN DATABASE", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.NotFound,
@@ -79,7 +79,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageSchemataView, resp1, &apiErr, err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
@@ -89,7 +89,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		if isAccessControlDenial(resp2, &apiErr) {
+		if c.skippableDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -97,7 +97,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp2, &apiErr) {
+		if c.skippableSharedDatabase(resp2, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW SCHEMAS IN DATABASE (statement result)", zap.String("database", databaseName))
 			return nil, uhttp.WrapErrors(
 				codes.NotFound,
@@ -105,7 +105,7 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageSchemataView, resp2, &apiErr, err)
 	}
 
 	return response.ListSchemas()
@@ -169,7 +169,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		if isAccessControlDenial(resp1, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -178,7 +178,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp1, &apiErr) {
+		if c.skippableSharedDatabase(resp1, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW TABLES IN SCHEMA",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -187,7 +187,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
@@ -197,7 +197,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		if isAccessControlDenial(resp2, &apiErr) {
+		if c.skippableDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges for SHOW TABLES IN SCHEMA (statement result)",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -206,7 +206,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		if isSharedDatabaseUnavailable(resp2, &apiErr) {
+		if c.skippableSharedDatabase(resp2, &apiErr) {
 			l.Debug("Shared database is no longer available for SHOW TABLES IN SCHEMA (statement result)",
 				zap.String("database", databaseName), zap.String("schema", schemaName))
 			return nil, "", uhttp.WrapErrors(
@@ -215,7 +215,7 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 				ErrSharedDatabaseUnavailable, err,
 			)
 		}
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageTablesView, resp2, &apiErr, err)
 	}
 
 	tables, err := response.ListTables()
@@ -274,10 +274,10 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 		// Same contract as ListSchemasInDatabase: only an access-control 422 means the table
 		// is invisible to this role. Other 422s (SQL compilation from a bad LIKE/ESCAPE, etc.)
 		// must stay fatal so a connector bug cannot look like a missing table.
-		if isAccessControlDenial(resp1, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			return nil, nil
 		}
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
@@ -287,7 +287,7 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageTablesView, resp2, &apiErr, err)
 	}
 
 	tables, err := response.ListTables()
@@ -473,7 +473,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	if err != nil {
 		// uhttp already decoded the error body into apiErr, so the access-control code is read
 		// from there rather than by consuming resp.Body a second time.
-		if isAccessControlDenial(resp, &apiErr) {
+		if c.skippableDenial(resp, &apiErr) {
 			tableRef := fmt.Sprintf("%s.%s.%s", database, schema, tableName)
 			l.Debug("Insufficient privileges to show grants on table", zap.String("table", tableRef))
 			return tableGrantsFirstPage{}, uhttp.WrapErrors(
@@ -483,7 +483,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 			)
 		}
 
-		return tableGrantsFirstPage{}, dedupeAPIError(err)
+		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
 	}
 
 	handle := response.StatementHandle
@@ -495,7 +495,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	resp, err = c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		if isAccessControlDenial(resp, &apiErr) {
+		if c.skippableDenial(resp, &apiErr) {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
 			return tableGrantsFirstPage{}, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -503,7 +503,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		return tableGrantsFirstPage{}, dedupeAPIError(err)
+		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
 	}
 
 	grants, err := response.GetTableGrants()
@@ -544,7 +544,7 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
 	}
 
 	// Partitions after the first come back with data only, no resultSetMetadata - reuse the
@@ -615,10 +615,18 @@ func (c *Client) listTablesStatement(databaseName, schemaName, cursor string, li
 	}
 	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
 	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
-	if cursor != "" {
-		return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
+	// A non-positive limit omits the clause rather than emitting "LIMIT 0", which Snowflake
+	// honours literally by returning no rows. The ACCOUNT_USAGE branch omits it for the same
+	// input, so an unbounded caller behaves the same in both modes instead of getting an
+	// empty result in one and the full set in the other.
+	limitClause := ""
+	if limit > 0 {
+		limitClause = fmt.Sprintf(" LIMIT %d", limit)
 	}
-	return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
+	if cursor != "" {
+		return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\"%s FROM '%s';", escapedDB, escapedSchema, limitClause, escapeStringLiteral(cursor))
+	}
+	return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\"%s;", escapedDB, escapedSchema, limitClause)
 }
 
 // getTableStatement is the discovery-mode-dependent single-table lookup. The SHOW form's

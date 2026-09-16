@@ -213,15 +213,16 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 
 func userResource(ctx context.Context, user *snowflake.User, secrets secretOptions) (*v2.Resource, error) {
 	if isPartiallyVisibleUser(user) {
-		// Not an error: a tenant on the per-user OWNERSHIP model may legitimately hand
-		// over only a subset of users. But the row's attributes are suppressed rather than
-		// genuinely empty, so say so per user instead of letting it look like a user who
-		// really has no login, no email, and no TYPE.
-		ctxzap.Extract(ctx).Warn(
+		// Debug, not Warn, and deliberately so: userResource runs once per user per sync
+		// AND once per user grantee of every table grant, so on a tenant that hands over a
+		// subset of a large account this fires thousands of times. Validate already emits
+		// the operator-facing Warn once per sync, with a bounded list of example names and
+		// remedies that are correct for the active discovery mode - which this call site
+		// cannot know. Per-user detail stays available when someone is actually debugging
+		// a specific user.
+		ctxzap.Extract(ctx).Debug(
 			"baton-snowflake: user is only partially visible to the connector's role; its "+
-				"login, email, and TYPE are suppressed by Snowflake, so account type is "+
-				"reported as unspecified rather than guessed as human. Grant OWNERSHIP on "+
-				"this user, or use --discovery-mode=account_usage, to sync it fully",
+				"login, email, and TYPE are suppressed by Snowflake",
 			zap.String("user", user.Username),
 		)
 	}
@@ -311,6 +312,19 @@ func isPartiallyVisibleUser(user *snowflake.User) bool {
 	return strings.TrimSpace(user.Username) != "" && strings.TrimSpace(user.Login) == ""
 }
 
+// getUserAccountType classifies a user's account type, declining to guess when Snowflake
+// suppressed the row's TYPE.
+//
+// Caveat on the UNSPECIFIED branch, because it does not currently survive: NewUserTrait in
+// baton-sdk collapses ACCOUNT_TYPE_UNSPECIFIED back to ACCOUNT_TYPE_HUMAN before the trait
+// is emitted (pkg/types/resource/user_trait.go, "If account type isn't specified, default to
+// a human user"). So a partially visible user still reaches C1 as a human today, and the
+// per-user Debug log plus Validate's Warn are the only signals that its TYPE was suppressed.
+// The branch is kept rather than folded into the HUMAN return because declining to guess is
+// the correct classification and this starts working the moment the SDK stops defaulting;
+// TestPartiallyVisibleUserAccountTypeIsUnspecified pins the helper, and
+// TestPartiallyVisibleUserTraitIsHumanUntilSDKStopsDefaulting pins what actually reaches C1
+// so the gap cannot quietly close or widen unnoticed.
 func getUserAccountType(user *snowflake.User) v2.UserTrait_AccountType {
 	if isServiceUserType(user.Type) {
 		return v2.UserTrait_ACCOUNT_TYPE_SERVICE

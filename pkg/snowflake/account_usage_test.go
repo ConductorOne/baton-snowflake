@@ -208,10 +208,15 @@ func TestAccountUsageKeysetPaginationMatchesShowSemantics(t *testing.T) {
 	assert.Contains(t, next, "AND NAME > 'alice'")
 	assert.Contains(t, next, "ORDER BY NAME")
 
-	// ListTablesInSchema treats a non-positive limit as unbounded on the SHOW path, so the
-	// ACCOUNT_USAGE form must not silently impose one.
+	// A non-positive limit is unbounded in BOTH modes: neither branch may emit "LIMIT 0",
+	// which Snowflake honours literally by returning no rows. No caller passes one today;
+	// this pins the two branches to the same answer so one cannot drift into returning the
+	// full set while the other returns nothing.
+	unboundedClient := &Client{DiscoveryMode: DiscoveryModeShow}
 	assert.NotContains(t, accountUsageListTablesStatement("DB", publicSchema, "", 0), "LIMIT")
+	assert.NotContains(t, unboundedClient.listTablesStatement("DB", publicSchema, "", 0), "LIMIT")
 	assert.Contains(t, accountUsageListTablesStatement("DB", publicSchema, "", 25), "LIMIT 25")
+	assert.Contains(t, unboundedClient.listTablesStatement("DB", publicSchema, "", 25), "LIMIT 25")
 }
 
 // SHOW TABLES lists neither views nor external tables, and the kind it reports feeds back
@@ -219,11 +224,29 @@ func TestAccountUsageKeysetPaginationMatchesShowSemantics(t *testing.T) {
 // resource set changes shape purely because of a discovery-mode flag.
 func TestAccountUsageTablesMatchShowTablesScope(t *testing.T) {
 	t.Parallel()
+	// TEMPORARY TABLE is in the list because SHOW TABLES only returns the calling session's
+	// own temp tables (so the SHOW path never sees another session's), while the view retains
+	// every session's until they are tombstoned.
+	const excluded = "TABLE_TYPE NOT IN ('VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE', 'TEMPORARY TABLE')"
 	statement := accountUsageListTablesStatement("DB", publicSchema, "", 50)
-	assert.Contains(t, statement, "TABLE_TYPE NOT IN ('VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE')")
+	assert.Contains(t, statement, excluded)
 	assert.Contains(t, statement, `'TABLE'::TEXT AS "kind"`)
-	assert.Contains(t, accountUsageGetTableStatement("DB", publicSchema, "T"),
-		"TABLE_TYPE NOT IN ('VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE')")
+	assert.Contains(t, accountUsageGetTableStatement("DB", publicSchema, "T"), excluded)
+}
+
+// ACCOUNT_USAGE.ROLES is a superset of SHOW ROLES - it also carries database, instance and
+// application roles. Without the ROLE_TYPE filter, account_usage discovery would sync every
+// database role as an account_role resource, and same-named database roles in different
+// databases would collide on one account_role id.
+func TestAccountUsageRolesAreRestrictedToAccountRoles(t *testing.T) {
+	t.Parallel()
+	for _, statement := range []string{
+		accountUsageListRolesStatement("", 50),
+		accountUsageListRolesStatement("ANALYST", 50),
+		accountUsageGetRoleStatement("ANALYST"),
+	} {
+		assert.Contains(t, statement, "ROLE_TYPE = 'ROLE'", "statement must exclude non-account roles: %s", statement)
+	}
 }
 
 // The object kind a table resource carries in its profile has to pick the GRANTED_ON value,
@@ -587,4 +610,130 @@ func TestAccountUsageInvalidIdentifierIsDistinguishedFromMissingGrant(t *testing
 	assert.Contains(t, err.Error(), "--discovery-mode=show")
 	// The viewer-grant remedy would be the wrong advice here.
 	assert.NotContains(t, err.Error(), "SECURITY_VIEWER")
+}
+
+// The remaining inventory read paths - schemas, tables, table grants, and the single-object
+// lookups - used to classify a 422/003001 as ErrInsufficientPrivileges unconditionally, and
+// pkg/connector treats that sentinel as skip-and-continue. Under ACCOUNT_USAGE the views are
+// account-wide, so a denial on one means every object of that kind is unreadable and skipping
+// would sync an empty resource type - deleting everything previously synced under it.
+func TestAccountUsageNonListPathsAreNeverSkippable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{
+			name: "schemas",
+			call: func(c *Client) error { _, err := c.ListSchemasInDatabase(context.Background(), "DB"); return err },
+		},
+		{
+			name: "tables",
+			call: func(c *Client) error {
+				_, _, err := c.ListTablesInSchema(context.Background(), "DB", publicSchema, "", 50)
+				return err
+			},
+		},
+		{
+			name: "get table",
+			call: func(c *Client) error { _, err := c.GetTable(context.Background(), "DB", publicSchema, "T"); return err },
+		},
+		{
+			name: "table grants",
+			call: func(c *Client) error {
+				_, err := c.fetchTableGrantsFirstPage(context.Background(), "DB", publicSchema, "T", "TABLE")
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = fmt.Fprint(w, `{"code":"003001","message":"SQL access control error: Insufficient privileges to operate on schema"}`)
+			}))
+			t.Cleanup(server.Close)
+
+			client := accountUsageClient(t, server.URL, server.Client())
+			err := tc.call(client)
+			require.Error(t, err)
+			require.False(t, IsInsufficientPrivileges(err),
+				"an account-wide view denial must not be skippable as invisible data: %v", err)
+			require.True(t, IsAccountUsageUnavailable(err), "got %v", err)
+		})
+	}
+}
+
+// The same denial in SHOW mode is genuinely per-object - a role can hold USAGE on one
+// database and not another - so it must stay skippable there. This is the other half of the
+// discovery-mode gate: fixing the ACCOUNT_USAGE invariant must not make SHOW-mode syncs
+// start failing on databases they used to skip.
+func TestShowModeDenialsStaySkippable(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = fmt.Fprint(w, `{"code":"003001","message":"SQL access control error: Insufficient privileges to operate on schema"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+	require.False(t, client.usesAccountUsage())
+
+	_, err = client.ListSchemasInDatabase(context.Background(), "DB")
+	require.Error(t, err)
+	require.True(t, IsInsufficientPrivileges(err),
+		"a per-object SHOW denial must remain skippable: %v", err)
+}
+
+// A 429, a 5xx, or a transport failure is transient or infrastructural, not a missing grant.
+// Labelling it PermissionDenied both misleads the operator ("grant the viewer roles" for a
+// 503) and strips the rate-limit gRPC details the SDK's retry logic reads.
+func TestAccountUsageTransientFailuresAreNotClassifiedAsMissingGrants(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+		http.StatusUnauthorized,
+	} {
+		t.Run(fmt.Sprintf("status %d", status), func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = fmt.Fprint(w, `{"message":"transient"}`)
+			}))
+			t.Cleanup(server.Close)
+
+			client := accountUsageClient(t, server.URL, server.Client())
+			_, err := client.ListUsers(context.Background(), "", 50)
+			require.Error(t, err)
+			require.False(t, IsAccountUsageUnavailable(err),
+				"a %d must not be reported as a missing ACCOUNT_USAGE grant: %v", status, err)
+			assert.NotContains(t, err.Error(), "SECURITY_VIEWER",
+				"a transient failure must not send the operator after viewer grants")
+		})
+	}
+}
+
+// ErrSharedDatabaseUnavailable is a skip-this-object signal, which is the wrong shape for an
+// account-wide view read. Both sentinels are joined so the fatal predicate stays true no
+// matter which one a call site checks first.
+func TestAccountUsageSharedDatabaseFailureIsAlsoFatal(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = fmt.Fprint(w, `{"code":"002037","message":"Shared database is no longer available for use."}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := accountUsageClient(t, server.URL, server.Client())
+	_, err := client.ListUsers(context.Background(), "", 50)
+	require.Error(t, err)
+	require.True(t, IsAccountUsageUnavailable(err),
+		"an unavailable SNOWFLAKE share under ACCOUNT_USAGE must be fatal: %v", err)
 }

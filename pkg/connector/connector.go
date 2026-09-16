@@ -32,6 +32,23 @@ type Connector struct {
 	syncObjectResources bool
 }
 
+// DefaultCapabilitiesConnector is the Connector the `capabilities` command introspects to
+// generate baton_capabilities.json.
+//
+// It exists so the advertised capability set has exactly one definition. Every gate on this
+// struct is a bool whose zero value is false, so a hand-written literal silently drops a
+// resource type the moment a new gate is added - which is how database, table and secret
+// once disappeared from the committed metadata while every sync still produced them. The
+// capability set has to describe what the connector CAN sync, so every gate is on here
+// regardless of its config default.
+func DefaultCapabilitiesConnector() *Connector {
+	return &Connector{
+		SyncSecrets:         true,
+		IssueCredentials:    true,
+		syncObjectResources: true,
+	}
+}
+
 // ResourceSyncers returns a ResourceSyncerV2 for each resource type that should be synced from the upstream service.
 func (d *Connector) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
 	secrets := secretOptions{syncSecrets: d.SyncSecrets}
@@ -340,9 +357,10 @@ func (d *Connector) Validate(ctx context.Context) (annotations.Annotations, erro
 	case visibility.Partial():
 		l.Warn(
 			"baton-snowflake: some users are only partially visible to the connector's role; "+
-				"their login, email, and TYPE will sync blank and their account type will be "+
-				"reported as unspecified rather than guessed. Grant OWNERSHIP on these users, or "+
-				"use --discovery-mode=account_usage, to sync them fully",
+				"their login, email, and TYPE will sync blank, and because their TYPE is "+
+				"suppressed a service account among them cannot be distinguished from a person. "+
+				"Grant OWNERSHIP on these users, or use --discovery-mode=account_usage, to sync "+
+				"them fully",
 			zap.Int("sampled_users", visibility.Total),
 			zap.Int("partially_visible_users", visibility.Blanked),
 			zap.String("examples", visibility.describeBlanked()),
@@ -404,6 +422,8 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 		return nil, nil, err
 	}
 
+	warnIgnoredObjectResourceFlags(ctx, cfg)
+
 	return &Connector{
 		Client:              client,
 		SyncSecrets:         cfg.SyncSecrets,
@@ -411,4 +431,32 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 		excludedDatabases:   cfg.ExcludedDatabases,
 		syncObjectResources: cfg.SyncObjectResources,
 	}, nil, nil
+}
+
+// warnIgnoredObjectResourceFlags logs the two combinations in which turning object resources
+// off silently makes another setting a no-op.
+//
+// These cannot be expressed as SDK field relationships: all four relationship helpers are
+// presence-based, and sync-object-resources is a bool with a default, so it is always
+// "present". A log line at startup is the available signal.
+func warnIgnoredObjectResourceFlags(ctx context.Context, cfg *config.Snowflake) {
+	if cfg.SyncObjectResources {
+		return
+	}
+	l := ctxzap.Extract(ctx)
+	if len(cfg.ExcludedDatabases) > 0 {
+		l.Warn(
+			"baton-snowflake: --excluded-databases is ignored because --sync-object-resources "+
+				"is false; no database, schema, or table is enumerated at all, so there is "+
+				"nothing for the filter to exclude",
+			zap.Strings("excluded_databases", cfg.ExcludedDatabases),
+		)
+	}
+	if cfg.SyncSecrets {
+		l.Warn(
+			"baton-snowflake: --sync-secrets is set but Snowflake secrets are database-scoped, " +
+				"so no secret is synced while --sync-object-resources is false. User-scoped RSA " +
+				"public keys are unaffected and still sync",
+		)
+	}
 }
