@@ -240,6 +240,50 @@ func isInvalidIdentifier(resp *http.Response, apiErr *SnowflakeError) bool {
 			strings.Contains(apiErr.Message(), "invalid identifier"))
 }
 
+// ErrStatementNotComplete marks a SQL API response for a statement that has not finished
+// executing.
+//
+// POST /api/v2/statements answers 202 - and GET /statements/<handle> keeps answering 202 -
+// when a statement exceeds the synchronous execution window, returning a handle with no rows
+// and no rowType. 202 is a 2xx, so uhttp does not treat it as an error, WithJSONResponse
+// decodes a body with no data, and every row parser turns that into an empty slice with a
+// nil error. A sync reads that as "this resource type is empty" and C1 reads it as a
+// deletion of everything under it, so an unfinished statement has to fail loudly instead.
+//
+// SHOW discovery barely reaches this: SHOW commands are metadata-only and return in
+// milliseconds. ACCOUNT_USAGE reads are warehouse-backed SELECTs over views that can be very
+// large, on a warehouse that may have to resume first, which is exactly the shape that
+// crosses the window.
+//
+// This is the loud-failure floor, not full async support. Polling the handle to completion is
+// the real fix and is deliberately not attempted here: it needs a timeout and retry policy
+// that is a product decision rather than a bug fix.
+var ErrStatementNotComplete = errors.New("baton-snowflake: statement has not finished executing")
+
+// IsStatementNotComplete reports whether err is an unfinished-statement response.
+func IsStatementNotComplete(err error) bool {
+	return err != nil && errors.Is(err, ErrStatementNotComplete)
+}
+
+// errIfStatementIncomplete converts a 202 into ErrStatementNotComplete. It is called on the
+// success path of a statements request, where err is nil precisely because 202 is a 2xx.
+func errIfStatementIncomplete(resp *http.Response, what string) error {
+	if resp == nil || resp.StatusCode != http.StatusAccepted {
+		return nil
+	}
+	return uhttp.WrapErrors(
+		codes.Unavailable,
+		fmt.Sprintf(
+			"baton-snowflake: %s did not finish inside the SQL API's synchronous window "+
+				"(HTTP 202). Retry the sync; if it recurs, the warehouse is too small for the "+
+				"volume this statement reads, or --discovery-mode=show avoids the warehouse "+
+				"entirely for this resource type",
+			what,
+		),
+		ErrStatementNotComplete,
+	)
+}
+
 // skippableDenial reports whether a 422/003001 on an inventory read may be treated as
 // "nothing visible here" and skipped.
 //

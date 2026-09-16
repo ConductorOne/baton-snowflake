@@ -81,6 +81,9 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		}
 		return nil, c.classifyReadError(accountUsageSchemataView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the schema listing"); err != nil {
+		return nil, err
+	}
 
 	// Captured before the statement-result GET: that response reuses this struct and does
 	// not necessarily carry the handle, so reading it afterwards can see an empty string.
@@ -111,6 +114,9 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		}
 		return nil, c.classifyReadError(accountUsageSchemataView, resp2, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp2, "the schema listing"); err != nil {
+		return nil, err
+	}
 
 	schemas, err := response.ListSchemas()
 	if err != nil {
@@ -127,6 +133,21 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 	// sync, which C1 reads as a deletion.
 	rowTypes := response.ResultSetMetadata.RowTypes
 	numPartitions := len(response.ResultSetMetadata.PartitionInfo)
+	// Bounded rather than cursored, unlike the grant walks in this package, which hand one
+	// partition per SDK page back through a cursor so the SDK drives and can checkpoint
+	// between them. Schemas do not warrant that: the statement projects two narrow text
+	// columns, so partition 0 alone holds thousands of rows and a real database is a single
+	// partition. The bound exists so a pathological account cannot turn the first
+	// tableBuilder.List call into an unbounded fetch; exceeding it is loud, because silently
+	// truncating is the bug this walk was added to fix.
+	if numPartitions > maxSchemaPartitions {
+		return nil, fmt.Errorf(
+			"baton-snowflake: %s returned %d partitions of schemas for database %q, over the %d "+
+				"this connector walks. Sync the database with fewer schemas, or open an issue so "+
+				"the schema listing can be paginated through the SDK instead",
+			accountUsageSchemataView, numPartitions, databaseName, maxSchemaPartitions,
+		)
+	}
 	for partitionID := 1; partitionID < numPartitions; partitionID++ {
 		more, err := c.listSchemasPartition(ctx, handle, partitionID, rowTypes, &apiErr)
 		if err != nil {
@@ -223,6 +244,9 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 		}
 		return nil, "", c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the table listing"); err != nil {
+		return nil, "", err
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -250,6 +274,9 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 			)
 		}
 		return nil, "", c.classifyReadError(accountUsageTablesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the table listing"); err != nil {
+		return nil, "", err
 	}
 
 	tables, err := response.ListTables()
@@ -313,6 +340,9 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 		}
 		return nil, c.classifyReadError(accountUsageTablesView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the single-table lookup"); err != nil {
+		return nil, err
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -322,6 +352,9 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageTablesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the single-table lookup"); err != nil {
+		return nil, err
 	}
 
 	tables, err := response.ListTables()
@@ -519,6 +552,9 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 
 		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the table grant read"); err != nil {
+		return tableGrantsFirstPage{}, err
+	}
 
 	handle := response.StatementHandle
 
@@ -538,6 +574,9 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 			)
 		}
 		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the table grant read"); err != nil {
+		return tableGrantsFirstPage{}, err
 	}
 
 	grants, err := response.GetTableGrants()
@@ -579,6 +618,9 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, "", c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the table grant partition read"); err != nil {
+		return nil, "", err
 	}
 
 	// Partitions after the first come back with data only, no resultSetMetadata - reuse the
@@ -632,6 +674,10 @@ func (c *Client) listTableGrantsPartition(ctx context.Context, ss sessions.Sessi
 	return grants, nextCursor, nil
 }
 
+// maxSchemaPartitions bounds the schema partition walk. Two narrow text columns per row put
+// thousands of schemas in a single partition, so this is far above any real database.
+const maxSchemaPartitions = 64
+
 // listSchemasPartition fetches one partition of a schema listing. It is a function rather
 // than an inline loop body so each response body is closed when the partition is done,
 // instead of every body staying open until the whole walk returns.
@@ -652,6 +698,9 @@ func (c *Client) listSchemasPartition(
 	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageSchemataView, resp, apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the schema partition read"); err != nil {
+		return nil, err
 	}
 
 	// Partition-only responses carry no rowType metadata, so restore it from partition 0 or

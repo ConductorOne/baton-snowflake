@@ -857,3 +857,54 @@ func TestListSchemasInDatabaseWalksEveryPartition(t *testing.T) {
 	assert.Contains(t, partitionsRequested, "1")
 	assert.Contains(t, partitionsRequested, "2")
 }
+
+// HTTP 202 means "the statement has not finished", and 202 is a 2xx - so uhttp does not
+// error, the body decodes with no rows, and every row parser turns that into an empty slice
+// with a nil error. A sync reads that as "this resource type is empty", which C1 reads as a
+// deletion of everything under it. ACCOUNT_USAGE reads are warehouse-backed SELECTs over
+// potentially very large views, which is exactly the shape that crosses the window.
+func TestIncompleteStatementIsAnErrorNotAnEmptyResult(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{name: "users", call: func(c *Client) error { _, err := c.ListUsers(context.Background(), "", 50); return err }},
+		{name: "roles", call: func(c *Client) error { _, err := c.ListAccountRoles(context.Background(), "", 50); return err }},
+		{name: "databases", call: func(c *Client) error { _, err := c.ListDatabases(context.Background(), "", 50); return err }},
+		{name: "schemas", call: func(c *Client) error { _, err := c.ListSchemasInDatabase(context.Background(), "DB"); return err }},
+		{
+			name: "tables",
+			call: func(c *Client) error {
+				_, _, err := c.ListTablesInSchema(context.Background(), "DB", publicSchema, "", 50)
+				return err
+			},
+		},
+		{
+			name: "table grants",
+			call: func(c *Client) error {
+				_, err := c.fetchTableGrantsFirstPage(context.Background(), "DB", publicSchema, "T", "TABLE")
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// A handle and nothing else, which is what a 202 carries.
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = fmt.Fprint(w, `{"statementHandle":"handle-1"}`)
+			}))
+			t.Cleanup(server.Close)
+
+			client := accountUsageClient(t, server.URL, server.Client())
+			err := tc.call(client)
+			require.Error(t, err, "an unfinished statement must not read as an empty result set")
+			require.True(t, IsStatementNotComplete(err), "got %v", err)
+			// It must not be mistaken for any of the skippable conditions either.
+			require.False(t, IsInsufficientPrivileges(err))
+			require.False(t, IsSharedDatabaseUnavailable(err))
+		})
+	}
+}

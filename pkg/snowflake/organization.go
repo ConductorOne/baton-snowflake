@@ -64,6 +64,9 @@ func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAc
 		}
 		return nil, statusCode, dedupeAPIError(err)
 	}
+	if err := errIfStatementIncomplete(resp1, "SHOW ORGANIZATION ACCOUNTS"); err != nil {
+		return nil, 0, err
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -77,6 +80,9 @@ func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAc
 			statusCode = resp2.StatusCode
 		}
 		return nil, statusCode, dedupeAPIError(err)
+	}
+	if err := errIfStatementIncomplete(resp2, "SHOW ORGANIZATION ACCOUNTS"); err != nil {
+		return nil, 0, err
 	}
 
 	accounts, err := response.GetOrganizationAccounts()
@@ -102,6 +108,9 @@ func (c *Client) CountUsers(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, dedupeAPIError(err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the ACCOUNT_USAGE user count"); err != nil {
+		return 0, err
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -111,6 +120,9 @@ func (c *Client) CountUsers(ctx context.Context) (int64, error) {
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return 0, dedupeAPIError(err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the ACCOUNT_USAGE user count"); err != nil {
+		return 0, err
 	}
 
 	if len(response.Data) == 0 || len(response.Data[0]) == 0 {

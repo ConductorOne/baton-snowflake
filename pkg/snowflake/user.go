@@ -213,6 +213,9 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageUsersView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "SHOW USERS"); err != nil {
+		return nil, err
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -222,6 +225,9 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageUsersView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "SHOW USERS"); err != nil {
+		return nil, err
 	}
 
 	users, err := response.GetUsers()
@@ -332,6 +338,9 @@ func (c *Client) describeUserAsRole(ctx context.Context, ss sessions.SessionStor
 		}
 		return nil, statusCode, dedupeAPIError(err)
 	}
+	if err := errIfStatementIncomplete(resp, "DESCRIBE USER"); err != nil {
+		return nil, statusCodeOf(resp), err
+	}
 
 	user, err := response.GetUser()
 	if err != nil {
@@ -410,6 +419,9 @@ func (c *Client) getUserFromAccountUsage(ctx context.Context, ss sessions.Sessio
 	if err != nil {
 		return nil, statusCodeOf(resp1), classifyAccountUsageError(accountUsageUsersView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the ACCOUNT_USAGE user read"); err != nil {
+		return nil, statusCodeOf(resp1), err
+	}
 
 	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 	if err != nil {
@@ -419,6 +431,9 @@ func (c *Client) getUserFromAccountUsage(ctx context.Context, ss sessions.Sessio
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, statusCodeOf(resp2), classifyAccountUsageError(accountUsageUsersView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the ACCOUNT_USAGE user read"); err != nil {
+		return nil, statusCodeOf(resp2), err
 	}
 
 	users, err := response.GetUsers()

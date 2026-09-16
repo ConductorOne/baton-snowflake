@@ -116,6 +116,9 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageRolesView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the account role listing"); err != nil {
+		return nil, err
+	}
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListAccountRoles", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
@@ -128,6 +131,9 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageRolesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the account role listing"); err != nil {
+		return nil, err
 	}
 
 	accountRoles, err := response.GetAccountRoles()
@@ -187,6 +193,9 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		if err != nil {
 			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp1, &apiErr, err)
 		}
+		if err := errIfStatementIncomplete(resp1, "the role grantee read"); err != nil {
+			return nil, "", err
+		}
 
 		handle := response.StatementHandle
 
@@ -198,6 +207,9 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		defer closeResponseBody(resp2)
 		if err != nil {
 			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp2, &apiErr, err)
+		}
+		if err := errIfStatementIncomplete(resp2, "the role grantee read"); err != nil {
+			return nil, "", err
 		}
 
 		numPartitions := len(response.ResultSetMetadata.PartitionInfo)
@@ -239,6 +251,9 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 	defer closeResponseBody(resp)
 	if err != nil {
 		return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the role grantee read"); err != nil {
+		return nil, "", err
 	}
 
 	// Partition-only responses carry no rowType metadata - restore it from the cursor so
@@ -313,6 +328,9 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 			)
 		}
 		return nil, statusCode, c.classifyReadError(accountUsageRolesView, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the single-role lookup"); err != nil {
+		return nil, statusCodeOf(resp), err
 	}
 
 	accountRoles, err := response.GetAccountRoles()

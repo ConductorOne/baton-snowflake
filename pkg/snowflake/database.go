@@ -99,6 +99,9 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageDatabasesView, resp1, &apiErr, err)
 	}
+	if err := errIfStatementIncomplete(resp1, "the database listing"); err != nil {
+		return nil, err
+	}
 
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListDatabases", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
@@ -111,6 +114,9 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	defer closeResponseBody(resp2)
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageDatabasesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the database listing"); err != nil {
+		return nil, err
 	}
 
 	dbs, err := response.GetDatabases()
@@ -139,6 +145,9 @@ func (c *Client) GetDatabase(ctx context.Context, name string) (*Database, int, 
 			statusCode = resp.StatusCode
 		}
 		return nil, statusCode, c.classifyReadError(accountUsageDatabasesView, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the single-database lookup"); err != nil {
+		return nil, statusCodeOf(resp), err
 	}
 
 	databases, err := response.GetDatabases()
