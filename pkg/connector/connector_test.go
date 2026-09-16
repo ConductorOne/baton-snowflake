@@ -12,6 +12,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-snowflake/pkg/config"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
 )
@@ -396,4 +397,54 @@ func TestValidate(t *testing.T) {
 		_, err = (&Connector{Client: client}).Validate(context.Background())
 		require.NoError(t, err)
 	})
+}
+
+// Turning object resources off makes two other settings no-ops, and neither can be expressed
+// as an SDK field relationship: all four relationship helpers are presence-based and
+// sync-object-resources is a bool with a default, so it is always "present". A startup
+// warning is the available signal, so it is worth pinning that it fires only when it should.
+func TestIgnoredObjectResourceFlags(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		cfg  *config.Snowflake
+		want []string
+	}{
+		{
+			name: "objects on, nothing ignored",
+			cfg: &config.Snowflake{
+				SyncObjectResources: true,
+				SyncSecrets:         true,
+				ExcludedDatabases:   []string{"DB"},
+			},
+		},
+		{
+			name: "objects off ignores excluded-databases",
+			cfg:  &config.Snowflake{ExcludedDatabases: []string{"DB"}},
+			want: []string{"--excluded-databases is ignored"},
+		},
+		{
+			name: "objects off ignores sync-secrets",
+			cfg:  &config.Snowflake{SyncSecrets: true},
+			want: []string{"no secret is synced"},
+		},
+		{
+			name: "objects off ignores both",
+			cfg:  &config.Snowflake{SyncSecrets: true, ExcludedDatabases: []string{"DB"}},
+			want: []string{"--excluded-databases is ignored", "no secret is synced"},
+		},
+		{
+			name: "objects off with neither set warns about nothing",
+			cfg:  &config.Snowflake{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := ignoredObjectResourceFlags(tc.cfg)
+			require.Len(t, got, len(tc.want))
+			for i, want := range tc.want {
+				require.Contains(t, got[i], want)
+			}
+		})
+	}
 }

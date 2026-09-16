@@ -512,9 +512,11 @@ Also confirm the service account actually has a role **granted** to it. A `DEFAU
 
 ### Some users sync with a blank login, email, and account type
 
-This is the partially visible case under `show` discovery: the connector's role owns some in-scope users but not others. Startup succeeds, because a tenant may legitimately hand over only a subset of users, but each affected user is logged as a warning naming the user, and its account type is reported as *unspecified* rather than guessed as human.
+This is the partially visible case under `show` discovery: the connector's role owns some in-scope users but not others. Startup succeeds, because a tenant may legitimately hand over only a subset of users, and emits one warning naming a bounded sample of the affected users (per-user detail is logged at debug level).
 
-Grant `OWNERSHIP` on the named users, or switch **Discovery Mode** to `account_usage`, to sync them fully.
+Because the `TYPE` column is suppressed along with the rest, a service account among those users cannot be distinguished from a person and appears in C1 as a human account — see the Model B warning above.
+
+Grant `OWNERSHIP` on the users named in the startup warning, or switch **Discovery Mode** to `account_usage`, to sync them fully.
 
 ### ACCOUNT_USAGE discovery fails with "SNOWFLAKE.ACCOUNT_USAGE is not readable"
 

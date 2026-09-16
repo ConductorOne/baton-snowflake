@@ -267,24 +267,36 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 }
 
 // DescribeUser reads a single user through DESCRIBE USER regardless of the configured
-// discovery mode, running as the configured write role.
+// discovery mode, as the session's default role.
 //
 // Provisioning must not read through ACCOUNT_USAGE. Those views lag the live account by up
 // to three hours, so a user the connector just created is reliably absent from them - a
 // post-create read-back or a pre-issuance property lookup would fail on a correct account.
 //
-// The role matters as much as the statement. DESCRIBE USER requires OWNERSHIP on the target
-// user, and it is the write role that creates users, so the write role is the one that owns
-// them. Sending no role would run the read as the session's default role, which the
-// documented least-privilege setups never grant OWNERSHIP to - so a tenant that moved user
-// lifecycle onto a dedicated --write-role would create a user successfully and then fail to
-// read it back.
-//
 // It deliberately does NOT consult the session store: that cache is shared with the
 // discovery path, which under ACCOUNT_USAGE populates it from a view that lags the live
 // account, and serving a provisioning read from there would defeat this function's whole
 // purpose. Discovery reads go through GetUser, which honors the discovery mode and the cache.
+//
+// Use DescribeUserAsWriteRole instead for a user the connector itself just created; see the
+// role note there.
 func (c *Client) DescribeUser(ctx context.Context, _ sessions.SessionStore, username string) (*User, int, error) {
+	return c.describeUserAsRole(ctx, nil, username, "")
+}
+
+// DescribeUserAsWriteRole is DescribeUser for a user the connector just created, run as the
+// configured write role.
+//
+// DESCRIBE USER requires OWNERSHIP on the target user, and Snowflake gives ownership of a
+// new object to the role that created it - so for a freshly created user the write role is
+// the owner, and the session's default role may well not be. A tenant that moved user
+// lifecycle onto a dedicated --write-role would otherwise create a user successfully and
+// then fail to read it back.
+//
+// This does NOT generalize to users the connector did not create. The write role owns only
+// what it created, so a pre-existing user is read by DescribeUser as the session's default
+// role, which is the role the per-user OWNERSHIP setup grants.
+func (c *Client) DescribeUserAsWriteRole(ctx context.Context, username string) (*User, int, error) {
 	return c.describeUserAsRole(ctx, nil, username, c.writeRole())
 }
 

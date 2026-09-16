@@ -78,6 +78,11 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	// DescribeUser, not GetUser: this is a provisioning read, and ACCOUNT_USAGE discovery
 	// would answer it from a view that lags the live account by up to three hours, so a
 	// user created moments ago would look absent or carry stale properties.
+	//
+	// Not DescribeUserAsWriteRole: this user already existed, and the write role owns only
+	// the users it created. It stays on the session's default role, which is the role the
+	// per-user OWNERSHIP setup grants - the same role the SHOW GRANTS TO USER check below
+	// already runs as.
 	user, _, err := o.client.DescribeUser(ctx, nil, input.IdentityID.Resource)
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: get user for programmatic access token: %w", err)
@@ -588,16 +593,17 @@ func (o *userBuilder) CreateAccount(
 // fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
 // Retries up to 5 times with exponential backoff if we get a 422 Unprocessable Entity error.
 //
-// This reads back a user the connector just created, so it uses DescribeUser rather than
-// GetUser: under ACCOUNT_USAGE discovery the view lags the live account by up to three
-// hours, and no amount of retrying inside this window would find the new user.
+// This reads back a user the connector just created, so it uses DescribeUserAsWriteRole
+// rather than GetUser: under ACCOUNT_USAGE discovery the view lags the live account by up to
+// three hours and no amount of retrying inside this window would find the new user, and the
+// write role that created the user is the role that owns it and can DESCRIBE it.
 func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string) (*snowflake.User, error) {
 	l := ctxzap.Extract(ctx)
 	maxRetries := 5
 	baseDelay := 500 * time.Millisecond
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		user, statusCode, err := o.client.DescribeUser(ctx, nil, userName)
+		user, statusCode, err := o.client.DescribeUserAsWriteRole(ctx, userName)
 		if err == nil && statusCode == http.StatusOK {
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),

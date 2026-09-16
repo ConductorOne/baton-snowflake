@@ -468,12 +468,12 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 
 	var response ListTableGrantsRawResponse
 	var apiErr SnowflakeError
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp)
+	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp1)
 	if err != nil {
 		// uhttp already decoded the error body into apiErr, so the access-control code is read
 		// from there rather than by consuming resp.Body a second time.
-		if c.skippableDenial(resp, &apiErr) {
+		if c.skippableDenial(resp1, &apiErr) {
 			tableRef := fmt.Sprintf("%s.%s.%s", database, schema, tableName)
 			l.Debug("Insufficient privileges to show grants on table", zap.String("table", tableRef))
 			return tableGrantsFirstPage{}, uhttp.WrapErrors(
@@ -483,7 +483,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 			)
 		}
 
-		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
+		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp1, &apiErr, err)
 	}
 
 	handle := response.StatementHandle
@@ -492,10 +492,10 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 	if err != nil {
 		return tableGrantsFirstPage{}, err
 	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp)
+	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+	defer closeResponseBody(resp2)
 	if err != nil {
-		if c.skippableDenial(resp, &apiErr) {
+		if c.skippableDenial(resp2, &apiErr) {
 			l.Debug("Insufficient privileges to show grants on table (statement result)", zap.String("table", fmt.Sprintf("%s.%s.%s", database, schema, tableName)))
 			return tableGrantsFirstPage{}, uhttp.WrapErrors(
 				codes.PermissionDenied,
@@ -503,7 +503,7 @@ func (c *Client) fetchTableGrantsFirstPage(ctx context.Context, database, schema
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp, &apiErr, err)
+		return tableGrantsFirstPage{}, c.classifyReadError(accountUsageGrantsToRolesView, resp2, &apiErr, err)
 	}
 
 	grants, err := response.GetTableGrants()
@@ -615,18 +615,10 @@ func (c *Client) listTablesStatement(databaseName, schemaName, cursor string, li
 	}
 	escapedDB := escapeDoubleQuotedIdentifier(databaseName)
 	escapedSchema := escapeDoubleQuotedIdentifier(schemaName)
-	// A non-positive limit omits the clause rather than emitting "LIMIT 0", which Snowflake
-	// honours literally by returning no rows. The ACCOUNT_USAGE branch omits it for the same
-	// input, so an unbounded caller behaves the same in both modes instead of getting an
-	// empty result in one and the full set in the other.
-	limitClause := ""
-	if limit > 0 {
-		limitClause = fmt.Sprintf(" LIMIT %d", limit)
-	}
 	if cursor != "" {
-		return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\"%s FROM '%s';", escapedDB, escapedSchema, limitClause, escapeStringLiteral(cursor))
+		return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d FROM '%s';", escapedDB, escapedSchema, limit, escapeStringLiteral(cursor))
 	}
-	return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\"%s;", escapedDB, escapedSchema, limitClause)
+	return fmt.Sprintf("SHOW TABLES IN SCHEMA \"%s\".\"%s\" LIMIT %d;", escapedDB, escapedSchema, limit)
 }
 
 // getTableStatement is the discovery-mode-dependent single-table lookup. The SHOW form's

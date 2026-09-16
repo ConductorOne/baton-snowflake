@@ -121,8 +121,11 @@ var (
 		field.WithDefaultValue(string(snowflake.DiscoveryModeShow)),
 		// The accepted values are declared as a rule so they reach the generated config
 		// schema and are rejected at config-validation time rather than only inside
-		// connector.New. ParseDiscoveryMode stays as defence in depth: it also folds case
-		// and trims whitespace, which this rule does not.
+		// connector.New. The rule is exact, so a non-canonical value like "SHOW" is
+		// rejected with the accepted values named rather than normalized - which is the
+		// right trade for an enum whose error message lists the alternatives.
+		// ParseDiscoveryMode still folds case and whitespace for callers that bypass
+		// config validation, and remains the single place that maps a string to the type.
 		field.WithString(func(r *field.StringRuler) {
 			r.In([]string{
 				string(snowflake.DiscoveryModeShow),

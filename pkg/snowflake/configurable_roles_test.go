@@ -245,13 +245,11 @@ func TestRoleOverridesDoNotLeakIntoReads(t *testing.T) {
 	}
 }
 
-// DescribeUser is the provisioning read: CreateAccount reads the new user back through it
-// and Issue looks up properties before minting a token. DESCRIBE USER requires OWNERSHIP on
-// the target user, and it is the write role that creates users, so the write role is the one
-// that owns them. Running it as the session's default role - which the documented
-// least-privilege setups never grant OWNERSHIP to - would create a user successfully and
-// then fail to read it back.
-func TestDescribeUserRunsAsTheWriteRole(t *testing.T) {
+// The post-create read-back runs as the write role, because Snowflake gives ownership of a
+// new object to the role that created it and DESCRIBE USER requires OWNERSHIP. Running it as
+// the session's default role would create a user successfully and then fail to read it back
+// on a tenant that moved user lifecycle onto a dedicated write role.
+func TestDescribeUserAsWriteRoleRunsAsTheWriteRole(t *testing.T) {
 	t.Parallel()
 	const customRole = "C1_USER_LIFECYCLE"
 
@@ -264,12 +262,34 @@ func TestDescribeUserRunsAsTheWriteRole(t *testing.T) {
 
 	// The empty result set the recorder returns makes DescribeUser fail to parse a user;
 	// the role on the wire is what this test is about, so the error is not the subject.
+	_, _, _ = client.DescribeUserAsWriteRole(context.Background(), "svc")
+
+	statements, roles := recorder.snapshot()
+	require.NotEmpty(t, roles)
+	assert.Equal(t, `DESCRIBE USER "svc";`, statements[0])
+	assert.Equal(t, customRole, roles[0], "the post-create read-back must pin the write role")
+}
+
+// DescribeUser reads a user the connector did NOT create - Issue looks up properties on a
+// pre-existing user before minting a token. The write role owns only what it created, so
+// pinning it here would demand OWNERSHIP the documented provisioning setup never grants.
+// It stays on the session's default role, which per-user OWNERSHIP is granted to.
+func TestDescribeUserStaysOnTheSessionDefaultRole(t *testing.T) {
+	t.Parallel()
+
+	recorder := &statementRecorder{}
+	server := recordRoleServer(t, recorder)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client(), WithWriteRole("C1_USER_LIFECYCLE"))
+	require.NoError(t, err)
+
 	_, _, _ = client.DescribeUser(context.Background(), nil, "svc")
 
 	statements, roles := recorder.snapshot()
 	require.NotEmpty(t, roles)
 	assert.Equal(t, `DESCRIBE USER "svc";`, statements[0])
-	assert.Equal(t, customRole, roles[0], "DescribeUser must pin the write role")
+	assert.Empty(t, roles[0], "a pre-existing user is read as the session's default role")
 }
 
 // The discovery counterpart: GetUser serves read-only sync, whose callers hold no write

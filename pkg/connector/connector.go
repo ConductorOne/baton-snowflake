@@ -433,30 +433,37 @@ func New(ctx context.Context, cfg *config.Snowflake, _ *cli.ConnectorOpts) (conn
 	}, nil, nil
 }
 
-// warnIgnoredObjectResourceFlags logs the two combinations in which turning object resources
-// off silently makes another setting a no-op.
+// ignoredObjectResourceFlags returns a warning for each setting that turning object
+// resources off silently makes a no-op.
 //
 // These cannot be expressed as SDK field relationships: all four relationship helpers are
 // presence-based, and sync-object-resources is a bool with a default, so it is always
-// "present". A log line at startup is the available signal.
-func warnIgnoredObjectResourceFlags(ctx context.Context, cfg *config.Snowflake) {
+// "present". A startup log line is the available signal. The decision is split from the
+// logging so it can be tested without a log observer (zaptest is not vendored).
+func ignoredObjectResourceFlags(cfg *config.Snowflake) []string {
 	if cfg.SyncObjectResources {
-		return
+		return nil
 	}
-	l := ctxzap.Extract(ctx)
+	var warnings []string
 	if len(cfg.ExcludedDatabases) > 0 {
-		l.Warn(
+		warnings = append(warnings,
 			"baton-snowflake: --excluded-databases is ignored because --sync-object-resources "+
 				"is false; no database, schema, or table is enumerated at all, so there is "+
-				"nothing for the filter to exclude",
-			zap.Strings("excluded_databases", cfg.ExcludedDatabases),
-		)
+				"nothing for the filter to exclude")
 	}
 	if cfg.SyncSecrets {
-		l.Warn(
-			"baton-snowflake: --sync-secrets is set but Snowflake secrets are database-scoped, " +
-				"so no secret is synced while --sync-object-resources is false. User-scoped RSA " +
-				"public keys are unaffected and still sync",
-		)
+		warnings = append(warnings,
+			"baton-snowflake: --sync-secrets is set but Snowflake secrets are database-scoped, "+
+				"so no secret is synced while --sync-object-resources is false. User-scoped RSA "+
+				"public keys are unaffected and still sync")
+	}
+	return warnings
+}
+
+// warnIgnoredObjectResourceFlags logs whatever ignoredObjectResourceFlags reports.
+func warnIgnoredObjectResourceFlags(ctx context.Context, cfg *config.Snowflake) {
+	l := ctxzap.Extract(ctx)
+	for _, w := range ignoredObjectResourceFlags(cfg) {
+		l.Warn(w)
 	}
 }

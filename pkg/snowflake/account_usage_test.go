@@ -208,15 +208,17 @@ func TestAccountUsageKeysetPaginationMatchesShowSemantics(t *testing.T) {
 	assert.Contains(t, next, "AND NAME > 'alice'")
 	assert.Contains(t, next, "ORDER BY NAME")
 
-	// A non-positive limit is unbounded in BOTH modes: neither branch may emit "LIMIT 0",
-	// which Snowflake honours literally by returning no rows. No caller passes one today;
-	// this pins the two branches to the same answer so one cannot drift into returning the
-	// full set while the other returns nothing.
-	unboundedClient := &Client{DiscoveryMode: DiscoveryModeShow}
+	// A non-positive limit is unbounded on the ACCOUNT_USAGE path only. The SHOW path cannot
+	// match it: "FROM '<name>'" is a sub-clause of LIMIT, so omitting LIMIT while paginating
+	// is a compilation error. No caller passes a non-positive limit; this pins both the
+	// ACCOUNT_USAGE behavior and the fact that the SHOW form stays syntactically valid.
+	showClient := &Client{DiscoveryMode: DiscoveryModeShow}
 	assert.NotContains(t, accountUsageListTablesStatement("DB", publicSchema, "", 0), "LIMIT")
-	assert.NotContains(t, unboundedClient.listTablesStatement("DB", publicSchema, "", 0), "LIMIT")
 	assert.Contains(t, accountUsageListTablesStatement("DB", publicSchema, "", 25), "LIMIT 25")
-	assert.Contains(t, unboundedClient.listTablesStatement("DB", publicSchema, "", 25), "LIMIT 25")
+	assert.Contains(t, showClient.listTablesStatement("DB", publicSchema, "", 25), "LIMIT 25")
+	// Whatever the limit, a SHOW keyset page must keep FROM nested inside LIMIT.
+	assert.Contains(t, showClient.listTablesStatement("DB", publicSchema, "cursor", 0), "LIMIT 0 FROM 'cursor'")
+	assert.Contains(t, showClient.listTablesStatement("DB", publicSchema, "cursor", 25), "LIMIT 25 FROM 'cursor'")
 }
 
 // SHOW TABLES lists neither views nor external tables, and the kind it reports feeds back
@@ -666,9 +668,13 @@ func TestAccountUsageNonListPathsAreNeverSkippable(t *testing.T) {
 }
 
 // The same denial in SHOW mode is genuinely per-object - a role can hold USAGE on one
-// database and not another - so it must stay skippable there. This is the other half of the
-// discovery-mode gate: fixing the ACCOUNT_USAGE invariant must not make SHOW-mode syncs
-// start failing on databases they used to skip.
+// database and not another - so it must stay skippable there.
+//
+// This does not discriminate the discovery-mode gate on its own: it passed before the gate
+// existed too. It is a forward-looking guard that the gate is never tightened into
+// unconditional fatality, which would make SHOW-mode syncs start failing on databases they
+// have always skipped. The pre-existing CXH-2193 and CXH-2253 gates cover the same property
+// at the connector layer.
 func TestShowModeDenialsStaySkippable(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

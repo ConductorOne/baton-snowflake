@@ -143,9 +143,14 @@ func accountUsageKeysetPredicate(column, cursor string) string {
 }
 
 // accountUsageLimitClause renders a LIMIT clause, omitting it for a non-positive limit so a
-// caller that does not paginate gets the whole result set. listTablesStatement's SHOW branch
-// omits the clause for a non-positive limit too, so the two modes agree; no caller passes one
-// today (every list path passes a positive page size).
+// caller that does not paginate gets the whole result set.
+//
+// The SHOW branches do NOT match this for a non-positive limit: they emit "LIMIT 0", which
+// Snowflake honours literally by returning no rows. The asymmetry is deliberate rather than
+// an oversight - SHOW's keyset "FROM '<name>'" is a sub-clause of LIMIT, so omitting LIMIT
+// while paginating is a SQL compilation error and there is no unbounded keyset form to match.
+// No caller passes a non-positive limit today (every list path passes a positive page size);
+// anything that starts to must decide what unbounded means on both paths at once.
 func accountUsageLimitClause(limit int) string {
 	if limit <= 0 {
 		return ""
