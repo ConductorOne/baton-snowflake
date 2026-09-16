@@ -320,6 +320,22 @@ account. That is a customer-side configuration choice and needs no connector set
 Snowflake's [container-level MANAGE GRANTS](https://docs.snowflake.com/en/user-guide/container-manage-grants-using)
 documentation.
 
+### Opt-in capabilities need their own grants in either mode
+
+The grants above cover users, roles, role grants, and the object-level inventory. The opt-in
+capabilities read surfaces that have no `ACCOUNT_USAGE` equivalent and stay on
+`SHOW`/`DESCRIBE` in **both** discovery modes, so they need their own grants regardless of
+which model you followed:
+
+| Setting | Also needs |
+| --- | --- |
+| `--sync-secrets` | `OWNERSHIP` on each user (`DESCRIBE USER`, for RSA public key timestamps) and `USAGE` on each database (`SHOW SECRETS`) |
+| `--issue-credentials` | `OWNERSHIP` on each user — token issuance reads the target user with `DESCRIBE USER` before minting, and that read is live in both modes — plus `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` on each user |
+| License sync | `SNOWFLAKE.SECURITY_VIEWER` (or equivalent `SELECT`) and a running warehouse, in both modes |
+
+Following an `account_usage` setup alone will sync successfully and then fail
+`--issue-credentials` at the pre-issuance read if `OWNERSHIP` was never granted.
+
 ## Narrowing the scope
 
 `--sync-object-resources=false` turns off the database and table resource types as a

@@ -223,7 +223,7 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 	if err != nil {
 		return nil, c.classifyReadError(accountUsageUsersView, resp2, &apiErr, err)
 	}
-	if err := errIfStatementIncomplete(resp2, "SHOW USERS"); err != nil {
+	if err := errIfStatementIncomplete(resp2, "the user listing"); err != nil {
 		return nil, err
 	}
 
