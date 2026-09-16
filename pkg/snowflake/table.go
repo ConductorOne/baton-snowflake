@@ -718,8 +718,13 @@ func (c *Client) listSchemasStatement(databaseName string) string {
 }
 
 // listTablesStatement is the discovery-mode-dependent statement for one page of a schema's
-// tables. Both forms keyset-paginate on the table name and treat limit <= 0 as unbounded, so
-// the cursor ListTablesInSchema returns means the same thing in either mode.
+// tables. Both forms keyset-paginate on the table name, so the cursor ListTablesInSchema
+// returns means the same thing in either mode.
+//
+// They diverge on a non-positive limit: the ACCOUNT_USAGE form omits LIMIT and returns
+// everything, while this one emits "LIMIT 0", which Snowflake honours literally by returning
+// no rows. See accountUsageLimitClause for why that cannot be made symmetric - SHOW's keyset
+// clause is a sub-clause of LIMIT. No caller passes a non-positive limit.
 func (c *Client) listTablesStatement(databaseName, schemaName, cursor string, limit int) string {
 	if c.usesAccountUsage() {
 		return accountUsageListTablesStatement(databaseName, schemaName, cursor, limit)
