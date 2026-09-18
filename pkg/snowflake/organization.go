@@ -65,26 +65,35 @@ func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAc
 		return nil, statusCode, dedupeAPIError(err)
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, 0, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		statusCode := 0
+	// Status code of whichever leg carried the result set. Callers read it to tell the
+	// org-accounts-unavailable case apart from a hard failure, so it has to follow the
+	// result rather than always come from the follow-up GET.
+	statusCode := resp1.StatusCode
+	if c.needsStatementResultFetch(ctx, resp1, &response, "ListOrganizationAccounts") {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, 0, err
+		}
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			code := 0
+			if resp2 != nil {
+				code = resp2.StatusCode
+			}
+			return nil, code, dedupeAPIError(err)
+		}
 		if resp2 != nil {
 			statusCode = resp2.StatusCode
 		}
-		return nil, statusCode, dedupeAPIError(err)
 	}
 
 	accounts, err := response.GetOrganizationAccounts()
 	if err != nil {
-		return nil, resp2.StatusCode, err
+		return nil, statusCode, err
 	}
 
-	return accounts, resp2.StatusCode, nil
+	return accounts, statusCode, nil
 }
 
 func (c *Client) CountUsers(ctx context.Context) (int64, error) {
@@ -103,14 +112,16 @@ func (c *Client) CountUsers(ctx context.Context) (int64, error) {
 		return 0, dedupeAPIError(err)
 	}
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return 0, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		return 0, dedupeAPIError(err)
+	if c.needsStatementResultFetch(ctx, resp1, &response, "CountUsers") {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return 0, err
+		}
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			return 0, dedupeAPIError(err)
+		}
 	}
 
 	if len(response.Data) == 0 || len(response.Data[0]) == 0 {
