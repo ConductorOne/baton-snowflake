@@ -68,7 +68,10 @@ func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAc
 	// Status code of whichever leg carried the result set. Callers read it to tell the
 	// org-accounts-unavailable case apart from a hard failure, so it has to follow the
 	// result rather than always come from the follow-up GET.
-	statusCode := resp1.StatusCode
+	statusCode := 0
+	if resp1 != nil {
+		statusCode = resp1.StatusCode
+	}
 	if c.needsStatementResultFetch(ctx, resp1, &response, "ListOrganizationAccounts") {
 		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
 		if err != nil {

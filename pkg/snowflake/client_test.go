@@ -143,3 +143,81 @@ func TestCreateUserREST_NonJSONAuthFailureBody(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
+
+// TestNeedsStatementResultFetch pins the decision gate that lets a statement cost one HTTP round
+// trip instead of two. Both halves matter: skipping when the result is in hand is the whole point
+// of the optimisation, and NOT skipping in every other case is what keeps a response shaped
+// differently from the documented one from turning into a silently empty sync.
+func TestNeedsStatementResultFetch(t *testing.T) {
+	inline := &StatementsApiResponseBase{}
+	inline.ResultSetMetadata.RowTypes = []RowType{{Name: "name", Type: "text"}}
+	// A zero-row result still describes its columns, which is why the check keys on the column
+	// list rather than on len(data).
+	emptyButInline := &StatementsApiResponseBase{}
+	emptyButInline.ResultSetMetadata.RowTypes = []RowType{{Name: "name", Type: "text"}}
+	emptyButInline.ResultSetMetadata.NumRows = 0
+	handleOnly := &StatementsApiResponseBase{StatementHandle: "handle-1"}
+
+	client := &Client{}
+	for _, tc := range []struct {
+		name string
+		resp *http.Response
+		res  statementResult
+		want bool
+	}{
+		{"200 with result set: skip the GET", &http.Response{StatusCode: http.StatusOK}, inline, false},
+		{"200 with zero rows but columns present: skip the GET", &http.Response{StatusCode: http.StatusOK}, emptyButInline, false},
+		{"202 accepted: statement went async, fetch the handle", &http.Response{StatusCode: http.StatusAccepted}, inline, true},
+		{"200 carrying only a handle: fetch it", &http.Response{StatusCode: http.StatusOK}, handleOnly, true},
+		{"200 with no decoded response at all: fetch it", &http.Response{StatusCode: http.StatusOK}, nil, true},
+		{"nil response: fetch it", nil, inline, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, client.needsStatementResultFetch(context.Background(), tc.resp, tc.res, "test"))
+		})
+	}
+}
+
+// TestStatementRoundTripCount is the regression guard the decision gate exists for: it counts HTTP
+// requests rather than inspecting the parsed result, so a return to unconditional fetching fails
+// here even though every response-shape assertion elsewhere would still pass.
+func TestStatementRoundTripCount(t *testing.T) {
+	// Column definitions, in the order the data rows below supply values for.
+	columns := []map[string]interface{}{{"name": columnName, "type": "text"}, {"name": columnDatabaseName, "type": "text"}}
+
+	for _, tc := range []struct {
+		name         string
+		postInline   bool
+		wantRequests int
+	}{
+		{"result inline on the POST: one request", true, 1},
+		{"POST returns only a handle: POST plus GET", false, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Content-Type", "application/json")
+				body := map[string]interface{}{"statementHandle": "handle-1"}
+				// The POST withholds the result set only in the fallback case; the GET on the
+				// handle always carries it, exactly as the live API behaves.
+				if tc.postInline || r.Method == http.MethodGet {
+					body["resultSetMetadata"] = map[string]interface{}{"numRows": 1, "rowType": columns}
+					body["data"] = [][]string{{"SALES", "BATON_TEST_DB"}}
+				}
+				_ = json.NewEncoder(w).Encode(body)
+			}))
+			defer server.Close()
+
+			client, err := New(server.URL, JWTConfig{}, server.Client())
+			require.NoError(t, err)
+
+			schemas, err := client.ListSchemasInDatabase(context.Background(), "BATON_TEST_DB")
+			require.NoError(t, err)
+			// Same data either way - the round-trip count is the only difference.
+			require.Len(t, schemas, 1)
+			assert.Equal(t, "SALES", schemas[0].Name)
+			assert.Equal(t, tc.wantRequests, requests)
+		})
+	}
+}
