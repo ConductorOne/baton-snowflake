@@ -129,17 +129,19 @@ func (c *Client) executeStatementWithRole(ctx context.Context, statement, role s
 	if result.StatementHandle == "" {
 		return &result, nil
 	}
-	req, err = c.GetStatementResponse(ctx, result.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp, err = c.Do(req, uhttp.WithJSONResponse(&result), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp)
-	if err != nil {
-		// Same classification as the POST leg: Snowflake reports an access-control
-		// denial on whichever leg surfaces the statement's outcome, and a statement
-		// that went async reports it here.
-		return nil, classifyStatementError(resp, &apiErr, err)
+	if c.needsStatementResultFetch(ctx, resp, &result, "executeStatementWithRole") {
+		req, err = c.GetStatementResponse(ctx, result.StatementHandle)
+		if err != nil {
+			return nil, err
+		}
+		resp, err = c.Do(req, uhttp.WithJSONResponse(&result), uhttp.WithErrorResponse(&apiErr))
+		defer closeResponseBody(resp)
+		if err != nil {
+			// Same classification as the POST leg: Snowflake reports an access-control
+			// denial on whichever leg surfaces the statement's outcome, and a statement
+			// that went async reports it here.
+			return nil, classifyStatementError(resp, &apiErr, err)
+		}
 	}
 	return &result, nil
 }

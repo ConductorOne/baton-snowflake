@@ -113,14 +113,16 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListAccountRoles", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		return nil, dedupeAPIError(err)
+	if c.needsStatementResultFetch(ctx, resp1, &response, "ListAccountRoles") {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, err
+		}
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			return nil, dedupeAPIError(err)
+		}
 	}
 
 	accountRoles, err := response.GetAccountRoles()
@@ -183,14 +185,16 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 
 		handle := response.StatementHandle
 
-		req, err = c.GetStatementResponse(ctx, handle)
-		if err != nil {
-			return nil, "", err
-		}
-		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-		defer closeResponseBody(resp2)
-		if err != nil {
-			return nil, "", dedupeAPIError(err)
+		if c.needsStatementResultFetch(ctx, resp1, &response, "ListAccountRoleGrantees") {
+			req, err = c.GetStatementResponse(ctx, handle)
+			if err != nil {
+				return nil, "", err
+			}
+			resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+			defer closeResponseBody(resp2)
+			if err != nil {
+				return nil, "", dedupeAPIError(err)
+			}
 		}
 
 		numPartitions := len(response.ResultSetMetadata.PartitionInfo)
