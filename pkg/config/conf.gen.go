@@ -12,6 +12,10 @@ type Snowflake struct {
 	SyncSecrets bool `mapstructure:"sync-secrets"`
 	IssueCredentials bool `mapstructure:"issue-credentials"`
 	ExcludedDatabases []string `mapstructure:"excluded-databases"`
+	SyncObjectResources bool `mapstructure:"sync-object-resources"`
+	WriteRole string `mapstructure:"write-role"`
+	OrganizationRole string `mapstructure:"organization-role"`
+	DiscoveryMode string `mapstructure:"discovery-mode"`
 }
 
 func (c *Snowflake) findFieldByTag(tagValue string) (any, bool) {

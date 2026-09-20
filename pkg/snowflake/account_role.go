@@ -88,14 +88,21 @@ func (r *ListAccountRoleGranteesRawResponse) GetAccountRoleGrantees() ([]Account
 	return accountRoleGrantees, nil
 }
 
-func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int) ([]AccountRole, error) {
-	var queries []string
-
-	if cursor != "" {
-		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor)))
-	} else {
-		queries = append(queries, fmt.Sprintf("SHOW ROLES LIMIT %d;", limit))
+// listAccountRolesStatement is the discovery-mode-dependent statement for one page of
+// account roles. The ACCOUNT_USAGE form aliases NAME to the SHOW ROLES column name, so both
+// feed the same ListAccountRolesRawResponse parser.
+func (c *Client) listAccountRolesStatement(cursor string, limit int) string {
+	if c.usesAccountUsage() {
+		return accountUsageListRolesStatement(cursor, limit)
 	}
+	if cursor != "" {
+		return fmt.Sprintf("SHOW ROLES LIMIT %d FROM '%s';", limit, escapeStringLiteral(cursor))
+	}
+	return fmt.Sprintf("SHOW ROLES LIMIT %d;", limit)
+}
+
+func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int) ([]AccountRole, error) {
+	queries := []string{c.listAccountRolesStatement(cursor, limit)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -107,7 +114,7 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp1)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageRolesView, resp1, &apiErr, err)
 	}
 
 	l := ctxzap.Extract(ctx)
@@ -120,7 +127,10 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp2)
 	if err != nil {
-		return nil, dedupeAPIError(err)
+		return nil, c.classifyReadError(accountUsageRolesView, resp2, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp2, "the account role listing"); err != nil {
+		return nil, err
 	}
 
 	accountRoles, err := response.GetAccountRoles()
@@ -168,7 +178,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 	var apiErr SnowflakeError
 
 	if cursor == "" {
-		queries := []string{fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", escapeDoubleQuotedIdentifier(roleName))}
+		queries := []string{c.roleGranteesStatement(roleName)}
 
 		req, err := c.PostStatementRequest(ctx, queries)
 		if err != nil {
@@ -178,7 +188,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		resp1, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 		defer closeResponseBody(resp1)
 		if err != nil {
-			return nil, "", dedupeAPIError(err)
+			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp1, &apiErr, err)
 		}
 
 		handle := response.StatementHandle
@@ -190,7 +200,10 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 		defer closeResponseBody(resp2)
 		if err != nil {
-			return nil, "", dedupeAPIError(err)
+			return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp2, &apiErr, err)
+		}
+		if err := errIfStatementIncomplete(resp2, "the role grantee read"); err != nil {
+			return nil, "", err
 		}
 
 		numPartitions := len(response.ResultSetMetadata.PartitionInfo)
@@ -231,7 +244,10 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 	resp, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
 	defer closeResponseBody(resp)
 	if err != nil {
-		return nil, "", dedupeAPIError(err)
+		return nil, "", c.classifyReadError(accountUsageRoleGrantsViews, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the role grantee read"); err != nil {
+		return nil, "", err
 	}
 
 	// Partition-only responses carry no rowType metadata - restore it from the cursor so
@@ -281,12 +297,7 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 		}
 	}
 
-	// SHOW ROLES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
-	// only the single quote needs escaping to keep the string literal well-formed. _ and %
-	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
-	queries := []string{
-		fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT %d;", escapeLikeStringLiteral(roleName), wildcardLookupLimit),
-	}
+	queries := []string{c.getAccountRoleStatement(roleName)}
 
 	req, err := c.PostStatementRequest(ctx, queries)
 	if err != nil {
@@ -303,14 +314,17 @@ func (c *Client) GetAccountRole(ctx context.Context, ss sessions.SessionStore, r
 			statusCode = resp.StatusCode
 		}
 		// SHOW ROLES LIKE on a system role the connector cannot observe returns 422/003001.
-		if isAccessControlDenial(resp, &apiErr) {
+		if c.skippableDenial(resp, &apiErr) {
 			return nil, statusCode, uhttp.WrapErrors(
 				codes.PermissionDenied,
 				fmt.Sprintf("baton-snowflake: insufficient privileges to describe role %s", roleName),
 				ErrInsufficientPrivileges, err,
 			)
 		}
-		return nil, statusCode, dedupeAPIError(err)
+		return nil, statusCode, c.classifyReadError(accountUsageRolesView, resp, &apiErr, err)
+	}
+	if err := errIfStatementIncomplete(resp, "the single-role lookup"); err != nil {
+		return nil, statusCodeOf(resp), err
 	}
 
 	accountRoles, err := response.GetAccountRoles()
@@ -351,6 +365,11 @@ func (c *Client) GrantAccountRole(ctx context.Context, roleName, userName string
 	if err != nil {
 		return dedupeAPIError(err)
 	}
+	// This POST is the outcome leg - no statement-result GET follows - so a 202 would
+	// otherwise be reported to C1 as a completed grant change.
+	if err := errIfWriteIncomplete(resp, "GRANT ROLE"); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -371,6 +390,34 @@ func (c *Client) RevokeAccountRole(ctx context.Context, roleName, userName strin
 	if err != nil {
 		return dedupeAPIError(err)
 	}
+	// This POST is the outcome leg - no statement-result GET follows - so a 202 would
+	// otherwise be reported to C1 as a completed grant change.
+	if err := errIfWriteIncomplete(resp, "REVOKE ROLE"); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// roleGranteesStatement is the discovery-mode-dependent statement for a role's grantees.
+// Only the statement differs: the ACCOUNT_USAGE form aliases its columns to the
+// SHOW GRANTS OF ROLE names, so the response parsing, partition walk and page cursor in
+// ListAccountRoleGrantees are shared verbatim between the two modes.
+func (c *Client) roleGranteesStatement(roleName string) string {
+	if c.usesAccountUsage() {
+		return accountUsageRoleGranteesStatement(roleName)
+	}
+	return fmt.Sprintf("SHOW GRANTS OF ROLE \"%s\";", escapeDoubleQuotedIdentifier(roleName))
+}
+
+// getAccountRoleStatement is the discovery-mode-dependent single-role lookup.
+func (c *Client) getAccountRoleStatement(roleName string) string {
+	if c.usesAccountUsage() {
+		return accountUsageGetRoleStatement(roleName)
+	}
+	// SHOW ROLES' LIKE filter has no ESCAPE clause (unlike the general SQL LIKE predicate) -
+	// only the single quote needs escaping to keep the string literal well-formed. _ and %
+	// remain active wildcards; there is no Snowflake syntax to suppress that for SHOW commands.
+	// The ACCOUNT_USAGE form above is an exact match and has no such hazard.
+	return fmt.Sprintf("SHOW ROLES LIKE '%s' LIMIT %d;", escapeLikeStringLiteral(roleName), wildcardLookupLimit)
 }

@@ -75,7 +75,7 @@ func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s%s DAYS_TO_EXPIRY = %d;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName), roleClause, daysToExpiry,
 	)
-	result, err := c.executeStatementAsUserAdmin(ctx, statement)
+	result, err := c.executeStatementAsWriteRole(ctx, statement)
 	if err != nil {
 		return "", err
 	}
@@ -99,7 +99,7 @@ func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, to
 		"ALTER USER IF EXISTS %s REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS %s;",
 		quoteIdentifier(userName), quoteIdentifier(tokenName),
 	)
-	_, err := c.executeStatementAsUserAdmin(ctx, statement)
+	_, err := c.executeStatementAsWriteRole(ctx, statement)
 	return err
 }
 
@@ -107,11 +107,12 @@ func (c *Client) executeStatement(ctx context.Context, statement string) (*State
 	return c.executeStatementWithRole(ctx, statement, "")
 }
 
-// executeStatementAsUserAdmin runs a statement that mutates another user. The session's
+// executeStatementAsWriteRole runs a statement that mutates another user. The session's
 // default role is not guaranteed to hold ALTER USER on other users, which is why
-// SetUserDisabled, CreateUserREST and DeleteUserREST all force UserAdminRole too.
-func (c *Client) executeStatementAsUserAdmin(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
-	return c.executeStatementWithRole(ctx, statement, UserAdminRole)
+// SetUserDisabled, CreateUserREST and DeleteUserREST all pin the write role too. The role
+// is UserAdminRole unless the tenant overrode it (see WithWriteRole).
+func (c *Client) executeStatementAsWriteRole(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
+	return c.executeStatementWithRole(ctx, statement, c.writeRole())
 }
 
 func (c *Client) executeStatementWithRole(ctx context.Context, statement, role string) (*StatementsApiResponseBase, error) {
@@ -140,6 +141,24 @@ func (c *Client) executeStatementWithRole(ctx context.Context, statement, role s
 		// denial on whichever leg surfaces the statement's outcome, and a statement
 		// that went async reports it here.
 		return nil, classifyStatementError(resp, &apiErr, err)
+	}
+	// A 202 here means the statement is still executing, which must not read as success.
+	// For a write, RemoveProgrammaticAccessToken discards the result entirely, so an
+	// unfinished ALTER USER would otherwise be reported to C1 as applied - a write claimed
+	// as done when its outcome is not known yet, which is worse than failing because the
+	// caller has no reason to retry.
+	//
+	// This helper serves reads as well: RoleGrantedToUser and ListProgrammaticAccessTokens
+	// both arrive via executeStatement, which passes no role. Nothing was applied by a SHOW,
+	// so the remedy differs and the message is picked accordingly. (SetUserDisabled,
+	// GrantAccountRole and RevokeAccountRole do not route through here at all; they build
+	// their own request and carry their own guard.)
+	if role == "" {
+		if err := errIfStatementIncomplete(resp, "the statement"); err != nil {
+			return nil, err
+		}
+	} else if err := errIfWriteIncomplete(resp, "the statement"); err != nil {
+		return nil, err
 	}
 	return &result, nil
 }

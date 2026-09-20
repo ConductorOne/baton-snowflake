@@ -95,6 +95,9 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 		}
 		return nil, dedupeAPIError(err)
 	}
+	if err := errIfStatementIncomplete(resp2, "SHOW INTEGRATIONS"); err != nil {
+		return nil, err
+	}
 
 	integrations, err := response.GetIntegrations()
 	if err != nil {
