@@ -203,7 +203,7 @@ baton resources
 ```
 
 docker run --rm
--v $(pwd):/out -e BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 BATON_USER_IDENTIFIER=user1 BATON_PUBLIC_KEY_FINGERPRINT=s98YHSRV+12124142124124124c= BATON_PRIVATE_KEY_PATH=./my-private-key.pem ghcr.io/conductorone/baton-snowflake:latest -f "/out/sync.c1z"
+-v $(pwd):/out -e BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 BATON_USER_IDENTIFIER=user1 BATON_PUBLIC_KEY_FINGERPRINT=s98YHSRV+12124142124124124c= BATON_PRIVATE_KEY_PATH=./my-private-key.pem public.ecr.aws/conductorone/baton-snowflake:latest -f "/out/sync.c1z"
 docker run --rm -v $(pwd):/out ghcr.io/conductorone/baton:latest -f "/out/sync.c1z" resources
 
 ```
