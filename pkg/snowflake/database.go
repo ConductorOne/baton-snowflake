@@ -84,14 +84,16 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListDatabases", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		return nil, dedupeAPIError(err)
+	if c.needsStatementResultFetch(ctx, resp1, &response, "ListDatabases") {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, err
+		}
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			return nil, dedupeAPIError(err)
+		}
 	}
 
 	dbs, err := response.GetDatabases()

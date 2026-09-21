@@ -13,6 +13,8 @@ import (
 
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
 )
@@ -235,6 +237,67 @@ func (c *Client) PostStatementRequestWithRole(ctx context.Context, queries []str
 		uhttp.WithAcceptJSONHeader(),
 		uhttp.WithHeader(AuthTypeHeaderKey, AuthTypeHeaderValue),
 	)
+}
+
+// statementResult is satisfied by every POST /api/v2/statements response type in this package:
+// each one embeds StatementsApiResponseBase, which promotes resultSetInline.
+type statementResult interface {
+	resultSetInline() bool
+}
+
+// resultSetInline reports whether this decoded response already carries the statement's result
+// set. Snowflake describes the columns in resultSetMetaData whenever the result is present, even
+// for a zero-row result, so the column list is the signal - unlike len(Data), which cannot tell
+// "no rows" apart from "no result yet".
+func (r *StatementsApiResponseBase) resultSetInline() bool {
+	return len(r.ResultSetMetadata.RowTypes) > 0
+}
+
+// needsStatementResultFetch reports whether a follow-up GET on the statement handle is required to
+// obtain the result set of a statement just submitted via POST /api/v2/statements.
+//
+// Snowflake answers the POST with 200 and the complete result set - resultSetMetaData plus data -
+// when the statement finishes inside the API's synchronous window, and with 202 and only a
+// statement handle when it does not. Every SHOW command this connector issues is metadata-only and
+// completes synchronously, so the follow-up GET returns a byte-identical body and is a wasted round
+// trip. That matters at scale: a full sync issues one statement per table, so on a large account
+// the redundant leg is tens of thousands of serial round trips.
+//
+// The check is deliberately two-sided - a 200 AND a result set actually present in the decoded
+// body. Keying on the status alone would silently return an empty result for any response shaped
+// differently from what this was written against, which is the one failure mode worth ruling out:
+// an empty sync looks like deleted access, not like a bug.
+func (c *Client) needsStatementResultFetch(ctx context.Context, resp *http.Response, res statementResult, op string) bool {
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+
+	// reason is empty when the result set is already in hand. Otherwise it names why this call
+	// still has to spend the second round trip, which is the thing worth being able to grep for:
+	// a sync that is unexpectedly slow, or unexpectedly empty, is diagnosed from these.
+	reason := ""
+	switch {
+	case resp == nil:
+		reason = "no_response"
+	case status != http.StatusOK:
+		// 202 is the documented async answer: the statement outlived the API's synchronous
+		// window and the rows have to be collected from the handle.
+		reason = "status_not_ok"
+	case res == nil || !res.resultSetInline():
+		// A 200 that carries no result set is not a shape Snowflake is documented to return.
+		// Falling back to the GET keeps the sync correct if it ever happens; this reason is
+		// how you would find out that it did.
+		reason = "no_result_set"
+	}
+
+	ctxzap.Extract(ctx).Debug("snowflake: statement result",
+		zap.String("op", op),
+		zap.Int("post_status", status),
+		zap.Bool("follow_up_get", reason != ""),
+		zap.String("reason", reason),
+	)
+	return reason != ""
 }
 
 func (c *Client) GetStatementResponse(ctx context.Context, statementHandle string) (*http.Request, error) {

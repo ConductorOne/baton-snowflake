@@ -79,21 +79,23 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 	l := ctxzap.Extract(ctx)
 	l.Debug("ListIntegrations", zap.String("response.code", response.Code), zap.String("response.message", response.Message))
 
-	req, err = c.GetStatementResponse(ctx, response.StatementHandle)
-	if err != nil {
-		return nil, err
-	}
-	resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
-	defer closeResponseBody(resp2)
-	if err != nil {
-		if isAccessControlDenial(resp2, &apiErr) {
-			return nil, uhttp.WrapErrors(
-				codes.PermissionDenied,
-				"baton-snowflake: insufficient privileges to list integrations (statement result)",
-				ErrInsufficientPrivileges, err,
-			)
+	if c.needsStatementResultFetch(ctx, resp1, &response, "ListIntegrations") {
+		req, err = c.GetStatementResponse(ctx, response.StatementHandle)
+		if err != nil {
+			return nil, err
 		}
-		return nil, dedupeAPIError(err)
+		resp2, err := c.Do(req, uhttp.WithJSONResponse(&response), uhttp.WithErrorResponse(&apiErr))
+		defer closeResponseBody(resp2)
+		if err != nil {
+			if isAccessControlDenial(resp2, &apiErr) {
+				return nil, uhttp.WrapErrors(
+					codes.PermissionDenied,
+					"baton-snowflake: insufficient privileges to list integrations (statement result)",
+					ErrInsufficientPrivileges, err,
+				)
+			}
+			return nil, dedupeAPIError(err)
+		}
 	}
 
 	integrations, err := response.GetIntegrations()
