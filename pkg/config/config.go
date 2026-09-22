@@ -4,6 +4,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/field"
 )
 
+//go:generate go run ./gen
 var (
 	AccountUrlField = field.StringField(
 		"account-url",
