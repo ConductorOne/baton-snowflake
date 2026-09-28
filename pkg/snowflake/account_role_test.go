@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,7 +58,7 @@ func granteeRowTypes() []map[string]interface{} {
 // serveGrantees returns an httptest.Server that implements the Snowflake Statements
 // API for SHOW GRANTS OF ROLE. partition0Rows is returned on the initial GET
 // (partition 0); if partition1Rows is non-nil a second partition is advertised
-// and served on ?partition=1. Only the partition-0 response carries rowType metadata -
+// and served on ?partition=1; ?partition=0 re-serves partition0Rows. Only the partition-0 response carries rowType metadata -
 // matching real Snowflake behavior - so later partitions rely on the cursor to carry it
 // forward (see accountRoleGranteesCursor).
 func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [][]string) *httptest.Server {
@@ -95,10 +96,19 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 					"data": partition0Rows,
 				})
 			} else {
-				// Step 3: subsequent partition — data only, no metadata.
-				require.Equal(t, "1", r.URL.Query().Get("partition"), "only partition 1 expected in this test")
+				// Step 3: explicit partition fetch — data only, no metadata. Partition 0 is
+				// re-fetched this way when it holds more rows than one page.
+				var rows [][]string
+				switch r.URL.Query().Get("partition") {
+				case "0":
+					rows = partition0Rows
+				case "1":
+					rows = partition1Rows
+				default:
+					t.Errorf("unexpected partition: %s", r.URL.Query().Get("partition"))
+				}
 				_ = enc.Encode(map[string]interface{}{
-					"data": partition1Rows,
+					"data": rows,
 				})
 			}
 
@@ -305,6 +315,115 @@ func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 	assert.Equal(t, "bob", page2[0].GranteeName)
 	assert.Equal(t, "USER", page2[0].GranteeType)
 	assert.Empty(t, cursor2, "last partition should return empty cursor")
+}
+
+// TestListAccountRoleGrantees_SlicesLargePartition verifies that a partition holding more rows
+// than accountRoleGranteesPageSize is returned across several pages instead of one oversized
+// page (CXP-1136: a ~10k-row partition overflowed the 6MB Lambda response limit), and that
+// walking every cursor yields each row exactly once, in order, before moving to the next partition.
+func TestListAccountRoleGrantees_SlicesLargePartition(t *testing.T) {
+	const handle = "handle-large"
+	const role = "EMPLOYEES"
+
+	partition0 := make([][]string, 0, 2*accountRoleGranteesPageSize+1)
+	for i := range 2*accountRoleGranteesPageSize + 1 {
+		partition0 = append(partition0, granteeRow(role, "USER", fmt.Sprintf("user%05d", i)))
+	}
+	partition1 := [][]string{
+		granteeRow(role, "USER", "last"),
+	}
+	server := serveGrantees(t, handle, partition0, partition1)
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, &http.Client{})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	var all []AccountRoleGrantee
+	var pageSizes []int
+	cursor := ""
+	for {
+		page, next, err := client.ListAccountRoleGrantees(ctx, role, cursor)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(page), accountRoleGranteesPageSize)
+		all = append(all, page...)
+		pageSizes = append(pageSizes, len(page))
+		if next == "" {
+			break
+		}
+		require.Less(t, len(pageSizes), 10, "pagination did not terminate")
+		cursor = next
+	}
+
+	assert.Equal(t, []int{accountRoleGranteesPageSize, accountRoleGranteesPageSize, 1, 1}, pageSizes)
+	require.Len(t, all, len(partition0)+len(partition1))
+	for i := range partition0 {
+		assert.Equal(t, fmt.Sprintf("user%05d", i), all[i].GranteeName)
+	}
+	assert.Equal(t, "last", all[len(all)-1].GranteeName)
+}
+
+func TestPageAccountRoleGrantees(t *testing.T) {
+	rows := []AccountRoleGrantee{{GranteeName: "a"}, {GranteeName: "b"}, {GranteeName: "c"}}
+	base := accountRoleGranteesCursor{Handle: "h", TotalPartitions: 2, RowTypes: []RowType{{Name: columnRole}}}
+
+	decode := func(t *testing.T, cursor string) accountRoleGranteesCursor {
+		t.Helper()
+		cur, err := decodeAccountRoleGranteesCursor(cursor)
+		require.NoError(t, err)
+		return cur
+	}
+
+	t.Run("mid-partition continues the same partition", func(t *testing.T) {
+		page, next, err := pageAccountRoleGrantees(base, rows, 2)
+		require.NoError(t, err)
+		assert.Equal(t, rows[:2], page)
+		cur := decode(t, next)
+		assert.Equal(t, 0, cur.PartitionID)
+		assert.Equal(t, 2, cur.Offset)
+		assert.Equal(t, base.RowTypes, cur.RowTypes, "rowType layout must be carried forward")
+	})
+
+	t.Run("end of partition advances to the next partition", func(t *testing.T) {
+		cur := base
+		cur.Offset = 2
+		page, next, err := pageAccountRoleGrantees(cur, rows, 2)
+		require.NoError(t, err)
+		assert.Equal(t, rows[2:], page)
+		nextCur := decode(t, next)
+		assert.Equal(t, 1, nextCur.PartitionID)
+		assert.Equal(t, 0, nextCur.Offset)
+	})
+
+	t.Run("end of last partition terminates", func(t *testing.T) {
+		cur := base
+		cur.PartitionID = 1
+		page, next, err := pageAccountRoleGrantees(cur, rows, 5)
+		require.NoError(t, err)
+		assert.Equal(t, rows, page)
+		assert.Empty(t, next)
+	})
+
+	t.Run("no partition info terminates", func(t *testing.T) {
+		cur := base
+		cur.TotalPartitions = 0
+		page, next, err := pageAccountRoleGrantees(cur, rows, 5)
+		require.NoError(t, err)
+		assert.Equal(t, rows, page)
+		assert.Empty(t, next)
+	})
+
+	t.Run("offset past partition end errors", func(t *testing.T) {
+		cur := base
+		cur.Offset = 4
+		_, _, err := pageAccountRoleGrantees(cur, rows, 2)
+		require.Error(t, err)
+	})
+
+	t.Run("cursor without offset starts at partition start", func(t *testing.T) {
+		cur := decode(t, `{"handle":"h","partitionId":1,"totalPartitions":2,"rowTypes":[]}`)
+		assert.Equal(t, 0, cur.Offset)
+	})
 }
 
 // TestListAccountRoleGrantees_EscapesRoleName verifies that a role name containing an
