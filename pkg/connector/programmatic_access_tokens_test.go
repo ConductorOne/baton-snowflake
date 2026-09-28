@@ -78,7 +78,11 @@ type credentialIssueMock struct {
 	// liveExpiry makes SHOW derive expires_at from the mock's own clock and the
 	// statement's DAYS_TO_EXPIRY, the way Snowflake does, instead of a fixed instant.
 	liveExpiry bool
-	statements *[]string
+	// tokenSecret is the value ADD discloses. Empty keeps the generic placeholder,
+	// which is all the expiry and cleanup tests need; a vending test sets it so the
+	// assertion that the ciphertext does not carry the plaintext means something.
+	tokenSecret string
+	statements  *[]string
 }
 
 func newCredentialIssueMockServer(t *testing.T, userType, defaultRole string, roleGranted bool, statements *[]string) *httptest.Server {
@@ -155,6 +159,10 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 			} else if _, err := fmt.Sscanf(clause, "%d;", &days); err != nil {
 				t.Errorf("parse DAYS_TO_EXPIRY from %q: %v", request.Statement, err)
 			}
+			secret := mock.tokenSecret
+			if secret == "" {
+				secret = "redacted"
+			}
 			// Column metadata matches a live Snowflake response: cols are
 			// [token_name, token_secret]. The secret is read by name, not position.
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -165,7 +173,7 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 						{"name": "token_secret", "type": "text"},
 					},
 				},
-				"data": [][]string{{"C1_REQUEST_1", "redacted"}},
+				"data": [][]string{{"C1_REQUEST_1", secret}},
 			})
 		case strings.HasPrefix(request.Statement, "SHOW USER PROGRAMMATIC ACCESS TOKENS"):
 			expiresAt := "1893456000"

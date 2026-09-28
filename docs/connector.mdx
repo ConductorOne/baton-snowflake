@@ -32,6 +32,8 @@ Enable **Issue credentials** to let the connector issue a Snowflake [programmati
 
 **Issue credentials** and **Sync secrets** are independent. Enabling **Issue credentials** lets the connector mint and revoke programmatic access tokens, and nothing else; enabling **Sync secrets** inventories Snowflake secrets and RSA public keys without granting the ability to mint tokens. Existing programmatic access tokens are inventoried through the opt-in **Programmatic access token** resource type.
 
+Issued tokens can be returned encrypted to a recipient key that C1 supplies, so the plaintext token never leaves the connector unencrypted.
+
 <Note>
 **Inventorying programmatic access tokens requires a privilege on each user.** The **Programmatic access token** resource type is opt-in: enable it in C1 when you want existing tokens in your inventory. While it is enabled, the sync runs `SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER` for each user in the account, and Snowflake requires ownership of that user or the `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` privilege on it. When the connector's role has neither, the sync fails with an error naming that user instead of silently dropping previously synced tokens — those tokens stay live in Snowflake, and C1 needs its records to keep offering revocation for them. Grant the privilege with `GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <name> TO ROLE <connector-role>` (or transfer ownership of the user) before enabling the type.
 </Note>
