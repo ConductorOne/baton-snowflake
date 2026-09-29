@@ -119,6 +119,10 @@ func serveGrantees(t *testing.T, handle string, partition0Rows, partition1Rows [
 	}))
 }
 
+// testGranteeLimit is the page limit for tests that do not exercise page bounds: large enough
+// that every test partition fits in one page.
+var testGranteeLimit = GranteePageLimit{MaxRows: 1000}
+
 // granteeRow builds a data row in the order GetAccountRoleGrantees expects:
 // index 1 = roleName, index 2 = granteeType, index 3 = granteeName.
 func granteeRow(roleName, granteeType, granteeName string) []string {
@@ -170,7 +174,7 @@ func TestListAccountRoleGrantees_SinglePartition(t *testing.T) {
 	client, err := New(server.URL, JWTConfig{}, &http.Client{})
 	require.NoError(t, err)
 
-	grantees, nextCursor, err := client.ListAccountRoleGrantees(context.Background(), role, "")
+	grantees, nextCursor, err := client.ListAccountRoleGrantees(context.Background(), role, "", testGranteeLimit)
 	require.NoError(t, err)
 	assert.Empty(t, nextCursor, "single partition should produce no next cursor")
 	require.Len(t, grantees, 2)
@@ -198,7 +202,7 @@ func TestListAccountRoleGrantees_UnquotesGranteeName(t *testing.T) {
 	client, err := New(server.URL, JWTConfig{}, &http.Client{})
 	require.NoError(t, err)
 
-	grantees, nextCursor, err := client.ListAccountRoleGrantees(context.Background(), role, "")
+	grantees, nextCursor, err := client.ListAccountRoleGrantees(context.Background(), role, "", testGranteeLimit)
 	require.NoError(t, err)
 	assert.Empty(t, nextCursor)
 	require.Len(t, grantees, 3)
@@ -271,7 +275,7 @@ func TestListAccountRoles_MatchesUnquotedGranteeID(t *testing.T) {
 	granteesClient, err := New(granteesServer.URL, JWTConfig{}, &http.Client{})
 	require.NoError(t, err)
 
-	grantees, _, err := granteesClient.ListAccountRoleGrantees(context.Background(), "PARENT_ROLE", "")
+	grantees, _, err := granteesClient.ListAccountRoleGrantees(context.Background(), "PARENT_ROLE", "", testGranteeLimit)
 	require.NoError(t, err)
 	require.Len(t, grantees, 1)
 
@@ -299,7 +303,7 @@ func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 	ctx := context.Background()
 
 	// Page 1: empty cursor → executes query, returns partition 0 + cursor.
-	page1, cursor1, err := client.ListAccountRoleGrantees(ctx, role, "")
+	page1, cursor1, err := client.ListAccountRoleGrantees(ctx, role, "", testGranteeLimit)
 	require.NoError(t, err)
 	require.Len(t, page1, 2)
 	assert.Equal(t, "alice", page1[0].GranteeName)
@@ -309,7 +313,7 @@ func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 	assert.NotEmpty(t, cursor1)
 
 	// Page 2: cursor from page 1 → fetches ?partition=1, no further cursor.
-	page2, cursor2, err := client.ListAccountRoleGrantees(ctx, role, cursor1)
+	page2, cursor2, err := client.ListAccountRoleGrantees(ctx, role, cursor1, testGranteeLimit)
 	require.NoError(t, err)
 	require.Len(t, page2, 1)
 	assert.Equal(t, "bob", page2[0].GranteeName)
@@ -318,15 +322,16 @@ func TestListAccountRoleGrantees_MultiPartition(t *testing.T) {
 }
 
 // TestListAccountRoleGrantees_SlicesLargePartition verifies that a partition holding more rows
-// than accountRoleGranteesPageSize is returned across several pages instead of one oversized
-// page (CXP-1136: a ~10k-row partition overflowed the 6MB Lambda response limit), and that
-// walking every cursor yields each row exactly once, in order, before moving to the next partition.
+// than one page allows is returned across several pages instead of one oversized page (a whole
+// partition can overflow the 6MB Lambda response limit), and that walking every cursor
+// yields each row exactly once, in order, before moving to the next partition.
 func TestListAccountRoleGrantees_SlicesLargePartition(t *testing.T) {
 	const handle = "handle-large"
 	const role = "EMPLOYEES"
+	limit := GranteePageLimit{MaxRows: 100}
 
-	partition0 := make([][]string, 0, 2*accountRoleGranteesPageSize+1)
-	for i := range 2*accountRoleGranteesPageSize + 1 {
+	partition0 := make([][]string, 0, 2*limit.MaxRows+1)
+	for i := range 2*limit.MaxRows + 1 {
 		partition0 = append(partition0, granteeRow(role, "USER", fmt.Sprintf("user%05d", i)))
 	}
 	partition1 := [][]string{
@@ -343,9 +348,9 @@ func TestListAccountRoleGrantees_SlicesLargePartition(t *testing.T) {
 	var pageSizes []int
 	cursor := ""
 	for {
-		page, next, err := client.ListAccountRoleGrantees(ctx, role, cursor)
+		page, next, err := client.ListAccountRoleGrantees(ctx, role, cursor, limit)
 		require.NoError(t, err)
-		require.LessOrEqual(t, len(page), accountRoleGranteesPageSize)
+		require.LessOrEqual(t, len(page), limit.MaxRows)
 		all = append(all, page...)
 		pageSizes = append(pageSizes, len(page))
 		if next == "" {
@@ -355,7 +360,7 @@ func TestListAccountRoleGrantees_SlicesLargePartition(t *testing.T) {
 		cursor = next
 	}
 
-	assert.Equal(t, []int{accountRoleGranteesPageSize, accountRoleGranteesPageSize, 1, 1}, pageSizes)
+	assert.Equal(t, []int{limit.MaxRows, limit.MaxRows, 1, 1}, pageSizes)
 	require.Len(t, all, len(partition0)+len(partition1))
 	for i := range partition0 {
 		assert.Equal(t, fmt.Sprintf("user%05d", i), all[i].GranteeName)
@@ -367,6 +372,12 @@ func TestPageAccountRoleGrantees(t *testing.T) {
 	rows := []AccountRoleGrantee{{GranteeName: "a"}, {GranteeName: "b"}, {GranteeName: "c"}}
 	base := accountRoleGranteesCursor{Handle: "h", TotalPartitions: 2, RowTypes: []RowType{{Name: columnRole}}}
 
+	rowsOnly := func(maxRows int) GranteePageLimit { return GranteePageLimit{MaxRows: maxRows} }
+	// Each row costs the length of its grantee name, so the byte bound is easy to reason about.
+	byNameLength := func(maxRows, maxBytes int) GranteePageLimit {
+		return GranteePageLimit{MaxRows: maxRows, MaxBytes: maxBytes, RowBytes: func(g AccountRoleGrantee) int { return len(g.GranteeName) }}
+	}
+
 	decode := func(t *testing.T, cursor string) accountRoleGranteesCursor {
 		t.Helper()
 		cur, err := decodeAccountRoleGranteesCursor(cursor)
@@ -375,7 +386,7 @@ func TestPageAccountRoleGrantees(t *testing.T) {
 	}
 
 	t.Run("mid-partition continues the same partition", func(t *testing.T) {
-		page, next, err := pageAccountRoleGrantees(base, rows, 2)
+		page, next, err := pageAccountRoleGrantees(base, rows, rowsOnly(2))
 		require.NoError(t, err)
 		assert.Equal(t, rows[:2], page)
 		cur := decode(t, next)
@@ -387,7 +398,7 @@ func TestPageAccountRoleGrantees(t *testing.T) {
 	t.Run("end of partition advances to the next partition", func(t *testing.T) {
 		cur := base
 		cur.Offset = 2
-		page, next, err := pageAccountRoleGrantees(cur, rows, 2)
+		page, next, err := pageAccountRoleGrantees(cur, rows, rowsOnly(2))
 		require.NoError(t, err)
 		assert.Equal(t, rows[2:], page)
 		nextCur := decode(t, next)
@@ -398,7 +409,7 @@ func TestPageAccountRoleGrantees(t *testing.T) {
 	t.Run("end of last partition terminates", func(t *testing.T) {
 		cur := base
 		cur.PartitionID = 1
-		page, next, err := pageAccountRoleGrantees(cur, rows, 5)
+		page, next, err := pageAccountRoleGrantees(cur, rows, rowsOnly(5))
 		require.NoError(t, err)
 		assert.Equal(t, rows, page)
 		assert.Empty(t, next)
@@ -407,7 +418,7 @@ func TestPageAccountRoleGrantees(t *testing.T) {
 	t.Run("no partition info terminates", func(t *testing.T) {
 		cur := base
 		cur.TotalPartitions = 0
-		page, next, err := pageAccountRoleGrantees(cur, rows, 5)
+		page, next, err := pageAccountRoleGrantees(cur, rows, rowsOnly(5))
 		require.NoError(t, err)
 		assert.Equal(t, rows, page)
 		assert.Empty(t, next)
@@ -416,7 +427,35 @@ func TestPageAccountRoleGrantees(t *testing.T) {
 	t.Run("offset past partition end errors", func(t *testing.T) {
 		cur := base
 		cur.Offset = 4
-		_, _, err := pageAccountRoleGrantees(cur, rows, 2)
+		_, _, err := pageAccountRoleGrantees(cur, rows, rowsOnly(2))
+		require.Error(t, err)
+	})
+
+	t.Run("byte bound ends the page before the row that would exceed it", func(t *testing.T) {
+		sized := []AccountRoleGrantee{{GranteeName: "aaaa"}, {GranteeName: "bbbb"}, {GranteeName: "cc"}}
+		page, next, err := pageAccountRoleGrantees(base, sized, byNameLength(10, 9))
+		require.NoError(t, err)
+		assert.Equal(t, sized[:2], page, "4+4 fits in 9 bytes, 4+4+2 does not")
+		assert.Equal(t, 2, decode(t, next).Offset)
+	})
+
+	t.Run("row bound applies when the byte bound is not reached", func(t *testing.T) {
+		page, next, err := pageAccountRoleGrantees(base, rows, byNameLength(2, 1000))
+		require.NoError(t, err)
+		assert.Equal(t, rows[:2], page)
+		assert.Equal(t, 2, decode(t, next).Offset)
+	})
+
+	t.Run("a row larger than the byte bound is still returned alone", func(t *testing.T) {
+		huge := []AccountRoleGrantee{{GranteeName: "way-too-long"}, {GranteeName: "b"}}
+		page, next, err := pageAccountRoleGrantees(base, huge, byNameLength(10, 3))
+		require.NoError(t, err)
+		assert.Equal(t, huge[:1], page, "paging must make progress")
+		assert.Equal(t, 1, decode(t, next).Offset)
+	})
+
+	t.Run("non-positive row bound errors", func(t *testing.T) {
+		_, _, err := pageAccountRoleGrantees(base, rows, GranteePageLimit{})
 		require.Error(t, err)
 	})
 
@@ -440,7 +479,7 @@ func TestListAccountRoleGrantees_EscapesRoleName(t *testing.T) {
 	client, err := New(server.URL, JWTConfig{}, &http.Client{})
 	require.NoError(t, err)
 
-	_, _, err = client.ListAccountRoleGrantees(context.Background(), role, "")
+	_, _, err = client.ListAccountRoleGrantees(context.Background(), role, "", testGranteeLimit)
 	require.NoError(t, err)
 	assert.Equal(t, `SHOW GRANTS OF ROLE "weird""role";`, capturedSQL)
 }

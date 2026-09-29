@@ -12,6 +12,7 @@ import (
 	snowflake "github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type accountRoleBuilder struct {
@@ -94,33 +95,58 @@ func (o *accountRoleBuilder) Entitlements(_ context.Context, resource *v2.Resour
 	return rv, &rs.SyncOpResults{}, nil
 }
 
+// Grants() pages must fit the 6MB Lambda response limit, which counts bytes, not grants.
+// A grant's size grows with both names: every grant embeds the full role resource,
+// the role name appears again in the entitlement and grant IDs, and the grantee name appears in
+// the grant ID, the principal ID and, for a ROLE grantee, the expansion annotation. Snowflake
+// identifiers can be 255 characters of up to 4 bytes each, so 2000 grants of maximum-length
+// names would be ~17MB. accountRoleGrantBytes overestimates a grant's serialized size, and pages
+// stop at accountRoleGrantsMaxBytes of that estimate - ~4MB once the transport base64-encodes
+// it, leaving headroom under 6MB. TestAccountRoleGrantPagesFitLambdaLimit checks the estimate
+// against real grants from this builder.
+const (
+	accountRoleGrantsMaxRows  = 2000
+	accountRoleGrantsMaxBytes = 3 * 1000 * 1000
+)
+
+// accountRoleGrantBytes returns an upper bound on the serialized size of one grant Grants() emits
+// for granteeName on role, given the serialized size of role's resource. Measured costs are ~2
+// bytes per byte of role ID outside the embedded resource, 2-3 per byte of grantee name, and
+// ~160-280 bytes of fixed framing; the coefficients below round each of those up.
+func accountRoleGrantBytes(roleResourceBytes int, roleID, granteeName string) int {
+	return 512 + roleResourceBytes + 3*len(roleID) + 4*len(granteeName)
+}
+
+func accountRoleGrantsPageLimit(role *v2.Resource) snowflake.GranteePageLimit {
+	roleResourceBytes := proto.Size(role)
+	roleID := role.GetId().GetResource()
+	return snowflake.GranteePageLimit{
+		MaxRows:  accountRoleGrantsMaxRows,
+		MaxBytes: accountRoleGrantsMaxBytes,
+		RowBytes: func(grantee snowflake.AccountRoleGrantee) int {
+			return accountRoleGrantBytes(roleResourceBytes, roleID, grantee.GranteeName)
+		},
+	}
+}
+
 func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, opts rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	bag, cursor, err := parseCursorFromToken(opts.PageToken.Token, &v2.ResourceId{ResourceType: o.resourceType.Id})
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to get next page offset")
 	}
 
-	accountRoleGrantees, nextCursor, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName, cursor)
+	accountRoleGrantees, nextCursor, err := o.client.ListAccountRoleGrantees(ctx, resource.DisplayName, cursor, accountRoleGrantsPageLimit(resource))
 	if err != nil {
 		return nil, nil, wrapError(err, "failed to list account role grantees")
 	}
 
 	var grants []*v2.Grant
 	for _, grantee := range accountRoleGrantees {
-		switch grantee.GranteeType {
-		case "USER":
-			rsId, err := rs.NewResourceID(userResourceType, grantee.GranteeName)
-			if err != nil {
-				return nil, nil, wrapError(err, "unable to create user resource id")
-			}
-			g := grant.NewGrant(resource, assignedEntitlement, rsId)
-			grants = append(grants, g)
-		case "ROLE":
-			rsId, err := rs.NewResourceID(accountRoleResourceType, grantee.GranteeName)
-			if err != nil {
-				return nil, nil, wrapError(err, "unable to create role resource id")
-			}
-			g := grant.NewGrant(resource, assignedEntitlement, rsId, addExpandableOpts(grantee.GranteeName)...)
+		g, err := accountRoleGrant(resource, grantee)
+		if err != nil {
+			return nil, nil, err
+		}
+		if g != nil {
 			grants = append(grants, g)
 		}
 	}
@@ -135,6 +161,27 @@ func (o *accountRoleBuilder) Grants(ctx context.Context, resource *v2.Resource, 
 	}
 
 	return grants, &rs.SyncOpResults{NextPageToken: nextToken}, nil
+}
+
+// accountRoleGrant builds the grant of role to grantee, or returns nil for a grantee type that is
+// not synced.
+func accountRoleGrant(role *v2.Resource, grantee snowflake.AccountRoleGrantee) (*v2.Grant, error) {
+	switch grantee.GranteeType {
+	case "USER":
+		rsId, err := rs.NewResourceID(userResourceType, grantee.GranteeName)
+		if err != nil {
+			return nil, wrapError(err, "unable to create user resource id")
+		}
+		return grant.NewGrant(role, assignedEntitlement, rsId), nil
+	case "ROLE":
+		rsId, err := rs.NewResourceID(accountRoleResourceType, grantee.GranteeName)
+		if err != nil {
+			return nil, wrapError(err, "unable to create role resource id")
+		}
+		return grant.NewGrant(role, assignedEntitlement, rsId, addExpandableOpts(grantee.GranteeName)...), nil
+	default:
+		return nil, nil
+	}
 }
 
 func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
