@@ -133,17 +133,43 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 	return accountRoles, nil
 }
 
+// GranteePageLimit bounds one page returned by ListAccountRoleGrantees. Snowflake sizes result
+// partitions by bytes, not rows, and splits them very unevenly (a 50k-row result came back as
+// 1,282 / 47,157 / 1,561 rows), so a whole partition emitted as one Grants() page can overflow
+// the 6MB Lambda response limit. Each partition is instead served in slices that stay
+// within both bounds.
+//
+// The byte bound exists because a page's size depends on name lengths, not just row count:
+// identifiers can be 255 multibyte characters. RowBytes is supplied by the caller, which is the
+// layer that knows what each grantee is turned into.
+type GranteePageLimit struct {
+	// MaxRows caps the grantees per page. Must be positive.
+	MaxRows int
+	// MaxBytes caps the sum of RowBytes over a page. A page always holds at least one grantee,
+	// even one estimated above MaxBytes, so paging always makes progress.
+	MaxBytes int
+	// RowBytes estimates the serialized size of what the caller emits for one grantee. Nil
+	// disables the byte bound.
+	RowBytes func(AccountRoleGrantee) int
+}
+
 // accountRoleGranteesCursor is the opaque page cursor for ListAccountRoleGrantees. SHOW GRANTS
 // OF ROLE rows are parsed by column name via ResultSetMetadata.ParseRow, and Snowflake's SQL API
 // only returns that column layout (rowType) on the partition-0 response - partitions 1..N return
 // bare data with no metadata. The cursor therefore carries the rowType layout captured from
 // partition 0 forward so later partitions can still be parsed. Mirrors tableGrantsCursor in
 // table.go, which solves the identical problem for SHOW GRANTS ON TABLE/VIEW.
+//
+// Offset is the index of the next unread row within PartitionID. A partition that does not fit
+// in one page is re-fetched by handle once per slice; Snowflake keeps the
+// statement result for 24h, so the rows and their order are stable between fetches. Cursors
+// issued before Offset existed decode with Offset 0, i.e. the start of their partition.
 type accountRoleGranteesCursor struct {
 	Handle          string    `json:"handle"`
 	PartitionID     int       `json:"partitionId"`
 	TotalPartitions int       `json:"totalPartitions"`
 	RowTypes        []RowType `json:"rowTypes"`
+	Offset          int       `json:"offset,omitempty"`
 }
 
 func encodeAccountRoleGranteesCursor(cur accountRoleGranteesCursor) (string, error) {
@@ -162,10 +188,54 @@ func decodeAccountRoleGranteesCursor(cursor string) (accountRoleGranteesCursor, 
 	return cur, nil
 }
 
+// pageAccountRoleGrantees slices one page out of partition, the full row set of the partition cur
+// points at, starting at cur.Offset and bounded by limit. It returns the cursor for the next slice
+// of the same partition, the start of the next partition, or "" once the last partition is
+// exhausted.
+func pageAccountRoleGrantees(cur accountRoleGranteesCursor, partition []AccountRoleGrantee, limit GranteePageLimit) ([]AccountRoleGrantee, string, error) {
+	if limit.MaxRows <= 0 {
+		return nil, "", fmt.Errorf("snowflake: grantee page limit must allow at least one row, got %d", limit.MaxRows)
+	}
+	if cur.Offset < 0 || cur.Offset > len(partition) {
+		return nil, "", fmt.Errorf("snowflake: grantee page cursor offset %d is outside partition %d (%d rows)", cur.Offset, cur.PartitionID, len(partition))
+	}
+
+	end := cur.Offset
+	pageBytes := 0
+	for end < len(partition) && end-cur.Offset < limit.MaxRows {
+		if limit.RowBytes != nil {
+			rowBytes := limit.RowBytes(partition[end])
+			if end > cur.Offset && pageBytes+rowBytes > limit.MaxBytes {
+				break
+			}
+			pageBytes += rowBytes
+		}
+		end++
+	}
+	page := partition[cur.Offset:end]
+
+	next := cur
+	switch {
+	case end < len(partition):
+		next.Offset = end
+	case cur.PartitionID+1 < cur.TotalPartitions:
+		next.PartitionID++
+		next.Offset = 0
+	default:
+		return page, "", nil
+	}
+
+	nextCursor, err := encodeAccountRoleGranteesCursor(next)
+	if err != nil {
+		return nil, "", err
+	}
+	return page, nextCursor, nil
+}
+
 // ListAccountRoleGrantees returns one page of grantees for the given role.
 // cursor is empty on the first call; subsequent calls pass the opaque cursor returned by the previous call.
 // The returned cursor is empty when all pages have been consumed.
-func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, cursor string) ([]AccountRoleGrantee, string, error) {
+func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, cursor string, limit GranteePageLimit) ([]AccountRoleGrantee, string, error) {
 	var response ListAccountRoleGranteesRawResponse
 	var apiErr SnowflakeError
 
@@ -206,20 +276,12 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 			return nil, "", err
 		}
 
-		var nextCursor string
-		if numPartitions > 1 {
-			nextCursor, err = encodeAccountRoleGranteesCursor(accountRoleGranteesCursor{
-				Handle:          handle,
-				PartitionID:     1,
-				TotalPartitions: numPartitions,
-				RowTypes:        response.ResultSetMetadata.RowTypes,
-			})
-			if err != nil {
-				return nil, "", err
-			}
-		}
-
-		return grantees, nextCursor, nil
+		return pageAccountRoleGrantees(accountRoleGranteesCursor{
+			Handle:          handle,
+			PartitionID:     0,
+			TotalPartitions: numPartitions,
+			RowTypes:        response.ResultSetMetadata.RowTypes,
+		}, grantees, limit)
 	}
 
 	// Subsequent calls: fetch the encoded partition directly.
@@ -247,20 +309,7 @@ func (c *Client) ListAccountRoleGrantees(ctx context.Context, roleName string, c
 		return nil, "", err
 	}
 
-	var nextCursor string
-	if cur.PartitionID+1 < cur.TotalPartitions {
-		nextCursor, err = encodeAccountRoleGranteesCursor(accountRoleGranteesCursor{
-			Handle:          cur.Handle,
-			PartitionID:     cur.PartitionID + 1,
-			TotalPartitions: cur.TotalPartitions,
-			RowTypes:        cur.RowTypes,
-		})
-		if err != nil {
-			return nil, "", err
-		}
-	}
-
-	return grantees, nextCursor, nil
+	return pageAccountRoleGrantees(cur, grantees, limit)
 }
 
 func (c *Client) CacheAccountRoles(ctx context.Context, ss sessions.SessionStore, roles []AccountRole) error {
