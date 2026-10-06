@@ -347,7 +347,8 @@ func (c *Client) GetStatementPartition(ctx context.Context, statementHandle stri
 
 // fetchRemainingPartitions GETs partitions 1..numPartitions-1 of a statement whose partition 0
 // already arrived (inline on the POST, or via the plain handle GET) and returns their rows,
-// combined in partition order.
+// combined in partition order, plus the row count Snowflake declared for each one (parallel to
+// the returned rows' partition boundaries, for the caller's own invariant check).
 //
 // Only partition 0 carries resultSetMetadata (Snowflake does not repeat the column layout on
 // later partitions), so callers append the returned rows directly onto the partition-0 response's
@@ -356,12 +357,13 @@ func (c *Client) GetStatementPartition(ctx context.Context, statementHandle stri
 //
 // numPartitions is the caller's own len(ResultSetMetadata.PartitionInfo) read on the partition-0
 // response; a result with <= 1 partitions has nothing left to fetch and should not call this.
-func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, numPartitions int) ([][]string, error) {
+func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, numPartitions int) ([][]string, []int, error) {
 	var rows [][]string
+	var gotRowCounts []int
 	for partitionID := 1; partitionID < numPartitions; partitionID++ {
 		req, err := c.GetStatementPartition(ctx, handle, partitionID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		var partition StatementsApiResponseBase
@@ -369,12 +371,13 @@ func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, nu
 		resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(&apiErr))
 		closeResponseBody(resp)
 		if err != nil {
-			return nil, dedupeAPIError(err)
+			return nil, nil, dedupeAPIError(err)
 		}
 
 		rows = append(rows, partition.Data...)
+		gotRowCounts = append(gotRowCounts, len(partition.Data))
 	}
-	return rows, nil
+	return rows, gotRowCounts, nil
 }
 
 // drainRemainingPartitions checks resp (already populated from a statement's partition-0 reply -
@@ -382,33 +385,62 @@ func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, nu
 // fetches and appends them to resp.Data so callers get the complete result from a single
 // resp.ListX()-style call afterward.
 //
-// This closes a real gap: SHOW TABLES / SHOW SCHEMAS / GetTable results were treated as complete
-// whenever the POST carried resultSetMetadata, but Snowflake splits large results into additional
-// partitions by byte size, not row count - a modestly-sized page (e.g. 200 rows) can still split if
-// the rows themselves are large enough. Left unhandled, that silently truncates the resource list,
-// the exact failure mode behind CXP-1184 (a Snowflake account's table count flapped and then
-// appeared to vanish, with nothing in the logs to explain why). The Warn log here is deliberately
-// loud and searchable - "op" plus the caller's own context fields - so the next occurrence, on
-// another large account, shows up on its own instead of requiring a cross-referenced log
-// investigation to even notice.
+// This closes a real, long-standing gap, not one introduced by any single change: every function
+// here either never checked resultSetMetadata.partitionInfo, or (before the #156 POST/GET
+// round-trip optimization) made an unconditional GET on the bare statement handle - which also
+// returns partition 0 only. Either way, partitions 1..N were never fetched. Snowflake splits large
+// results into additional partitions by response byte size, not row count, so a modestly-sized
+// page (e.g. 200 rows) can still split if the rows themselves are large enough. Left unhandled,
+// that silently truncates the resource list - plausibly relevant to CXP-1184 (a Snowflake
+// account's table count flapped and then appeared to vanish, with nothing in the logs to explain
+// why), though the partition gap alone does not explain that incident's timing or the Warn below
+// has never actually been observed to fire there, so treat this as a real bug fixed on its own
+// merits and a diagnostic for next time, not a confirmed root cause.
+//
+// A multi-partition result is an ordinary, expected condition once this function exists to handle
+// it, so the "found more partitions" log is Info, not Warn - the loud, actionable signal is the
+// row-count check below, which catches drains that still came up short (e.g. a partition that
+// itself returned fewer rows than Snowflake declared for it, or any other shape this wasn't
+// written against).
 func (c *Client) drainRemainingPartitions(ctx context.Context, op string, resp *StatementsApiResponseBase, extra ...zap.Field) error {
 	numPartitions := len(resp.ResultSetMetadata.PartitionInfo)
 	if numPartitions <= 1 {
 		return nil
 	}
 
-	fields := append([]zap.Field{
+	l := ctxzap.Extract(ctx)
+	baseFields := append([]zap.Field{
 		zap.String("op", op),
+		zap.String("statementHandle", resp.StatementHandle),
 		zap.Int("numPartitions", numPartitions),
 		zap.Int("numRows", resp.ResultSetMetadata.NumRows),
+		zap.Int("partition0Rows", len(resp.Data)),
 	}, extra...)
-	ctxzap.Extract(ctx).Warn("snowflake: statement result spans multiple partitions, fetching remaining pages", fields...)
+	l.Info("snowflake: statement result spans multiple partitions, fetching remaining pages", baseFields...)
 
-	rest, err := c.fetchRemainingPartitions(ctx, resp.StatementHandle, numPartitions)
+	rest, gotRowCounts, err := c.fetchRemainingPartitions(ctx, resp.StatementHandle, numPartitions)
 	if err != nil {
 		return fmt.Errorf("baton-snowflake: failed to fetch remaining partitions for %s: %w", op, err)
 	}
 	resp.Data = append(resp.Data, rest...)
+
+	totalRows := len(resp.Data)
+	completionFields := append(append([]zap.Field{}, baseFields...),
+		zap.Ints("partitionRowCounts", gotRowCounts),
+		zap.Int("totalRowsFetched", totalRows),
+	)
+	if resp.ResultSetMetadata.NumRows > 0 && totalRows != resp.ResultSetMetadata.NumRows {
+		// This is the condition worth paging someone over: the partition walk ran to
+		// completion by its own accounting (every declared partition was fetched without
+		// error) and still didn't add up to the row count Snowflake declared up front. That
+		// means either a partition under-reported its own rows, or NumRows/PartitionInfo
+		// disagree in some other way this code wasn't written against - a case the simple
+		// "numPartitions > 1" check above cannot catch on its own.
+		l.Error("snowflake: statement result row count does not match after draining all partitions", completionFields...)
+		return fmt.Errorf("baton-snowflake: %s: fetched %d rows across %d partitions but Snowflake declared %d",
+			op, totalRows, numPartitions, resp.ResultSetMetadata.NumRows)
+	}
+	l.Info("snowflake: finished draining statement result partitions", completionFields...)
 	return nil
 }
 

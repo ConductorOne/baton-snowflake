@@ -472,6 +472,65 @@ func serveTableRows(t *testing.T, database, schema string, tableNames []string) 
 	}))
 }
 
+// TestListTablesInSchema_FullPageAcrossPartitionsStillPaginates is the regression guard for the
+// pagination-amplification case: ListTablesInSchema treats a page shorter than its limit as the
+// last page for this schema (see the nextCursor logic below) and the connector then advances past
+// the whole schema (pkg/connector/tables.go). Before draining partitions, a limit-sized page that
+// Snowflake happened to split would come back SHORT (partition 0 only), get mistaken for the last
+// page, and silently drop every table after it in this schema - not just the rows in the missed
+// partition. With a limit of 2 split as 1 row per partition, the only way to see 2 rows (and
+// therefore a non-empty, more-pages-follow cursor) is to have actually drained partition 1.
+func TestListTablesInSchema_FullPageAcrossPartitionsStillPaginates(t *testing.T) {
+	const handle = "handle-table-page"
+	const limit = 2
+	columns := []map[string]interface{}{
+		{"name": columnCreatedOn, "type": "timestamp_ltz"},
+		{"name": columnName, "type": "text"},
+		{"name": columnSchemaName, "type": "text"},
+		{"name": columnDatabaseName, "type": "text"},
+		{"name": columnKind, "type": "text"},
+		{"name": columnComment, "type": "text"},
+		{"name": columnOwner, "type": "text"},
+	}
+	tableRow := func(name string) []string {
+		return []string{"1700000000.000000000", name, "SCHEMA", "DB", testObjectKind, "", "SYSADMIN"}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows":       limit,
+					"rowType":       columns,
+					"partitionInfo": []map[string]interface{}{{"rowCount": 1}, {"rowCount": 1}},
+				},
+				"data": [][]string{tableRow("TABLE_A")},
+			})
+		case http.MethodGet:
+			require.Equal(t, "1", r.URL.Query().Get("partition"))
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": [][]string{tableRow("TABLE_B")},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	tables, nextCursor, err := client.ListTablesInSchema(context.Background(), "DB", "SCHEMA", "", limit)
+	require.NoError(t, err)
+
+	require.Len(t, tables, limit, "both partitions' rows must be counted toward the page")
+	assert.NotEmpty(t, nextCursor, "a full page (even one assembled across partitions) means more tables may follow - the caller must not stop here")
+	assert.Equal(t, "TABLE_B", nextCursor)
+}
+
 // TestGetTable_FindsExactMatchAmongWildcardCollisions verifies that GetTable finds the real
 // table even when a wildcard-colliding table ("FACTXTABLE") is returned before it.
 func TestGetTable_FindsExactMatchAmongWildcardCollisions(t *testing.T) {

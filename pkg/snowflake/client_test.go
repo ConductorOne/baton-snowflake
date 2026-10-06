@@ -222,13 +222,15 @@ func TestStatementRoundTripCount(t *testing.T) {
 	}
 }
 
-// TestListSchemasInDatabase_DrainsMultiPartitionInlineResult reproduces the CXP-1184 failure mode
-// directly: a POST whose inline result already carries resultSetMetadata (so resultSetInline()
-// skips the follow-up GET), but whose resultSetMetadata.partitionInfo says the rows are split
-// across more than one partition. Before this fix, partition 0's rows were treated as the whole
-// result and partitions 1..N were silently dropped - no error, no incomplete-sync signal, just a
+// TestListSchemasInDatabase_DrainsMultiPartitionInlineResult reproduces the bug this PR fixes: a
+// POST whose inline result already carries resultSetMetadata (so resultSetInline() skips the
+// follow-up GET), but whose resultSetMetadata.partitionInfo says the rows are split across more
+// than one partition. Before this fix, partition 0's rows were treated as the whole result and
+// partitions 1..N were silently dropped - no error, no incomplete-sync signal, just a
 // smaller-than-real resource count. A sufficiently large SHOW SCHEMAS/SHOW TABLES page can split
-// this way because Snowflake partitions by response bytes, not row count.
+// this way because Snowflake partitions by response bytes, not row count. (The gap predates this
+// file's #156 optimization - the pre-#156 code made an unconditional GET on the bare handle,
+// which returns partition 0 only, same as this inline case.)
 func TestListSchemasInDatabase_DrainsMultiPartitionInlineResult(t *testing.T) {
 	const handle = "handle-multi-partition"
 	columns := []map[string]interface{}{{"name": columnName, "type": "text"}, {"name": columnDatabaseName, "type": "text"}}
@@ -312,8 +314,123 @@ func TestFetchRemainingPartitions_StopsAtDeclaredPartitionCount(t *testing.T) {
 	client, err := New(server.URL, JWTConfig{}, server.Client())
 	require.NoError(t, err)
 
-	rows, err := client.fetchRemainingPartitions(context.Background(), "handle-1", 4)
+	rows, rowCounts, err := client.fetchRemainingPartitions(context.Background(), "handle-1", 4)
 	require.NoError(t, err)
 	require.Len(t, rows, 3, "partitions 1, 2, and 3 - not partition 0, which the caller already has")
 	assert.Equal(t, []string{"1", "2", "3"}, gotPartitions)
+	assert.Equal(t, []int{1, 1, 1}, rowCounts, "one row returned per partition fetched")
+}
+
+// TestFetchRemainingPartitions_PropagatesPartitionFetchFailure verifies that a failure partway
+// through the walk (partition 2 of 3, say) returns an error and no rows at all, rather than the
+// partitions fetched so far - a partial partition walk is not a usable partial result, the same
+// way a partial sync is not a usable partial sync.
+func TestFetchRemainingPartitions_PropagatesPartitionFetchFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("partition") == "2" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": "000603", "message": "internal error"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": [][]string{{"row"}}})
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	rows, rowCounts, err := client.fetchRemainingPartitions(context.Background(), "handle-1", 4)
+	require.Error(t, err)
+	assert.Nil(t, rows)
+	assert.Nil(t, rowCounts)
+}
+
+// TestDrainRemainingPartitions_ErrorsOnRowCountMismatch verifies the invariant check: if the
+// partitions fetched don't add up to resultSetMetadata.NumRows, that's reported as a hard error
+// rather than returned as a quietly-short result - the same failure mode as the original bug,
+// just one this code could not have prevented by checking numPartitions alone (e.g. a partition
+// that itself came back short).
+func TestDrainRemainingPartitions_ErrorsOnRowCountMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Partition 1 declares 1 row via PartitionInfo but returns none - NumRows (2) will
+		// never be satisfied by what's actually fetched (1, from partition 0 alone).
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": [][]string{}})
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	resp := &StatementsApiResponseBase{
+		StatementHandle: "handle-short",
+		Data:            [][]string{{"only-row"}},
+		ResultSetMetadata: ResultSetMetadata{
+			NumRows:       2,
+			RowTypes:      []RowType{{Name: "name", Type: "text"}},
+			PartitionInfo: []PartitionInfo{{RowCount: 1}, {RowCount: 1}},
+		},
+	}
+
+	err = client.drainRemainingPartitions(context.Background(), "TestOp", resp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TestOp")
+}
+
+// TestDrainRemainingPartitions_HandlesAsyncStatementWithMultiplePartitions covers the 202 path:
+// the POST returns only a handle (statement went async), the follow-up handle GET returns
+// partition 0 plus partitionInfo, and the remaining partitions still have to be walked from
+// there. This is a separate code path from the inline case (resultSetInline() returns false, so
+// needsStatementResultFetch triggers the extra GET first) and exercises the same partition logic
+// afterward.
+func TestDrainRemainingPartitions_HandlesAsyncStatementWithMultiplePartitions(t *testing.T) {
+	const handle = "handle-async-multi"
+	columns := []map[string]interface{}{{"name": columnName, "type": "text"}, {"name": columnDatabaseName, "type": "text"}}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			// 202-shaped: handle only, no result set yet.
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"statementHandle": handle})
+		case http.MethodGet:
+			partition := r.URL.Query().Get("partition")
+			if partition == "" {
+				// The plain handle GET: partition 0, with metadata, same as the inline case.
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"statementHandle": handle,
+					"resultSetMetadata": map[string]interface{}{
+						"numRows":       2,
+						"rowType":       columns,
+						"partitionInfo": []map[string]interface{}{{"rowCount": 1}, {"rowCount": 1}},
+					},
+					"data": [][]string{{"SALES", "BATON_TEST_DB"}},
+				})
+				return
+			}
+			require.Equal(t, "1", partition)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": [][]string{{"MARKETING", "BATON_TEST_DB"}}})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	schemas, err := client.ListSchemasInDatabase(context.Background(), "BATON_TEST_DB")
+	require.NoError(t, err)
+
+	require.Len(t, schemas, 2)
+	var names []string
+	for _, s := range schemas {
+		names = append(names, s.Name)
+	}
+	assert.ElementsMatch(t, []string{"SALES", "MARKETING"}, names)
+	// 1 POST + 1 plain handle GET (partition 0) + 1 partition-1 GET.
+	assert.Equal(t, 3, requests)
 }

@@ -143,6 +143,9 @@ func (c *Client) executeStatementWithRole(ctx context.Context, statement, role s
 			return nil, classifyStatementError(resp, &apiErr, err)
 		}
 	}
+	if err := c.drainRemainingPartitions(ctx, "executeStatementWithRole", &result); err != nil {
+		return nil, err
+	}
 	return &result, nil
 }
 
