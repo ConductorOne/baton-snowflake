@@ -221,3 +221,99 @@ func TestStatementRoundTripCount(t *testing.T) {
 		})
 	}
 }
+
+// TestListSchemasInDatabase_DrainsMultiPartitionInlineResult reproduces the CXP-1184 failure mode
+// directly: a POST whose inline result already carries resultSetMetadata (so resultSetInline()
+// skips the follow-up GET), but whose resultSetMetadata.partitionInfo says the rows are split
+// across more than one partition. Before this fix, partition 0's rows were treated as the whole
+// result and partitions 1..N were silently dropped - no error, no incomplete-sync signal, just a
+// smaller-than-real resource count. A sufficiently large SHOW SCHEMAS/SHOW TABLES page can split
+// this way because Snowflake partitions by response bytes, not row count.
+func TestListSchemasInDatabase_DrainsMultiPartitionInlineResult(t *testing.T) {
+	const handle = "handle-multi-partition"
+	columns := []map[string]interface{}{{"name": columnName, "type": "text"}, {"name": columnDatabaseName, "type": "text"}}
+
+	partition0 := [][]string{{"SALES", "BATON_TEST_DB"}}
+	partition1 := [][]string{{"MARKETING", "BATON_TEST_DB"}}
+	partition2 := [][]string{{"ENGINEERING", "BATON_TEST_DB"}}
+
+	var requests int
+	var sawPartitionParams []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			// Inline on the POST itself, metadata and all - the shape that previously made
+			// resultSetInline() return true and stop looking any further.
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows": 3,
+					"rowType": columns,
+					"partitionInfo": []map[string]interface{}{
+						{"rowCount": 1}, {"rowCount": 1}, {"rowCount": 1},
+					},
+				},
+				"data": partition0,
+			})
+		case http.MethodGet:
+			partition := r.URL.Query().Get("partition")
+			sawPartitionParams = append(sawPartitionParams, partition)
+			var data [][]string
+			switch partition {
+			case "1":
+				data = partition1
+			case "2":
+				data = partition2
+			default:
+				t.Errorf("unexpected partition requested: %q", partition)
+			}
+			// Real partitions 1..N carry no resultSetMetadata at all - data only.
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	schemas, err := client.ListSchemasInDatabase(context.Background(), "BATON_TEST_DB")
+	require.NoError(t, err)
+
+	require.Len(t, schemas, 3, "all three partitions must be represented, not just partition 0")
+	var names []string
+	for _, s := range schemas {
+		names = append(names, s.Name)
+	}
+	assert.ElementsMatch(t, []string{"SALES", "MARKETING", "ENGINEERING"}, names)
+
+	// Exactly 1 POST + 2 partition GETs (partitions 1 and 2) - no redundant GetStatementResponse
+	// call, since the POST already carried partition 0 inline.
+	assert.Equal(t, 3, requests)
+	assert.ElementsMatch(t, []string{"1", "2"}, sawPartitionParams)
+}
+
+// TestFetchRemainingPartitions_StopsAtDeclaredPartitionCount verifies the loop bound: it walks
+// partitions 1..numPartitions-1 and no further, regardless of how many rows come back.
+func TestFetchRemainingPartitions_StopsAtDeclaredPartitionCount(t *testing.T) {
+	var gotPartitions []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPartitions = append(gotPartitions, r.URL.Query().Get("partition"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": [][]string{{r.URL.Query().Get("partition")}},
+		})
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	rows, err := client.fetchRemainingPartitions(context.Background(), "handle-1", 4)
+	require.NoError(t, err)
+	require.Len(t, rows, 3, "partitions 1, 2, and 3 - not partition 0, which the caller already has")
+	assert.Equal(t, []string{"1", "2", "3"}, gotPartitions)
+}

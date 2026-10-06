@@ -345,6 +345,73 @@ func (c *Client) GetStatementPartition(ctx context.Context, statementHandle stri
 	)
 }
 
+// fetchRemainingPartitions GETs partitions 1..numPartitions-1 of a statement whose partition 0
+// already arrived (inline on the POST, or via the plain handle GET) and returns their rows,
+// combined in partition order.
+//
+// Only partition 0 carries resultSetMetadata (Snowflake does not repeat the column layout on
+// later partitions), so callers append the returned rows directly onto the partition-0 response's
+// Data field and keep parsing with that response's RowTypes, rather than decoding each partition
+// into a RowTypes of its own.
+//
+// numPartitions is the caller's own len(ResultSetMetadata.PartitionInfo) read on the partition-0
+// response; a result with <= 1 partitions has nothing left to fetch and should not call this.
+func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, numPartitions int) ([][]string, error) {
+	var rows [][]string
+	for partitionID := 1; partitionID < numPartitions; partitionID++ {
+		req, err := c.GetStatementPartition(ctx, handle, partitionID)
+		if err != nil {
+			return nil, err
+		}
+
+		var partition StatementsApiResponseBase
+		var apiErr SnowflakeError
+		resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(&apiErr))
+		closeResponseBody(resp)
+		if err != nil {
+			return nil, dedupeAPIError(err)
+		}
+
+		rows = append(rows, partition.Data...)
+	}
+	return rows, nil
+}
+
+// drainRemainingPartitions checks resp (already populated from a statement's partition-0 reply -
+// inline on the POST, or via the plain handle GET) for additional partitions and, if present,
+// fetches and appends them to resp.Data so callers get the complete result from a single
+// resp.ListX()-style call afterward.
+//
+// This closes a real gap: SHOW TABLES / SHOW SCHEMAS / GetTable results were treated as complete
+// whenever the POST carried resultSetMetadata, but Snowflake splits large results into additional
+// partitions by byte size, not row count - a modestly-sized page (e.g. 200 rows) can still split if
+// the rows themselves are large enough. Left unhandled, that silently truncates the resource list,
+// the exact failure mode behind CXP-1184 (a Snowflake account's table count flapped and then
+// appeared to vanish, with nothing in the logs to explain why). The Warn log here is deliberately
+// loud and searchable - "op" plus the caller's own context fields - so the next occurrence, on
+// another large account, shows up on its own instead of requiring a cross-referenced log
+// investigation to even notice.
+func (c *Client) drainRemainingPartitions(ctx context.Context, op string, resp *StatementsApiResponseBase, extra ...zap.Field) error {
+	numPartitions := len(resp.ResultSetMetadata.PartitionInfo)
+	if numPartitions <= 1 {
+		return nil
+	}
+
+	fields := append([]zap.Field{
+		zap.String("op", op),
+		zap.Int("numPartitions", numPartitions),
+		zap.Int("numRows", resp.ResultSetMetadata.NumRows),
+	}, extra...)
+	ctxzap.Extract(ctx).Warn("snowflake: statement result spans multiple partitions, fetching remaining pages", fields...)
+
+	rest, err := c.fetchRemainingPartitions(ctx, resp.StatementHandle, numPartitions)
+	if err != nil {
+		return fmt.Errorf("baton-snowflake: failed to fetch remaining partitions for %s: %w", op, err)
+	}
+	resp.Data = append(resp.Data, rest...)
+	return nil
+}
+
 func Contains[T comparable](ts []T, val T) bool {
 	for _, t := range ts {
 		if t == val {
