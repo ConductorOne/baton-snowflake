@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
-	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 )
 
@@ -144,7 +143,10 @@ func (c *Client) executeStatementWithRole(ctx context.Context, statement, role s
 			return nil, classifyStatementError(resp, &apiErr, err)
 		}
 	}
-	if err := c.drainRemainingPartitions(ctx, "executeStatementWithRole", &result, zap.String("statement", statement)); err != nil {
+	// Deliberately no statement text in the log context here: these statements carry usernames
+	// (often emails) and token names. statementHandle, which drainRemainingPartitions always
+	// logs, is enough to correlate a log line back to the request without putting that in logs.
+	if err := c.drainRemainingPartitions(ctx, "executeStatementWithRole", &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

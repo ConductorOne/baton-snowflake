@@ -378,13 +378,14 @@ func TestDrainRemainingPartitions_ErrorsOnRowCountMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "TestOp")
 }
 
-// TestDrainRemainingPartitions_NoOpOnSinglePartitionRowCountMismatch covers the cheap,
+// TestDrainRemainingPartitions_ErrorsOnSinglePartitionRowCountMismatch covers the cheap,
 // no-extra-request half of the invariant check: a response that never claimed more than one
-// partition (so there's nothing to walk and nothing to return an error over - the caller already
-// has the only data it's going to get) but whose own Data disagrees with its own NumRows. This
-// can't name which partition came up short the way the multi-partition mismatch error can, so it's
-// a Warn, not an Error, and does not fail the call.
-func TestDrainRemainingPartitions_NoOpOnSinglePartitionRowCountMismatch(t *testing.T) {
+// partition (so there's nothing left to walk) but whose own Data disagrees with its own NumRows.
+// This must fail exactly like the multi-partition mismatch does: every paginated caller
+// (ListTablesInSchema, ListUsers, ...) reads a short page as the last page and stops, so letting
+// this through would recreate the amplified silent-truncation bug under a condition the
+// numPartitions>1 check doesn't even see.
+func TestDrainRemainingPartitions_ErrorsOnSinglePartitionRowCountMismatch(t *testing.T) {
 	resp := &StatementsApiResponseBase{
 		StatementHandle: "handle-short-single",
 		Data:            [][]string{{"only-row"}},
@@ -397,7 +398,8 @@ func TestDrainRemainingPartitions_NoOpOnSinglePartitionRowCountMismatch(t *testi
 
 	client := &Client{}
 	err := client.drainRemainingPartitions(context.Background(), "TestOp", resp)
-	require.NoError(t, err, "a single-partition mismatch is logged, not failed - there's nothing left to fetch")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TestOp")
 }
 
 // TestDrainRemainingPartitions_HandlesAsyncStatementWithMultiplePartitions covers the 202 path:

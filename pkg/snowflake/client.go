@@ -410,16 +410,14 @@ func (c *Client) drainRemainingPartitions(ctx context.Context, op string, resp *
 		// No declared second partition, but a response can still under-report its own row
 		// count without ever claiming more than one partition (e.g. partitionInfo omitted
 		// entirely, or present with a single zero-length entry). This is the no-extra-request
-		// version of the invariant check below: it can flag that something is wrong, just not
-		// which partition came up short, since there's nothing further to fetch and compare.
+		// version of the invariant check below, and it has to fail the same way that one does:
+		// a short page here is read by every paginated caller (ListTablesInSchema, ListUsers,
+		// ...) as "this is the last page," which stops pagination and silently drops every
+		// later page too - the exact amplified failure mode this whole fix exists to close, so
+		// a Warn-and-continue here would just recreate it under a different condition.
 		if resp.ResultSetMetadata.NumRows > 0 && len(resp.Data) != resp.ResultSetMetadata.NumRows {
-			l.Warn("snowflake: statement result row count does not match its own metadata",
-				append([]zap.Field{
-					zap.String("op", op),
-					zap.String("statementHandle", resp.StatementHandle),
-					zap.Int("numRows", resp.ResultSetMetadata.NumRows),
-					zap.Int("gotRows", len(resp.Data)),
-				}, extra...)...)
+			return fmt.Errorf("baton-snowflake: %s: got %d rows but Snowflake declared %d (statementHandle=%s)",
+				op, len(resp.Data), resp.ResultSetMetadata.NumRows, resp.StatementHandle)
 		}
 		return nil
 	}
@@ -445,24 +443,25 @@ func (c *Client) drainRemainingPartitions(ctx context.Context, op string, resp *
 	}
 	resp.Data = append(resp.Data, rest...)
 
+	fetchedRowCounts := append([]int{partition0Rows}, gotRowCounts...)
 	totalRows := len(resp.Data)
-	completionFields := append(append([]zap.Field{}, baseFields...),
-		zap.Ints("fetchedPartitionRowCounts", append([]int{partition0Rows}, gotRowCounts...)),
-		zap.Int("totalRowsFetched", totalRows),
-	)
 	if resp.ResultSetMetadata.NumRows > 0 && totalRows != resp.ResultSetMetadata.NumRows {
-		// This is the condition worth paging someone over: the partition walk ran to
-		// completion by its own accounting (every declared partition was fetched without
-		// error) and still didn't add up to the row count Snowflake declared up front. That
-		// means either a partition under-reported its own rows, or NumRows/PartitionInfo
-		// disagree in some other way this code wasn't written against - a case the simple
-		// "numPartitions > 1" check above cannot catch on its own. declaredPartitionRowCounts
-		// vs fetchedPartitionRowCounts in this log line shows which partition came up short.
-		l.Error("snowflake: statement result row count does not match after draining all partitions", completionFields...)
-		return fmt.Errorf("baton-snowflake: %s: fetched %d rows across %d partitions but Snowflake declared %d",
-			op, totalRows, numPartitions, resp.ResultSetMetadata.NumRows)
+		// The condition worth caring about: the partition walk ran to completion by its own
+		// accounting (every declared partition was fetched without error) and still didn't add
+		// up to the row count Snowflake declared up front. That means either a partition
+		// under-reported its own rows, or NumRows/PartitionInfo disagree in some other way this
+		// code wasn't written against - a case the simple "numPartitions > 1" check above
+		// cannot catch on its own. The error carries declared vs fetched per-partition counts
+		// directly, rather than also logging them here - this failure already propagates to the
+		// caller, which logs it; a second log line at this level would just duplicate it.
+		return fmt.Errorf("baton-snowflake: %s: fetched %d rows across %d partitions (declared=%v fetched=%v) but Snowflake declared %d total (statementHandle=%s)",
+			op, totalRows, numPartitions, declaredRowCounts, fetchedRowCounts, resp.ResultSetMetadata.NumRows, resp.StatementHandle)
 	}
-	l.Info("snowflake: finished draining statement result partitions", completionFields...)
+
+	l.Info("snowflake: finished draining statement result partitions", append(append([]zap.Field{}, baseFields...),
+		zap.Ints("fetchedPartitionRowCounts", fetchedRowCounts),
+		zap.Int("totalRowsFetched", totalRows),
+	)...)
 	return nil
 }
 
