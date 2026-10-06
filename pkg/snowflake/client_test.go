@@ -378,6 +378,28 @@ func TestDrainRemainingPartitions_ErrorsOnRowCountMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "TestOp")
 }
 
+// TestDrainRemainingPartitions_NoOpOnSinglePartitionRowCountMismatch covers the cheap,
+// no-extra-request half of the invariant check: a response that never claimed more than one
+// partition (so there's nothing to walk and nothing to return an error over - the caller already
+// has the only data it's going to get) but whose own Data disagrees with its own NumRows. This
+// can't name which partition came up short the way the multi-partition mismatch error can, so it's
+// a Warn, not an Error, and does not fail the call.
+func TestDrainRemainingPartitions_NoOpOnSinglePartitionRowCountMismatch(t *testing.T) {
+	resp := &StatementsApiResponseBase{
+		StatementHandle: "handle-short-single",
+		Data:            [][]string{{"only-row"}},
+		ResultSetMetadata: ResultSetMetadata{
+			NumRows:  2,
+			RowTypes: []RowType{{Name: "name", Type: "text"}},
+			// No PartitionInfo at all - the shape this check exists for.
+		},
+	}
+
+	client := &Client{}
+	err := client.drainRemainingPartitions(context.Background(), "TestOp", resp)
+	require.NoError(t, err, "a single-partition mismatch is logged, not failed - there's nothing left to fetch")
+}
+
 // TestDrainRemainingPartitions_HandlesAsyncStatementWithMultiplePartitions covers the 202 path:
 // the POST returns only a handle (statement went async), the follow-up handle GET returns
 // partition 0 plus partitionInfo, and the remaining partitions still have to be walked from

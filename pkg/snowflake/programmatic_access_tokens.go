@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 )
 
@@ -143,7 +144,7 @@ func (c *Client) executeStatementWithRole(ctx context.Context, statement, role s
 			return nil, classifyStatementError(resp, &apiErr, err)
 		}
 	}
-	if err := c.drainRemainingPartitions(ctx, "executeStatementWithRole", &result); err != nil {
+	if err := c.drainRemainingPartitions(ctx, "executeStatementWithRole", &result, zap.String("statement", statement)); err != nil {
 		return nil, err
 	}
 	return &result, nil
