@@ -46,12 +46,12 @@ func (o *legacyCredentialConnector) ResourceSyncers(context.Context) []connector
 }
 
 func TestCredentialIssueNativeAPIKeySDKFixtureAndLegacyRefusal(t *testing.T) {
-	const fixtureToken = "pat<>&\"\\\n\x01"
+	const sampleValue = "pat<>&\"\\\n\x01"
 	const wantNativeBytes = "{\"key_value\":\"pat<>&\\\"\\\\\\n\\u0001\",\"provider\":\"snowflake\",\"header_name\":\"Authorization\"}"
 	var statements []string
 	provider := serveCredentialIssueMock(t, credentialIssueMock{
 		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
-		showTokenName: "c1-request-1", tokenSecret: fixtureToken, statements: &statements,
+		showTokenName: "c1-request-1", tokenSecret: sampleValue, statements: &statements,
 	})
 	defer provider.Close()
 	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
@@ -128,7 +128,7 @@ func TestCredentialIssueNativeAPIKeySDKFixtureAndLegacyRefusal(t *testing.T) {
 				t.Fatalf("read plaintext: %v", err)
 			}
 			if tc.wantRaw {
-				if string(plaintext) != fixtureToken {
+				if string(plaintext) != sampleValue {
 					t.Fatalf("raw TOKEN plaintext = %q", plaintext)
 				}
 			} else {
@@ -139,7 +139,7 @@ func TestCredentialIssueNativeAPIKeySDKFixtureAndLegacyRefusal(t *testing.T) {
 				if err := json.Unmarshal(plaintext, &fields); err != nil {
 					t.Fatalf("native plaintext is not JSON: %v", err)
 				}
-				if len(fields) != 3 || fields["key_value"] != fixtureToken || fields["provider"] != "snowflake" || fields["header_name"] != "Authorization" {
+				if len(fields) != 3 || fields["key_value"] != sampleValue || fields["provider"] != "snowflake" || fields["header_name"] != "Authorization" {
 					t.Fatalf("native plaintext fields = %#v", fields)
 				}
 			}

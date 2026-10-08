@@ -7,8 +7,8 @@ import (
 )
 
 func TestEncodeNativeProgrammaticAccessToken(t *testing.T) {
-	const token = "Snowflake.PAT-<>&\"\\\n\x01"
-	encoded, err := encodeNativeProgrammaticAccessToken(token)
+	const input = "Snowflake.PAT-<>&\"\\\n\x01"
+	encoded, err := encodeNativeProgrammaticAccessToken(input)
 	if err != nil {
 		t.Fatalf("encodeNativeProgrammaticAccessToken() error = %v", err)
 	}
@@ -21,7 +21,7 @@ func TestEncodeNativeProgrammaticAccessToken(t *testing.T) {
 		t.Fatalf("native payload is not JSON: %v", err)
 	}
 	want := map[string]any{
-		"key_value":   token,
+		"key_value":   input,
 		"provider":    "snowflake",
 		"header_name": "Authorization",
 	}
