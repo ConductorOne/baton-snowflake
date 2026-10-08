@@ -6,9 +6,9 @@ import (
 )
 
 // encodeNativeProgrammaticAccessToken prepares the api_key_v2 JsonV1 payload.
-// It does not choose an issuance option or resource type: Snowflake permits PAT
-// renames, and SHOW USER PROGRAMMATIC ACCESS TOKENS has no durable token ID with
-// which to distinguish native credentials from the existing raw-token resources.
+// The API_KEY issuance arm selects this representation, while sharing the
+// existing PAT inventory and revocation path with the raw TOKEN arm. Snowflake
+// permits PAT renames, so the two forms cannot be split into resource types by name.
 func encodeNativeProgrammaticAccessToken(token string) ([]byte, error) {
 	if token == "" {
 		return nil, fmt.Errorf("baton-snowflake: empty programmatic access token")

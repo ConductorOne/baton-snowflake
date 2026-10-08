@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,13 +13,131 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	ageprovider "github.com/conductorone/baton-sdk/pkg/crypto/providers/age"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// legacyCredentialUserBuilder models the released v0.2.1 descriptor. The SDK
+// must reject a new API_KEY selector before calling its Issue method.
+type legacyCredentialUserBuilder struct{ *credentialUserBuilder }
+
+func (o *legacyCredentialUserBuilder) IssueCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsCredentialIssue, annotations.Annotations, error) {
+	details, annotations, err := o.credentialUserBuilder.IssueCapabilityDetails(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	details.SetOptions(details.GetOptions()[:1])
+	return details, annotations, nil
+}
+
+type legacyCredentialConnector struct{ *Connector }
+
+func (o *legacyCredentialConnector) ResourceSyncers(context.Context) []connectorbuilder.ResourceSyncerV2 {
+	return []connectorbuilder.ResourceSyncerV2{
+		&legacyCredentialUserBuilder{newCredentialUserBuilder(o.Client, secretOptions{})},
+		newProgrammaticAccessTokenBuilder(o.Client),
+	}
+}
+
+func TestCredentialIssueNativeAPIKeySDKFixtureAndLegacyRefusal(t *testing.T) {
+	var statements []string
+	provider := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
+	defer provider.Close()
+	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("generate age identity: %v", err)
+	}
+	encryption := []*v2.EncryptionConfig{v2.EncryptionConfig_builder{
+		Provider: ageprovider.EncryptionProviderAge,
+		AgeRecipientConfig: v2.EncryptionConfig_AgeRecipientConfig_builder{
+			Recipient: identity.Recipient().String(),
+		}.Build(),
+	}.Build()}
+	request := func(native bool) *v2.IssueCredentialRequest {
+		options := v2.CredentialIssueOptions_builder{SecretResourceTypeId: programmaticAccessTokenResourceType.Id}
+		if native {
+			options.ApiKey = v2.CredentialIssueOptions_ApiKey_builder{}.Build()
+		} else {
+			options.Token = v2.CredentialIssueOptions_Token_builder{}.Build()
+		}
+		return v2.IssueCredentialRequest_builder{
+			IdentityId:        v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
+			CredentialOptions: options.Build(),
+			EncryptionConfigs: encryption,
+			RequestId:         "request-1",
+		}.Build()
+	}
+	ctx := context.Background()
+	oldServer, err := connectorbuilder.NewConnector(ctx, &legacyCredentialConnector{&Connector{Client: client, IssueCredentials: true}})
+	if err != nil {
+		t.Fatalf("old connector: %v", err)
+	}
+	if _, err := oldServer.IssueCredential(ctx, request(true)); err == nil || !strings.Contains(err.Error(), "not advertised") {
+		t.Fatalf("old descriptor API_KEY response = %v, want pre-mint refusal", err)
+	}
+	if len(statements) != 0 {
+		t.Fatalf("old descriptor contacted Snowflake: %q", statements)
+	}
+
+	newServer, err := connectorbuilder.NewConnector(ctx, &Connector{Client: client, IssueCredentials: true})
+	if err != nil {
+		t.Fatalf("new connector: %v", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		native   bool
+		wantName string
+		wantRaw  bool
+	}{
+		{name: "native API_KEY", native: true, wantName: "api_key_v2"},
+		{name: "released raw TOKEN", wantName: "token", wantRaw: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response, err := newServer.IssueCredential(ctx, request(tc.native))
+			if err != nil {
+				t.Fatalf("IssueCredential() error = %v", err)
+			}
+			if response.GetSecret().GetId().GetResourceType() != programmaticAccessTokenResourceType.Id ||
+				response.GetSecret().GetId().GetResource() != programmaticAccessTokenID("service-user", "c1-request-1") {
+				t.Fatalf("secret handle = %#v", response.GetSecret().GetId())
+			}
+			if len(response.GetEncryptedData()) != 1 || response.GetEncryptedData()[0].GetName() != tc.wantName {
+				t.Fatalf("encrypted data = %#v", response.GetEncryptedData())
+			}
+			reader, err := age.Decrypt(bytes.NewReader(response.GetEncryptedData()[0].GetEncryptedBytes()), identity)
+			if err != nil {
+				t.Fatalf("decrypt SDK ciphertext: %v", err)
+			}
+			plaintext, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("read plaintext: %v", err)
+			}
+			if tc.wantRaw {
+				if string(plaintext) != "redacted" {
+					t.Fatalf("raw TOKEN plaintext = %q", plaintext)
+				}
+			} else {
+				var fields map[string]any
+				if err := json.Unmarshal(plaintext, &fields); err != nil {
+					t.Fatalf("native plaintext is not JSON: %v", err)
+				}
+				if len(fields) != 3 || fields["key_value"] != "redacted" || fields["provider"] != "snowflake" || fields["header_name"] != "Authorization" {
+					t.Fatalf("native plaintext fields = %#v", fields)
+				}
+			}
+		})
+	}
+}
 
 func TestCredentialUserBuilderIssueServiceUserUsesDefaultRoleRestriction(t *testing.T) {
 	var statements []string
@@ -227,15 +346,21 @@ func TestCredentialIssuanceCapabilitiesRegisterWithDeleter(t *testing.T) {
 			continue
 		}
 		details := capability.GetCredentialIssue()
-		if details == nil || len(details.GetOptions()) != 1 {
-			t.Fatalf("credential issue details = %#v, want one option", details)
+		if details == nil || len(details.GetOptions()) != 2 {
+			t.Fatalf("credential issue details = %#v, want raw TOKEN and native API_KEY options", details)
 		}
-		descriptor := details.GetOptions()[0]
-		if descriptor.GetSecretResourceTypeId() != programmaticAccessTokenResourceType.Id {
-			t.Fatalf("secret resource type = %q, want %q", descriptor.GetSecretResourceTypeId(), programmaticAccessTokenResourceType.Id)
+		for _, descriptor := range details.GetOptions() {
+			if descriptor.GetSecretResourceTypeId() != programmaticAccessTokenResourceType.Id {
+				t.Fatalf("secret resource type = %q, want %q", descriptor.GetSecretResourceTypeId(), programmaticAccessTokenResourceType.Id)
+			}
+			if descriptor.GetExpiry().GetMin().AsDuration() != programmaticAccessTokenMinLifetime || descriptor.GetExpiry().GetMax().AsDuration() != programmaticAccessTokenMaxLifetime {
+				t.Fatalf("expiry = %#v, want min %v and max %v", descriptor.GetExpiry(), programmaticAccessTokenMinLifetime, programmaticAccessTokenMaxLifetime)
+			}
 		}
-		if descriptor.GetExpiry().GetMin().AsDuration() != programmaticAccessTokenMinLifetime || descriptor.GetExpiry().GetMax().AsDuration() != programmaticAccessTokenMaxLifetime {
-			t.Fatalf("expiry = %#v, want min %v and max %v", descriptor.GetExpiry(), programmaticAccessTokenMinLifetime, programmaticAccessTokenMaxLifetime)
+		if details.GetOptions()[0].GetOption() != v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN ||
+			details.GetOptions()[1].GetOption() != v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY ||
+			details.GetPreferredOption() != v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN {
+			t.Fatalf("unexpected credential options: %#v", details)
 		}
 		return
 	}

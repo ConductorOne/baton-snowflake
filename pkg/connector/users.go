@@ -64,6 +64,15 @@ func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.C
 				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 				SecretResourceTypeId: programmaticAccessTokenResourceType.Id,
 			}.Build(),
+			v2.CredentialIssueOptionDescriptor_builder{
+				Option: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY,
+				Expiry: v2.IssuanceExpiryCapability_builder{
+					Min: durationpb.New(programmaticAccessTokenMinLifetime),
+					Max: durationpb.New(programmaticAccessTokenMaxLifetime),
+				}.Build(),
+				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+				SecretResourceTypeId: programmaticAccessTokenResourceType.Id,
+			}.Build(),
 		},
 		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN,
 	}.Build(), nil, nil
@@ -72,6 +81,13 @@ func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.C
 func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (*connectorbuilder.CredentialIssueOutput, error) {
 	if input == nil || input.IdentityID == nil || input.IdentityID.ResourceType != userResourceType.Id || input.IdentityID.Resource == "" {
 		return nil, fmt.Errorf("baton-snowflake: a Snowflake user identity is required")
+	}
+	// The existing TOKEN arm continues to emit raw PAT bytes. API_KEY selects the
+	// api_key_v2 JsonV1 representation, while both arms create the same Snowflake
+	// PAT and use the same discoverable resource type and revocation handle.
+	nativeAPIKey := input.CredentialOptions != nil && input.CredentialOptions.GetApiKey() != nil
+	if input.CredentialOptions != nil && !nativeAPIKey && input.CredentialOptions.GetToken() == nil {
+		return nil, fmt.Errorf("baton-snowflake: unsupported credential option")
 	}
 
 	tokenName := "c1-" + input.RequestID
@@ -184,12 +200,21 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	if err != nil {
 		return nil, err
 	}
+	plaintextBytes := []byte(plaintext)
+	plaintextName := "token"
+	if nativeAPIKey {
+		plaintextBytes, err = encodeNativeProgrammaticAccessToken(plaintext)
+		if err != nil {
+			return nil, err
+		}
+		plaintextName = "api_key_v2"
+	}
 
 	issued = true
 	return &connectorbuilder.CredentialIssueOutput{
 		Secret: secret,
 		PlaintextData: []*v2.PlaintextData{
-			v2.PlaintextData_builder{Name: "token", Bytes: []byte(plaintext)}.Build(),
+			v2.PlaintextData_builder{Name: plaintextName, Bytes: plaintextBytes}.Build(),
 		},
 		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 	}, nil
