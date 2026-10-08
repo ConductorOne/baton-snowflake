@@ -46,8 +46,13 @@ func (o *legacyCredentialConnector) ResourceSyncers(context.Context) []connector
 }
 
 func TestCredentialIssueNativeAPIKeySDKFixtureAndLegacyRefusal(t *testing.T) {
+	const fixtureToken = "pat<>&\"\\\n\x01"
+	const wantNativeBytes = "{\"key_value\":\"pat<>&\\\"\\\\\\n\\u0001\",\"provider\":\"snowflake\",\"header_name\":\"Authorization\"}"
 	var statements []string
-	provider := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
+	provider := serveCredentialIssueMock(t, credentialIssueMock{
+		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
+		showTokenName: "c1-request-1", tokenSecret: fixtureToken, statements: &statements,
+	})
 	defer provider.Close()
 	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
 	if err != nil {
@@ -123,15 +128,18 @@ func TestCredentialIssueNativeAPIKeySDKFixtureAndLegacyRefusal(t *testing.T) {
 				t.Fatalf("read plaintext: %v", err)
 			}
 			if tc.wantRaw {
-				if string(plaintext) != "redacted" {
+				if string(plaintext) != fixtureToken {
 					t.Fatalf("raw TOKEN plaintext = %q", plaintext)
 				}
 			} else {
+				if string(plaintext) != wantNativeBytes {
+					t.Fatalf("native Issue bytes = %q, want %q", plaintext, wantNativeBytes)
+				}
 				var fields map[string]any
 				if err := json.Unmarshal(plaintext, &fields); err != nil {
 					t.Fatalf("native plaintext is not JSON: %v", err)
 				}
-				if len(fields) != 3 || fields["key_value"] != "redacted" || fields["provider"] != "snowflake" || fields["header_name"] != "Authorization" {
+				if len(fields) != 3 || fields["key_value"] != fixtureToken || fields["provider"] != "snowflake" || fields["header_name"] != "Authorization" {
 					t.Fatalf("native plaintext fields = %#v", fields)
 				}
 			}
@@ -188,6 +196,8 @@ type credentialIssueMock struct {
 	// showTokenName lets a test make SHOW return a name that does not match the token
 	// just created, which is the "provider did not return the token" failure path.
 	showTokenName string
+	// tokenSecret permits exact-byte fixture tests with JSON-sensitive characters.
+	tokenSecret string
 	// denyPrefix makes every statement with this prefix answer 422/003001, the shape
 	// Snowflake uses for an access-control denial.
 	denyPrefix string
@@ -268,6 +278,10 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 				"data": data,
 			})
 		case strings.Contains(request.Statement, "ADD PROGRAMMATIC ACCESS TOKEN"):
+			secret := mock.tokenSecret
+			if secret == "" {
+				secret = "redacted"
+			}
 			_, clause, found := strings.Cut(request.Statement, "DAYS_TO_EXPIRY = ")
 			if !found {
 				t.Errorf("no DAYS_TO_EXPIRY in %q", request.Statement)
@@ -284,7 +298,7 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 						{"name": "token_secret", "type": "text"},
 					},
 				},
-				"data": [][]string{{"C1_REQUEST_1", "redacted"}},
+				"data": [][]string{{"C1_REQUEST_1", secret}},
 			})
 		case strings.HasPrefix(request.Statement, "SHOW USER PROGRAMMATIC ACCESS TOKENS"):
 			expiresAt := "1893456000"

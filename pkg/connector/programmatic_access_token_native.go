@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -13,7 +14,10 @@ func encodeNativeProgrammaticAccessToken(token string) ([]byte, error) {
 	if token == "" {
 		return nil, fmt.Errorf("baton-snowflake: empty programmatic access token")
 	}
-	return json.Marshal(struct {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	err := encoder.Encode(struct {
 		KeyValue   string `json:"key_value"`
 		Provider   string `json:"provider"`
 		HeaderName string `json:"header_name"`
@@ -22,4 +26,9 @@ func encodeNativeProgrammaticAccessToken(token string) ([]byte, error) {
 		Provider:   "snowflake",
 		HeaderName: "Authorization",
 	})
+	if err != nil {
+		return nil, fmt.Errorf("baton-snowflake: encode programmatic access token: %w", err)
+	}
+	// Encoder appends one framing newline; Multipass JsonV1 does not.
+	return bytes.TrimSuffix(output.Bytes(), []byte("\n")), nil
 }

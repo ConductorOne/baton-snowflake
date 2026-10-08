@@ -7,10 +7,14 @@ import (
 )
 
 func TestEncodeNativeProgrammaticAccessToken(t *testing.T) {
-	const token = "Snowflake.PAT-\"\\\n"
+	const token = "Snowflake.PAT-<>&\"\\\n\x01"
 	encoded, err := encodeNativeProgrammaticAccessToken(token)
 	if err != nil {
 		t.Fatalf("encodeNativeProgrammaticAccessToken() error = %v", err)
+	}
+	const wantBytes = "{\"key_value\":\"Snowflake.PAT-<>&\\\"\\\\\\n\\u0001\",\"provider\":\"snowflake\",\"header_name\":\"Authorization\"}"
+	if string(encoded) != wantBytes {
+		t.Fatalf("native payload bytes = %q, want %q", encoded, wantBytes)
 	}
 	var fields map[string]any
 	if err := json.Unmarshal(encoded, &fields); err != nil {
