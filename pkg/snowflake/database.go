@@ -96,6 +96,10 @@ func (c *Client) ListDatabases(ctx context.Context, cursor string, limit int) ([
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListDatabases", &response.StatementsApiResponseBase); err != nil {
+		return nil, err
+	}
+
 	dbs, err := response.GetDatabases()
 	if err != nil {
 		return nil, err

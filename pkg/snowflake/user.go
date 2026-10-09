@@ -218,6 +218,10 @@ func (c *Client) ListUsers(ctx context.Context, cursor string, limit int) ([]Use
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListUsers", &response.StatementsApiResponseBase); err != nil {
+		return nil, err
+	}
+
 	users, err := response.GetUsers()
 	if err != nil {
 		return nil, err

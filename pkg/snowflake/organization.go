@@ -91,6 +91,10 @@ func (c *Client) ListOrganizationAccounts(ctx context.Context) ([]OrganizationAc
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListOrganizationAccounts", &response.StatementsApiResponseBase); err != nil {
+		return nil, statusCode, err
+	}
+
 	accounts, err := response.GetOrganizationAccounts()
 	if err != nil {
 		return nil, statusCode, err
