@@ -412,6 +412,10 @@ func (c *Client) drainRemainingPartitions(ctx context.Context, op string, resp *
 		return nil
 	}
 
+	if resp.StatementHandle == "" {
+		return fmt.Errorf("baton-snowflake: %s: result spans %d partitions but has no statement handle", op, numPartitions)
+	}
+
 	declaredRowCounts := make([]int, numPartitions)
 	for i, p := range resp.ResultSetMetadata.PartitionInfo {
 		declaredRowCounts[i] = p.RowCount
