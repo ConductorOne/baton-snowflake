@@ -242,7 +242,7 @@ func TestRoleGrantedToUserMatchesQuotedIdentifiers(t *testing.T) {
 // TestRoleGrantedToUser_FindsRoleInLaterPartition is the regression guard for a real functional
 // bug this closes, not just an undercount: a user with enough grants to split SHOW GRANTS TO USER
 // across partitions could have the target role land in partition 1+ rather than 0. Before
-// executeStatementWithRole drained remaining partitions, that role was invisible to
+// executeStatement drained remaining partitions, that role was invisible to
 // RoleGrantedToUser - a granted role reported as not granted, which blocks programmatic access
 // token issuance (see pkg/connector/users.go) for a user who is actually entitled to it.
 func TestRoleGrantedToUser_FindsRoleInLaterPartition(t *testing.T) {
