@@ -73,8 +73,12 @@ func (o *programmaticAccessTokenBuilder) Delete(ctx context.Context, resourceID 
 	if err != nil {
 		return nil, err
 	}
-	if err := o.client.RemoveProgrammaticAccessToken(ctx, userName, tokenName); err != nil {
-		return nil, fmt.Errorf("baton-snowflake: remove programmatic access token: %w", err)
+	// Snowflake PAT names can change. Do not use IF EXISTS for either the user
+	// or token: a stale handle must produce an error, never a successful no-op.
+	// This also avoids requiring SHOW privileges that legacy revocation did not
+	// need. A missing name cannot distinguish prior deletion from rename.
+	if err := o.client.RemoveProgrammaticAccessTokenStrict(ctx, userName, tokenName); err != nil {
+		return nil, fmt.Errorf("baton-snowflake: could not confirm programmatic access token revocation; manual reconciliation may be required: %w", err)
 	}
 	return nil, nil
 }

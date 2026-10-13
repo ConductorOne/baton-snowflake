@@ -207,7 +207,10 @@ type credentialIssueMock struct {
 	// liveExpiry makes SHOW derive expires_at from the mock's own clock and the
 	// statement's DAYS_TO_EXPIRY, the way Snowflake does, instead of a fixed instant.
 	liveExpiry bool
-	statements *[]string
+	// removeMissing simulates a provider rejection when the recorded PAT name
+	// no longer exists (for example, after an administrator renamed it).
+	removeMissing bool
+	statements    *[]string
 }
 
 func newCredentialIssueMockServer(t *testing.T, userType, defaultRole string, roleGranted bool, statements *[]string) *httptest.Server {
@@ -318,6 +321,13 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 				"data": [][]string{{mock.showTokenName, expiresAt}},
 			})
 		case strings.Contains(request.Statement, "REMOVE PROGRAMMATIC ACCESS TOKEN"):
+			if mock.removeMissing {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": "002003", "message": "Programmatic access token does not exist",
+				})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": [][]string{}})
 		default:
 			t.Errorf("unexpected statement: %s", request.Statement)

@@ -185,6 +185,20 @@ func TestTokenMutationsRunAsUserAdmin(t *testing.T) {
 		require.Equal(t, []string{UserAdminRole}, roles)
 	})
 
+	t.Run("strict remove rejects a stale name through provider SQL", func(t *testing.T) {
+		t.Parallel()
+		recorder := &statementRecorder{}
+		server := newTokenCreateServer(t, recorder)
+		defer server.Close()
+		client, err := New(server.URL, JWTConfig{}, server.Client())
+		require.NoError(t, err)
+
+		require.NoError(t, client.RemoveProgrammaticAccessTokenStrict(context.Background(), "svc", "c1-request-1"))
+		statements, roles := recorder.snapshot()
+		require.Equal(t, []string{`ALTER USER "svc" REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`}, statements)
+		require.Equal(t, []string{UserAdminRole}, roles)
+	})
+
 	t.Run("read-only statements do not force a role", func(t *testing.T) {
 		t.Parallel()
 		recorder := &statementRecorder{}

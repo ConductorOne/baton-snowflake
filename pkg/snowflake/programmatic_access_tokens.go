@@ -103,6 +103,19 @@ func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, to
 	return err
 }
 
+// RemoveProgrammaticAccessTokenStrict refuses a missing token name. The
+// idempotent variant above is useful for orphan cleanup, but cannot prove a
+// credential was revoked: Snowflake permits renaming PATs, and IF EXISTS turns
+// a stale name into an error-free no-op.
+func (c *Client) RemoveProgrammaticAccessTokenStrict(ctx context.Context, userName, tokenName string) error {
+	statement := fmt.Sprintf(
+		"ALTER USER %s REMOVE PROGRAMMATIC ACCESS TOKEN %s;",
+		quoteIdentifier(userName), quoteIdentifier(tokenName),
+	)
+	_, err := c.executeStatementAsUserAdmin(ctx, statement)
+	return err
+}
+
 func (c *Client) executeStatement(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
 	return c.executeStatementWithRole(ctx, statement, "")
 }
