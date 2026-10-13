@@ -130,7 +130,7 @@ func TestProgrammaticAccessTokenActionSchemaAndGate(t *testing.T) {
 		}
 		if len(schema.GetReturnTypes()) != 2 || schema.GetReturnTypes()[0].GetName() != patActionIssuedResourceReturn ||
 			schema.GetReturnTypes()[0].GetIsSecret() || !schema.GetReturnTypes()[0].HasResourceField() ||
-			schema.GetReturnTypes()[1].GetName() != patActionSecretReturn || !schema.GetReturnTypes()[1].GetIsSecret() ||
+			schema.GetReturnTypes()[1].GetName() != patActionNativeReturnName || !schema.GetReturnTypes()[1].GetIsSecret() ||
 			!schema.GetReturnTypes()[1].GetIsRequired() {
 			t.Fatalf("schema returns = %#v", schema.GetReturnTypes())
 		}
@@ -206,7 +206,7 @@ func TestProgrammaticAccessTokenActionJWEAndDelete(t *testing.T) {
 		t.Fatalf("public response leaked token or wrong encrypted count: %#v", response)
 	}
 	encrypted := response.GetEncryptedData()[0]
-	if encrypted.GetProvider() != jwe.EncryptionProvider || encrypted.GetName() != patActionSecretReturn ||
+	if encrypted.GetProvider() != jwe.EncryptionProvider || encrypted.GetName() != patActionNativeReturnName ||
 		encrypted.GetSchema() != "api_key_v2" || len(encrypted.GetKeyIds()) != 1 {
 		t.Fatalf("encrypted metadata = %#v", encrypted)
 	}
@@ -249,7 +249,7 @@ func TestProgrammaticAccessTokenActionHonorsApprovedExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(secret) != 1 || secret[0].GetName() != patActionSecretReturn {
+	if len(secret) != 1 || secret[0].GetName() != patActionNativeReturnName {
 		t.Fatalf("secret return = %#v", secret)
 	}
 	issued, ok := actions.GetResourceFieldArg(public, patActionIssuedResourceReturn)

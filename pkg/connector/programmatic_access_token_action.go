@@ -23,7 +23,7 @@ const (
 	patActionRequestIDArg              = "request_id"
 	patActionExpiresAtArg              = "expires_at"
 	patActionIssuedResourceReturn      = "issued_resource"
-	patActionSecretReturn              = "api_key_v2"
+	patActionNativeReturnName          = "api_key_v2"
 )
 
 var patActionRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -61,7 +61,7 @@ var issueProgrammaticAccessTokenSchema = &v2.BatonActionSchema{
 			Field: &config.Field_ResourceField{ResourceField: &config.ResourceField{}},
 		},
 		{
-			Name: patActionSecretReturn, DisplayName: "API key", IsRequired: true, IsSecret: true,
+			Name: patActionNativeReturnName, DisplayName: "API key", IsRequired: true, IsSecret: true,
 			Field: &config.Field_StringField{StringField: &config.StringField{}},
 		},
 	},
@@ -103,7 +103,7 @@ func (o *credentialUserBuilder) issueProgrammaticAccessTokenAction(
 		}
 	}()
 	if output.Secret.GetId().GetResourceType() != programmaticAccessTokenResourceType.Id ||
-		len(output.PlaintextData) != 1 || output.PlaintextData[0].GetName() != patActionSecretReturn {
+		len(output.PlaintextData) != 1 || output.PlaintextData[0].GetName() != patActionNativeReturnName {
 		return nil, nil, nil, fmt.Errorf("baton-snowflake: issued token action returned an unexpected credential shape")
 	}
 	resourceField, err := actions.NewResourceReturnField(patActionIssuedResourceReturn, output.Secret)
