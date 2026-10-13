@@ -151,6 +151,10 @@ func TestProgrammaticAccessTokenActionRejectsInvalidInputBeforeSnowflake(t *test
 		args *structpb.Struct
 	}{
 		{name: "missing user", args: patActionArgs(t, "", "ticket-1", nil)},
+		{name: "wrong user resource type", args: patActionArgs(t, "service-user", "ticket-1", map[string]any{
+			patActionUserIDArg: map[string]any{"resource_type_id": "database", "resource_id": "service-user"},
+		})},
+		{name: "missing request id", args: patActionArgs(t, "service-user", "", nil)},
 		{name: "invalid request id", args: patActionArgs(t, "service-user", "bad id", nil)},
 		{name: "unknown scopes", args: patActionArgs(t, "service-user", "ticket-1", map[string]any{"scopes": []any{"read"}})},
 		{name: "malformed expiry", args: patActionArgs(t, "service-user", "ticket-1", map[string]any{patActionExpiresAtArg: "tomorrow"})},
@@ -264,6 +268,32 @@ func TestProgrammaticAccessTokenActionHonorsApprovedExpiry(t *testing.T) {
 	if trait.GetExpiresAt().AsTime().After(approvedExpiry) ||
 		!containsStatement(statements, "DAYS_TO_EXPIRY = 3") {
 		t.Fatalf("approved expiry = %v, trait expiry = %v, statements = %q", approvedExpiry, trait.GetExpiresAt(), statements)
+	}
+}
+
+func TestProgrammaticAccessTokenActionSurvivesReadbackPrivilegeDenial(t *testing.T) {
+	var statements []string
+	provider := serveCredentialIssueMock(t, credentialIssueMock{
+		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
+		showTokenName: "c1-request-1", denyPrefix: "SHOW USER PROGRAMMATIC ACCESS TOKENS",
+		statements: &statements,
+	})
+	defer provider.Close()
+	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, secret, _, err := newCredentialUserBuilder(client, secretOptions{}).issueProgrammaticAccessTokenAction(
+		context.Background(), patActionArgs(t, "service-user", "request-1", nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := actions.GetResourceFieldArg(public, patActionIssuedResourceReturn); !ok || len(secret) != 1 {
+		t.Fatalf("action lost issued resource or secret after readback denial: %#v, %#v", public, secret)
+	}
+	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
+		t.Fatalf("action revoked issued PAT after a readback-only denial: %q", statements)
 	}
 }
 
