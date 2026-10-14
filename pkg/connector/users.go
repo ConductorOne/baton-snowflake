@@ -78,7 +78,7 @@ func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.C
 	}.Build(), nil, nil
 }
 
-func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (*connectorbuilder.CredentialIssueOutput, error) {
+func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (_ *connectorbuilder.CredentialIssueOutput, issueErr error) {
 	if input == nil || input.IdentityID == nil || input.IdentityID.ResourceType != userResourceType.Id || input.IdentityID.Resource == "" {
 		return nil, fmt.Errorf("baton-snowflake: a Snowflake user identity is required")
 	}
@@ -144,10 +144,25 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: create programmatic access token; provider outcome may be unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
-	// The PAT now exists, but Snowflake removes by mutable name only. A failed
-	// readback or later conversion cannot prove that the name still identifies
-	// this PAT rather than a replacement after rename. Leave reconciliation to
-	// the caller instead of a name-only cleanup that could remove another PAT.
+	// A successful readback locates the newly created PAT by its recorded name.
+	// Keep the historical cleanup for subsequent failures with a located target,
+	// while leaving a missing/ambiguous name for manual reconciliation. Snowflake
+	// has no immutable-ID predicate, so external rename/name reuse remains a
+	// limitation of this name-based spike.
+	located := false
+	issued := false
+	defer func() {
+		if issued || !located {
+			return
+		}
+		if rmErr := o.client.RemoveProgrammaticAccessTokenStrict(
+			context.WithoutCancel(ctx), input.IdentityID.Resource, tokenName,
+		); rmErr != nil {
+			issueErr = errors.Join(issueErr, fmt.Errorf(
+				"baton-snowflake: cleanup of located programmatic access token failed; outcome unknown, verify/reconcile in Snowflake before retry: %w", rmErr,
+			))
+		}
+	}()
 
 	issuedTokens, err := o.client.ListProgrammaticAccessTokens(ctx, input.IdentityID.Resource)
 	switch {
@@ -157,6 +172,7 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			if token.Name == tokenName {
 				expiresAt = token.ExpiresAt
 				found = true
+				located = true
 				break
 			}
 		}
@@ -164,7 +180,7 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake; outcome unknown, verify/reconcile in Snowflake before retry")
 		}
 		if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
-			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry; outcome unknown, verify/reconcile in Snowflake before retry")
+			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
 		}
 	case snowflake.IsInsufficientPrivileges(err):
 		// Reading the token back needs ownership or MODIFY PROGRAMMATIC AUTHENTICATION
@@ -182,18 +198,19 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 
 	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
 	if err != nil {
-		return nil, fmt.Errorf("baton-snowflake: build issued token resource; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: build issued token resource: %w", err)
 	}
 	plaintextBytes := []byte(plaintext)
 	plaintextName := "token"
 	if nativeAPIKey {
 		plaintextBytes, err = encodeNativeProgrammaticAccessToken(plaintext)
 		if err != nil {
-			return nil, fmt.Errorf("baton-snowflake: encode issued token; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
+			return nil, fmt.Errorf("baton-snowflake: encode issued token: %w", err)
 		}
 		plaintextName = "api_key_v2"
 	}
 
+	issued = true
 	return &connectorbuilder.CredentialIssueOutput{
 		Secret: secret,
 		PlaintextData: []*v2.PlaintextData{

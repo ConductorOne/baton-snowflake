@@ -457,6 +457,44 @@ func TestCredentialUserBuilderIssueDoesNotRemoveAnotherTokenAfterReadbackMismatc
 	}
 }
 
+func TestCredentialUserBuilderIssueCleansUpLocatedTokenAfterLateExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		removeMissing bool
+	}{
+		{name: "strict cleanup succeeds"},
+		{name: "strict cleanup fails and reports unknown", removeMissing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var statements []string
+			server := serveCredentialIssueMock(t, credentialIssueMock{
+				userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
+				showTokenName: "c1-request-1", removeMissing: tc.removeMissing, statements: &statements,
+			})
+			defer server.Close()
+			client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
+				IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
+				RequestID:  "request-1",
+				ExpiresAt:  timestamppb.New(time.Now().Add(2 * 24 * time.Hour)),
+			})
+			if err == nil || !strings.Contains(err.Error(), "provider expiry exceeds requested expiry") {
+				t.Fatalf("Issue() error = %v, want provider expiry refusal", err)
+			}
+			if tc.removeMissing && !strings.Contains(err.Error(), "cleanup of located programmatic access token failed; outcome unknown") {
+				t.Fatalf("cleanup failure was hidden: %v", err)
+			}
+			if !containsStatement(statements, `ALTER USER "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`) ||
+				containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS") {
+				t.Fatalf("located token cleanup did not use strict REMOVE: %q", statements)
+			}
+		})
+	}
+}
+
 func TestCredentialUserBuilderIssueKeepsTokenWhenReadBackIsDenied(t *testing.T) {
 	// SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER needs ownership or MODIFY
 	// PROGRAMMATIC AUTHENTICATION METHODS on the target user; creating the token

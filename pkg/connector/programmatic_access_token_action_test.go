@@ -174,7 +174,7 @@ func TestProgrammaticAccessTokenActionRejectsInvalidInputBeforeSnowflake(t *test
 	}
 }
 
-func TestProgrammaticAccessTokenActionJWEAndFailClosedDelete(t *testing.T) {
+func TestProgrammaticAccessTokenActionJWEAndDelete(t *testing.T) {
 	var statements []string
 	provider := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
 	defer provider.Close()
@@ -227,12 +227,12 @@ func TestProgrammaticAccessTokenActionJWEAndFailClosedDelete(t *testing.T) {
 		trait.GetIdentityId().GetResource() != "service-user" || trait.GetExpiresAt() == nil {
 		t.Fatalf("issued secret trait = %#v, found %v, err %v", trait, found, err)
 	}
-	if _, err := newProgrammaticAccessTokenBuilder(client).Delete(ctx, issued.GetId(), nil); err == nil ||
-		!strings.Contains(err.Error(), "verify/reconcile in Snowflake") {
-		t.Fatalf("name-only delete = %v, want manual reconciliation", err)
+	if _, err := newProgrammaticAccessTokenBuilder(client).Delete(ctx, issued.GetId(), issued.GetParentResourceId()); err != nil {
+		t.Fatalf("delete located PAT: %v", err)
 	}
-	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("name-only delete sent provider mutation: %q", statements)
+	if !containsStatement(statements, `ALTER USER "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`) ||
+		containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS") {
+		t.Fatalf("delete did not use strict provider statement: %q", statements)
 	}
 }
 
@@ -372,10 +372,30 @@ func TestProgrammaticAccessTokenActionPendingStatusRetainsEncryptedResult(t *tes
 	t.Fatal("action did not settle")
 }
 
-func TestProgrammaticAccessTokenDeleteFailsClosedForAmbiguousName(t *testing.T) {
-	// The same recorded handle can designate the original PAT or a replacement
-	// created after an administrator renamed the original. No provider read can
-	// atomically distinguish those identities before a name-only REMOVE.
+func TestProgrammaticAccessTokenDeleteMissingNameFailsVisibly(t *testing.T) {
+	var statements []string
+	provider := serveCredentialIssueMock(t, credentialIssueMock{
+		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
+		showTokenName: "renamed-token", removeMissing: true, statements: &statements,
+	})
+	defer provider.Close()
+	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := v2.ResourceId_builder{ResourceType: programmaticAccessTokenResourceType.Id, Resource: programmaticAccessTokenID("service-user", "c1-request-1")}.Build()
+	_, err = newProgrammaticAccessTokenBuilder(client).Delete(context.Background(), id, nil)
+	if err == nil || !strings.Contains(err.Error(), "may already have been deleted or renamed") ||
+		!strings.Contains(err.Error(), "verify/reconcile in Snowflake") {
+		t.Fatalf("missing-name delete error = %v, want reconciliation guidance", err)
+	}
+	if !containsStatement(statements, `ALTER USER "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`) ||
+		containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS") {
+		t.Fatalf("missing-name delete did not use strict REMOVE: %q", statements)
+	}
+}
+
+func TestProgrammaticAccessTokenDeleteRejectsParentMismatchBeforeProviderCall(t *testing.T) {
 	var statements []string
 	provider := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
 	defer provider.Close()
@@ -384,12 +404,9 @@ func TestProgrammaticAccessTokenDeleteFailsClosedForAmbiguousName(t *testing.T) 
 		t.Fatal(err)
 	}
 	id := v2.ResourceId_builder{ResourceType: programmaticAccessTokenResourceType.Id, Resource: programmaticAccessTokenID("service-user", "c1-request-1")}.Build()
-	_, err = newProgrammaticAccessTokenBuilder(client).Delete(context.Background(), id, nil)
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "may already have been deleted or renamed") ||
-		!strings.Contains(err.Error(), "verify/reconcile in Snowflake") {
-		t.Fatalf("ambiguous delete error = %v, want fail-closed guidance", err)
-	}
-	if len(statements) != 0 {
-		t.Fatalf("ambiguous delete contacted provider: %q", statements)
+	wrongParent := v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "other-user"}.Build()
+	_, err = newProgrammaticAccessTokenBuilder(client).Delete(context.Background(), id, wrongParent)
+	if status.Code(err) != codes.FailedPrecondition || len(statements) != 0 {
+		t.Fatalf("parent mismatch error = %v, statements = %q", err, statements)
 	}
 }
