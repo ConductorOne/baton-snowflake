@@ -142,28 +142,12 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 
 	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, roleRestriction, days)
 	if err != nil {
-		return nil, fmt.Errorf("baton-snowflake: create programmatic access token: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: create programmatic access token; provider outcome may be unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
-
-	// The token now exists in Snowflake. Every failure below discards the plaintext
-	// without recording a secret resource, so without this the credential is left
-	// live and unreferenced: the SDK does not retry issuance, and nothing else
-	// holds a handle to revoke it.
-	issued := false
-	defer func() {
-		if issued {
-			return
-		}
-		// Detached from ctx so cleanup still runs when the caller's context is done.
-		if rmErr := o.client.RemoveProgrammaticAccessToken(
-			context.WithoutCancel(ctx), input.IdentityID.Resource, tokenName,
-		); rmErr != nil {
-			ctxzap.Extract(ctx).Error("baton-snowflake: failed to remove orphaned programmatic access token",
-				zap.String("username", input.IdentityID.Resource),
-				zap.String("token_name", tokenName),
-				zap.Error(rmErr))
-		}
-	}()
+	// The PAT now exists, but Snowflake removes by mutable name only. A failed
+	// readback or later conversion cannot prove that the name still identifies
+	// this PAT rather than a replacement after rename. Leave reconciliation to
+	// the caller instead of a name-only cleanup that could remove another PAT.
 
 	issuedTokens, err := o.client.ListProgrammaticAccessTokens(ctx, input.IdentityID.Resource)
 	switch {
@@ -177,10 +161,10 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake")
+			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake; outcome unknown, verify/reconcile in Snowflake before retry")
 		}
 		if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
-			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
+			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry; outcome unknown, verify/reconcile in Snowflake before retry")
 		}
 	case snowflake.IsInsufficientPrivileges(err):
 		// Reading the token back needs ownership or MODIFY PROGRAMMATIC AUTHENTICATION
@@ -193,24 +177,23 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			zap.String("username", input.IdentityID.Resource),
 			zap.Time("estimated_expires_at", expiresAt))
 	default:
-		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
 
 	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("baton-snowflake: build issued token resource; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
 	plaintextBytes := []byte(plaintext)
 	plaintextName := "token"
 	if nativeAPIKey {
 		plaintextBytes, err = encodeNativeProgrammaticAccessToken(plaintext)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("baton-snowflake: encode issued token; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 		}
 		plaintextName = "api_key_v2"
 	}
 
-	issued = true
 	return &connectorbuilder.CredentialIssueOutput{
 		Secret: secret,
 		PlaintextData: []*v2.PlaintextData{

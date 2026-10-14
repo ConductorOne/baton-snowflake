@@ -11,8 +11,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -88,31 +86,16 @@ func (o *credentialUserBuilder) issueProgrammaticAccessTokenAction(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	converted := false
-	defer func() {
-		if converted {
-			return
-		}
-		// Issue has already minted the PAT. If adapting its result fails, remove
-		// the token before the SDK sees a failed action without a resource handle.
-		if rmErr := o.client.RemoveProgrammaticAccessToken(
-			context.WithoutCancel(ctx), input.IdentityID.Resource, "c1-"+input.RequestID,
-		); rmErr != nil {
-			ctxzap.Extract(ctx).Error("baton-snowflake: failed to remove token after action result conversion",
-				zap.String("username", input.IdentityID.Resource), zap.Error(rmErr))
-		}
-	}()
 	if output.Secret.GetId().GetResourceType() != programmaticAccessTokenResourceType.Id ||
 		len(output.PlaintextData) != 1 || output.PlaintextData[0].GetName() != patActionNativeReturnName {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: issued token action returned an unexpected credential shape")
+		return nil, nil, nil, fmt.Errorf("baton-snowflake: issued token action returned an unexpected credential shape; outcome unknown, verify/reconcile in Snowflake before retry")
 	}
 	resourceField, err := actions.NewResourceReturnField(patActionIssuedResourceReturn, output.Secret)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: encode issued token resource: %w", err)
+		return nil, nil, nil, fmt.Errorf("baton-snowflake: encode issued token resource; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
 	response := &structpb.Struct{Fields: map[string]*structpb.Value{resourceField.Key: resourceField.Value}}
 	output.PlaintextData[0].SetSchema("api_key_v2")
-	converted = true
 	return response, output.PlaintextData, output.Annotations, nil
 }
 

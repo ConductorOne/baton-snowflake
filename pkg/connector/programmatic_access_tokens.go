@@ -11,6 +11,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type programmaticAccessTokenBuilder struct {
@@ -69,18 +71,19 @@ func (o *programmaticAccessTokenBuilder) Grants(context.Context, *v2.Resource, r
 }
 
 func (o *programmaticAccessTokenBuilder) Delete(ctx context.Context, resourceID *v2.ResourceId, _ *v2.ResourceId) (annotations.Annotations, error) {
-	userName, tokenName, err := parseProgrammaticAccessTokenID(resourceID.GetResource())
+	if resourceID == nil || resourceID.GetResourceType() != programmaticAccessTokenResourceType.Id {
+		return nil, status.Error(codes.InvalidArgument, "baton-snowflake: a programmatic access token resource id is required")
+	}
+	_, _, err := parseProgrammaticAccessTokenID(resourceID.GetResource())
 	if err != nil {
 		return nil, err
 	}
-	// Snowflake PAT names can change. Do not use IF EXISTS for either the user
-	// or token: a stale handle must produce an error, never a successful no-op.
-	// This also avoids requiring SHOW privileges that legacy revocation did not
-	// need. A missing name cannot distinguish prior deletion from rename.
-	if err := o.client.RemoveProgrammaticAccessTokenStrict(ctx, userName, tokenName); err != nil {
-		return nil, fmt.Errorf("baton-snowflake: could not confirm programmatic access token revocation; manual reconciliation may be required: %w", err)
-	}
-	return nil, nil
+	// Snowflake removes PATs by mutable name, with no credential-ID predicate.
+	// A renamed PAT may be replaced under its old name, so even a fresh SHOW
+	// cannot prove the current name still identifies this credential at REMOVE.
+	// Fail before a provider mutation rather than delete another credential.
+	return nil, status.Error(codes.FailedPrecondition,
+		"baton-snowflake: cannot verify the original programmatic access token from its recorded name; it may already have been deleted or renamed; verify/reconcile in Snowflake")
 }
 
 func newProgrammaticAccessTokenResource(identityID *v2.ResourceId, tokenName string, expiresAt time.Time) (*v2.Resource, error) {

@@ -16,6 +16,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/crypto/providers/jwe"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -172,7 +174,7 @@ func TestProgrammaticAccessTokenActionRejectsInvalidInputBeforeSnowflake(t *test
 	}
 }
 
-func TestProgrammaticAccessTokenActionJWEAndDelete(t *testing.T) {
+func TestProgrammaticAccessTokenActionJWEAndFailClosedDelete(t *testing.T) {
 	var statements []string
 	provider := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
 	defer provider.Close()
@@ -225,12 +227,12 @@ func TestProgrammaticAccessTokenActionJWEAndDelete(t *testing.T) {
 		trait.GetIdentityId().GetResource() != "service-user" || trait.GetExpiresAt() == nil {
 		t.Fatalf("issued secret trait = %#v, found %v, err %v", trait, found, err)
 	}
-	if _, err := newProgrammaticAccessTokenBuilder(client).Delete(ctx, issued.GetId(), nil); err != nil {
-		t.Fatalf("delete issued PAT: %v", err)
+	if _, err := newProgrammaticAccessTokenBuilder(client).Delete(ctx, issued.GetId(), nil); err == nil ||
+		!strings.Contains(err.Error(), "verify/reconcile in Snowflake") {
+		t.Fatalf("name-only delete = %v, want manual reconciliation", err)
 	}
-	if !containsStatement(statements, `ALTER USER "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`) ||
-		containsStatement(statements, `REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS`) {
-		t.Fatalf("delete did not use strict provider statement: %q", statements)
+	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
+		t.Fatalf("name-only delete sent provider mutation: %q", statements)
 	}
 }
 
@@ -370,12 +372,12 @@ func TestProgrammaticAccessTokenActionPendingStatusRetainsEncryptedResult(t *tes
 	t.Fatal("action did not settle")
 }
 
-func TestProgrammaticAccessTokenDeleteStaleNameNeedsReconciliation(t *testing.T) {
+func TestProgrammaticAccessTokenDeleteFailsClosedForAmbiguousName(t *testing.T) {
+	// The same recorded handle can designate the original PAT or a replacement
+	// created after an administrator renamed the original. No provider read can
+	// atomically distinguish those identities before a name-only REMOVE.
 	var statements []string
-	provider := serveCredentialIssueMock(t, credentialIssueMock{
-		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
-		showTokenName: "renamed-token", removeMissing: true, statements: &statements,
-	})
+	provider := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
 	defer provider.Close()
 	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
 	if err != nil {
@@ -383,11 +385,11 @@ func TestProgrammaticAccessTokenDeleteStaleNameNeedsReconciliation(t *testing.T)
 	}
 	id := v2.ResourceId_builder{ResourceType: programmaticAccessTokenResourceType.Id, Resource: programmaticAccessTokenID("service-user", "c1-request-1")}.Build()
 	_, err = newProgrammaticAccessTokenBuilder(client).Delete(context.Background(), id, nil)
-	if err == nil || !strings.Contains(err.Error(), "manual reconciliation") {
-		t.Fatalf("stale name delete error = %v, want uncertain outcome", err)
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "may already have been deleted or renamed") ||
+		!strings.Contains(err.Error(), "verify/reconcile in Snowflake") {
+		t.Fatalf("ambiguous delete error = %v, want fail-closed guidance", err)
 	}
-	if !containsStatement(statements, `ALTER USER "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`) ||
-		containsStatement(statements, "SHOW USER PROGRAMMATIC ACCESS TOKENS") {
-		t.Fatalf("stale name used an unsafe or privilege-expanding revoke path: %q", statements)
+	if len(statements) != 0 {
+		t.Fatalf("ambiguous delete contacted provider: %q", statements)
 	}
 }

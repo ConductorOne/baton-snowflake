@@ -430,10 +430,10 @@ func TestCredentialUserBuilderIssueServiceUserWithNullDefaultRoleReportsMissingR
 	}
 }
 
-func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *testing.T) {
-	// Every failure after creation must remove the token. Otherwise the plaintext is
-	// discarded, no secret resource is recorded, the SDK does not retry, and the
-	// credential is left live with nothing holding a handle to revoke it.
+func TestCredentialUserBuilderIssueDoesNotRemoveAnotherTokenAfterReadbackMismatch(t *testing.T) {
+	// The recorded name may have been changed and reused after creation. A
+	// name-only cleanup could revoke that replacement, so an ambiguous result
+	// needs manual reconciliation and must not send REMOVE.
 	var statements []string
 	server := newCredentialIssueMockServerWithShowName(t, "SERVICE", "service_role", true, "some-other-token", &statements)
 	defer server.Close()
@@ -446,14 +446,14 @@ func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *te
 		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
 		RequestID:  "request-1",
 	})
-	if err == nil {
-		t.Fatal("Issue() error = nil, want failure when the provider does not return the token")
+	if err == nil || !strings.Contains(err.Error(), "outcome unknown") || !strings.Contains(err.Error(), "verify/reconcile in Snowflake") {
+		t.Fatalf("Issue() error = %v, want reconciliation after readback mismatch", err)
 	}
 	if !containsStatement(statements, "ADD PROGRAMMATIC ACCESS TOKEN") {
 		t.Fatalf("test did not reach token creation: %q", statements)
 	}
-	if !containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("Issue() left the created token orphaned: %q", statements)
+	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
+		t.Fatalf("Issue() sent a name-only REMOVE after a mismatched readback: %q", statements)
 	}
 }
 
