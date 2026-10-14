@@ -345,6 +345,120 @@ func (c *Client) GetStatementPartition(ctx context.Context, statementHandle stri
 	)
 }
 
+// fetchRemainingPartitions GETs partitions 1..numPartitions-1 of a statement whose partition 0
+// already arrived (inline on the POST, or via the plain handle GET) and returns their rows,
+// combined in partition order, plus the number of rows actually fetched from each one (so the
+// caller can compare them against the counts Snowflake declared).
+//
+// Only partition 0 carries resultSetMetadata (Snowflake does not repeat the column layout on
+// later partitions), so callers append the returned rows directly onto the partition-0 response's
+// Data field and keep parsing with that response's RowTypes, rather than decoding each partition
+// into a RowTypes of its own.
+//
+// numPartitions is the caller's own len(ResultSetMetadata.PartitionInfo) read on the partition-0
+// response; a result with <= 1 partitions has nothing left to fetch and should not call this.
+func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, numPartitions int) ([][]string, []int, error) {
+	var rows [][]string
+	var fetchedRowCounts []int
+	for partitionID := 1; partitionID < numPartitions; partitionID++ {
+		req, err := c.GetStatementPartition(ctx, handle, partitionID)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		var partition StatementsApiResponseBase
+		var apiErr SnowflakeError
+		resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(&apiErr))
+		closeResponseBody(resp)
+		if err != nil {
+			return nil, nil, dedupeAPIError(err)
+		}
+
+		rows = append(rows, partition.Data...)
+		fetchedRowCounts = append(fetchedRowCounts, len(partition.Data))
+	}
+	return rows, fetchedRowCounts, nil
+}
+
+// drainRemainingPartitions checks resp (already populated from a statement's partition-0 reply -
+// inline on the POST, or via the plain handle GET) for additional partitions and, if present,
+// fetches and appends them to resp.Data so callers get the complete result from a single
+// resp.ListX()-style call afterward.
+//
+// Snowflake splits large results into additional partitions by response byte size, not row
+// count, so even a small page can span several. Only partition 0 is returned inline; this
+// function fetches the rest so callers see the complete result.
+//
+// A multi-partition result is an expected condition, so it is logged at Info. A drain whose row
+// count still disagrees with the count Snowflake declared returns an error: a short page would
+// otherwise be read by paginated callers as the last page and silently end pagination.
+func (c *Client) drainRemainingPartitions(ctx context.Context, op string, resp *StatementsApiResponseBase, extra ...zap.Field) error {
+	l := ctxzap.Extract(ctx)
+	numPartitions := len(resp.ResultSetMetadata.PartitionInfo)
+
+	if numPartitions <= 1 {
+		// No declared second partition, but a response can still under-report its own row
+		// count without ever claiming more than one partition (e.g. partitionInfo omitted
+		// entirely, or present with a single zero-length entry). This is the no-extra-request
+		// version of the invariant check below, and it has to fail the same way that one does:
+		// a short page here is read by every paginated caller (ListTablesInSchema, ListUsers,
+		// ...) as "this is the last page," which stops pagination and silently drops every
+		// later page too - the exact amplified failure mode this whole fix exists to close, so
+		// a Warn-and-continue here would just recreate it under a different condition.
+		if resp.ResultSetMetadata.NumRows > 0 && len(resp.Data) != resp.ResultSetMetadata.NumRows {
+			return fmt.Errorf("baton-snowflake: %s: got %d rows but Snowflake declared %d (statementHandle=%s)",
+				op, len(resp.Data), resp.ResultSetMetadata.NumRows, resp.StatementHandle)
+		}
+		return nil
+	}
+
+	if resp.StatementHandle == "" {
+		return fmt.Errorf("baton-snowflake: %s: result spans %d partitions but has no statement handle", op, numPartitions)
+	}
+
+	declaredRowCounts := make([]int, numPartitions)
+	for i, p := range resp.ResultSetMetadata.PartitionInfo {
+		declaredRowCounts[i] = p.RowCount
+	}
+	partition0Rows := len(resp.Data)
+
+	baseFields := append([]zap.Field{
+		zap.String("op", op),
+		zap.String("statementHandle", resp.StatementHandle),
+		zap.Int("numPartitions", numPartitions),
+		zap.Int("numRows", resp.ResultSetMetadata.NumRows),
+		zap.Ints("declaredPartitionRowCounts", declaredRowCounts),
+	}, extra...)
+	l.Info("snowflake: statement result spans multiple partitions, fetching remaining pages", baseFields...)
+
+	rest, restRowCounts, err := c.fetchRemainingPartitions(ctx, resp.StatementHandle, numPartitions)
+	if err != nil {
+		return fmt.Errorf("baton-snowflake: failed to fetch remaining partitions for %s: %w", op, err)
+	}
+	resp.Data = append(resp.Data, rest...)
+
+	fetchedRowCounts := append([]int{partition0Rows}, restRowCounts...)
+	totalRows := len(resp.Data)
+	if resp.ResultSetMetadata.NumRows > 0 && totalRows != resp.ResultSetMetadata.NumRows {
+		// The condition worth caring about: the partition walk ran to completion by its own
+		// accounting (every declared partition was fetched without error) and still didn't add
+		// up to the row count Snowflake declared up front. That means either a partition
+		// under-reported its own rows, or NumRows/PartitionInfo disagree in some other way this
+		// code wasn't written against - a case the simple "numPartitions > 1" check above
+		// cannot catch on its own. The error carries declared vs fetched per-partition counts
+		// directly, rather than also logging them here - this failure already propagates to the
+		// caller, which logs it; a second log line at this level would just duplicate it.
+		return fmt.Errorf("baton-snowflake: %s: fetched %d rows across %d partitions (declared=%v fetched=%v) but Snowflake declared %d total (statementHandle=%s)",
+			op, totalRows, numPartitions, declaredRowCounts, fetchedRowCounts, resp.ResultSetMetadata.NumRows, resp.StatementHandle)
+	}
+
+	l.Info("snowflake: finished draining statement result partitions", append(baseFields,
+		zap.Ints("fetchedPartitionRowCounts", fetchedRowCounts),
+		zap.Int("totalRowsFetched", totalRows),
+	)...)
+	return nil
+}
+
 func Contains[T comparable](ts []T, val T) bool {
 	for _, t := range ts {
 		if t == val {

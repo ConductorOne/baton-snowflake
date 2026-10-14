@@ -104,7 +104,17 @@ func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, to
 }
 
 func (c *Client) executeStatement(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
-	return c.executeStatementWithRole(ctx, statement, "")
+	result, err := c.executeStatementWithRole(ctx, statement, "")
+	if err != nil {
+		return nil, err
+	}
+	// No statement text in the log context: these statements carry usernames (often emails) and
+	// token names. When a result spans multiple partitions, drainRemainingPartitions logs the
+	// statementHandle, which is enough to correlate a log line back to the request.
+	if err := c.drainRemainingPartitions(ctx, "executeStatement", result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // executeStatementAsUserAdmin runs a statement that mutates another user. The session's

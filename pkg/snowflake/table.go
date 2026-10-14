@@ -113,6 +113,11 @@ func (c *Client) ListSchemasInDatabase(ctx context.Context, databaseName string)
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListSchemasInDatabase", &response.StatementsApiResponseBase,
+		zap.String("database", databaseName)); err != nil {
+		return nil, err
+	}
+
 	return response.ListSchemas()
 }
 
@@ -233,6 +238,11 @@ func (c *Client) ListTablesInSchema(ctx context.Context, databaseName, schemaNam
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListTablesInSchema", &response.StatementsApiResponseBase,
+		zap.String("database", databaseName), zap.String("schema", schemaName)); err != nil {
+		return nil, "", err
+	}
+
 	tables, err := response.ListTables()
 	if err != nil {
 		return nil, "", err
@@ -310,6 +320,11 @@ func (c *Client) GetTable(ctx context.Context, database, schema, tableName strin
 		if err != nil {
 			return nil, dedupeAPIError(err)
 		}
+	}
+
+	if err := c.drainRemainingPartitions(ctx, "GetTable", &response.StatementsApiResponseBase,
+		zap.String("database", database), zap.String("schema", schema), zap.String("table", tableName)); err != nil {
+		return nil, err
 	}
 
 	tables, err := response.ListTables()

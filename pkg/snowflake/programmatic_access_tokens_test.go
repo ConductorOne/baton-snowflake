@@ -238,3 +238,48 @@ func TestRoleGrantedToUserMatchesQuotedIdentifiers(t *testing.T) {
 		})
 	}
 }
+
+// TestRoleGrantedToUser_FindsRoleInLaterPartition is the regression guard for a real functional
+// bug this closes, not just an undercount: a user with enough grants to split SHOW GRANTS TO USER
+// across partitions could have the target role land in partition 1+ rather than 0. Before
+// executeStatement drained remaining partitions, that role was invisible to
+// RoleGrantedToUser - a granted role reported as not granted, which blocks programmatic access
+// token issuance (see pkg/connector/users.go) for a user who is actually entitled to it.
+func TestRoleGrantedToUser_FindsRoleInLaterPartition(t *testing.T) {
+	const handle = "handle-user-grants"
+	columns := []map[string]interface{}{
+		{"name": "granted_on", "type": "text"},
+		{"name": "name", "type": "text"},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"statementHandle": handle,
+				"resultSetMetadata": map[string]interface{}{
+					"numRows":       2,
+					"rowType":       columns,
+					"partitionInfo": []map[string]interface{}{{"rowCount": 1}, {"rowCount": 1}},
+				},
+				"data": [][]string{{"ROLE", "UNRELATED_ROLE"}},
+			})
+		case http.MethodGet:
+			require.Equal(t, "1", r.URL.Query().Get("partition"))
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": [][]string{{"ROLE", "TARGET_ROLE"}},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	got, err := client.RoleGrantedToUser(context.Background(), "svc", "TARGET_ROLE")
+	require.NoError(t, err)
+	require.True(t, got, "TARGET_ROLE is granted, just reported in partition 1 - it must still be found")
+}

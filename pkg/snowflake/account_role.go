@@ -125,6 +125,10 @@ func (c *Client) ListAccountRoles(ctx context.Context, cursor string, limit int)
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListAccountRoles", &response.StatementsApiResponseBase); err != nil {
+		return nil, err
+	}
+
 	accountRoles, err := response.GetAccountRoles()
 	if err != nil {
 		return nil, err
