@@ -410,3 +410,24 @@ func TestProgrammaticAccessTokenDeleteRejectsParentMismatchBeforeProviderCall(t 
 		t.Fatalf("parent mismatch error = %v, statements = %q", err, statements)
 	}
 }
+
+func TestProgrammaticAccessTokenDeletePreservesPrivilegeError(t *testing.T) {
+	var statements []string
+	provider := serveCredentialIssueMock(t, credentialIssueMock{
+		denyPrefix: `ALTER USER "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN`,
+		statements: &statements,
+	})
+	defer provider.Close()
+	client, err := snowflake.New(provider.URL, snowflake.JWTConfig{}, provider.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := v2.ResourceId_builder{ResourceType: programmaticAccessTokenResourceType.Id, Resource: programmaticAccessTokenID("service-user", "c1-request-1")}.Build()
+	_, err = newProgrammaticAccessTokenBuilder(client).Delete(context.Background(), id, nil)
+	if !snowflake.IsInsufficientPrivileges(err) || !strings.Contains(err.Error(), "if Snowflake reports the recorded name missing") {
+		t.Fatalf("privilege error was mislabeled or lost: %v", err)
+	}
+	if !containsStatement(statements, `REMOVE PROGRAMMATIC ACCESS TOKEN "c1-request-1";`) {
+		t.Fatalf("test did not reach provider revoke: %q", statements)
+	}
+}

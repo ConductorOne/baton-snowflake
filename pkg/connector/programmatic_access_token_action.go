@@ -2,7 +2,6 @@ package connector
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -78,7 +77,7 @@ func (o *credentialUserBuilder) ResourceActions(ctx context.Context, registry ac
 func (o *credentialUserBuilder) issueProgrammaticAccessTokenAction(
 	ctx context.Context,
 	args *structpb.Struct,
-) (_ *structpb.Struct, _ []*v2.PlaintextData, _ annotations.Annotations, actionErr error) {
+) (*structpb.Struct, []*v2.PlaintextData, annotations.Annotations, error) {
 	input, err := parseProgrammaticAccessTokenActionArgs(args, time.Now().UTC())
 	if err != nil {
 		return nil, nil, nil, err
@@ -87,32 +86,19 @@ func (o *credentialUserBuilder) issueProgrammaticAccessTokenAction(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	converted := false
-	defer func() {
-		if converted {
-			return
-		}
-		// Issue returned a located credential. Preserve cleanup if adapting that
-		// known result fails before the SDK encrypts it.
-		if rmErr := o.client.RemoveProgrammaticAccessTokenStrict(
-			context.WithoutCancel(ctx), input.IdentityID.Resource, "c1-"+input.RequestID,
-		); rmErr != nil {
-			actionErr = errors.Join(actionErr, fmt.Errorf(
-				"baton-snowflake: action result cleanup failed; outcome unknown, verify/reconcile in Snowflake before retry: %w", rmErr,
-			))
-		}
-	}()
+	// Issue can succeed when SHOW is denied; a returned resource alone does not
+	// prove a readback-located name. If conversion fails, leave reconciliation
+	// to the caller rather than guessing which name to remove.
 	if output.Secret.GetId().GetResourceType() != programmaticAccessTokenResourceType.Id ||
 		len(output.PlaintextData) != 1 || output.PlaintextData[0].GetName() != patActionNativeReturnName {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: issued token action returned an unexpected credential shape")
+		return nil, nil, nil, fmt.Errorf("baton-snowflake: issued token action returned an unexpected credential shape; outcome unknown, verify/reconcile in Snowflake before retry")
 	}
 	resourceField, err := actions.NewResourceReturnField(patActionIssuedResourceReturn, output.Secret)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("baton-snowflake: encode issued token resource: %w", err)
+		return nil, nil, nil, fmt.Errorf("baton-snowflake: encode issued token resource; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
 	response := &structpb.Struct{Fields: map[string]*structpb.Value{resourceField.Key: resourceField.Value}}
 	output.PlaintextData[0].SetSchema("api_key_v2")
-	converted = true
 	return response, output.PlaintextData, output.Annotations, nil
 }
 

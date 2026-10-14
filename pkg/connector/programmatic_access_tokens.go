@@ -87,7 +87,7 @@ func (o *programmaticAccessTokenBuilder) Delete(ctx context.Context, resourceID 
 	// A different PAT created later with the same name cannot be distinguished
 	// by this API; external rename/name reuse remains a documented limitation.
 	if err := o.client.RemoveProgrammaticAccessTokenStrict(ctx, userName, tokenName); err != nil {
-		return nil, fmt.Errorf("baton-snowflake: programmatic access token may already have been deleted or renamed; verify/reconcile in Snowflake: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: programmatic access token removal failed; if Snowflake reports the recorded name missing, it may already have been deleted or renamed; verify/reconcile in Snowflake: %w", err)
 	}
 	return nil, nil
 }
