@@ -28,12 +28,14 @@ The Snowflake connector supports [account provisioning](/product/admin/account-p
 
 ### Issuing programmatic access tokens
 
-Enable **Issue credentials** to let the connector issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and revoke one it has issued. Issued tokens appear as **Programmatic access token** resources alongside the user they belong to once that resource type is enabled (see the note below).
+Enable **Issue credentials** to let the connector issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user and revoke it by its recorded name. Issued tokens appear as **Programmatic access token** resources alongside the user they belong to once that resource type is enabled (see the note below).
 
-**Issue credentials** and **Sync secrets** are independent. Enabling **Issue credentials** lets the connector mint and revoke programmatic access tokens, and nothing else; enabling **Sync secrets** inventories Snowflake secrets and RSA public keys without granting the ability to mint tokens. Existing programmatic access tokens are inventoried through the opt-in **Programmatic access token** resource type.
+The existing **Token** issuance option remains the default and returns the raw PAT. The **API key** option returns the same Snowflake credential as `api_key_v2` JSON (`key_value`, `provider`, and `header_name`) for clients that support that profile. Both options use the same **Programmatic access token** inventory and recorded-name revoke path. Snowflake REST and SQL API calls send the token as `Authorization: Bearer <token>`; the profile's `header_name` identifies the header, while the caller supplies the `Bearer` scheme.
+
+**Issue credentials** and **Sync secrets** are independent. Enabling **Issue credentials** lets the connector mint and revoke programmatic access tokens; enabling **Sync secrets** inventories Snowflake secrets and RSA public keys without granting the ability to mint tokens. Existing programmatic access tokens are inventoried through the opt-in **Programmatic access token** resource type.
 
 <Note>
-**Inventorying programmatic access tokens requires a privilege on each user.** The **Programmatic access token** resource type is opt-in: enable it in C1 when you want existing tokens in your inventory. While it is enabled, the sync runs `SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER` for each user in the account, and Snowflake requires ownership of that user or the `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` privilege on it. When the connector's role has neither, the sync fails with an error naming that user instead of silently dropping previously synced tokens — those tokens stay live in Snowflake, and C1 needs its records to keep offering revocation for them. Grant the privilege with `GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <name> TO ROLE <connector-role>` (or transfer ownership of the user) before enabling the type.
+**Inventorying programmatic access tokens requires a privilege on each user.** The **Programmatic access token** resource type is opt-in: enable it in C1 when you want existing tokens in your inventory. While it is enabled, the sync runs `SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER` for each user in the account, and Snowflake requires ownership of that user or the `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` privilege on it. When the connector's role has neither, the sync fails with an error naming that user instead of silently dropping previously synced tokens — those tokens stay live in Snowflake. Grant the privilege with `GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <name> TO ROLE <connector-role>` (or transfer ownership of the user) before enabling the type.
 </Note>
 
 Token lifetime is set by the requester. Snowflake accepts whole days only, and the connector rounds down so a token never outlives the requested expiry. The minimum is one day and the maximum is one year; when no expiry is requested the token lasts 15 days.
@@ -61,13 +63,17 @@ Connector actions are custom capabilities that extend C1 automations with app-sp
 | Automation step | Actions offered | How the target is selected |
 |-----------------|-----------------|----------------------------|
 | Account lifecycle action | `enable_user`, `disable_user` | The step's own target-account selector — either the account in context or a specific account. C1 resolves `user_id` from that account. |
+| User resource action | `issue_programmatic_access_token` | The caller supplies the Snowflake user resource as `user_id`. The action is registered when **Issue credentials** is enabled. |
 
-Both actions accept the following fields:
+The actions accept the following fields:
 
 | Action name | Additional fields | Description |
 |-------------|-------------------|-------------|
 | `enable_user` | `user_id` (string, required) | Reactivates a Snowflake user by setting `DISABLED = FALSE` |
 | `disable_user` | `user_id` (string, required) | Deactivates a Snowflake user by setting `DISABLED = TRUE`. Reverse it with `enable_user` |
+| `issue_programmatic_access_token` | `user_id` (user resource ID, required), `request_id` (1–128 letters, digits, underscores or hyphens, required), `expires_at` (RFC3339 instant 1–365 days ahead, optional) | Creates a PAT named `c1-<request_id>`; defaults to 15 days. Returns public `issued_resource` and an encrypted `api_key_v2` value. The action does not place the token in its public response. |
+
+Callers must use a stable `request_id` for an approved issuance and must not repeat the action after an uncertain result. Snowflake permits PAT rename and name reuse but only removes by name. Revoke omits `IF EXISTS`: a missing recorded name fails visibly with guidance to verify whether the PAT was deleted or renamed. A renamed PAT or a replacement reusing its old name cannot be tracked or distinguished reliably by this name-based API; inspect and reconcile such changes in Snowflake.
 
 <Note>
 **`enable_user`/`disable_user` require `MODIFY` on the target user.** These actions run as the `USERADMIN` role. If that role holds neither `MODIFY` nor `OWNERSHIP` on the target user, Snowflake rejects the statement with `Insufficient privileges to operate on user '<name>'. Your primary role USERADMIN must have MODIFY granted on USER <name>.` Grant the privilege with `GRANT MODIFY ON USER <name> TO ROLE USERADMIN`, which does not transfer ownership.

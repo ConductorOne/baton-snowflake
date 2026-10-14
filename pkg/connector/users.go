@@ -64,14 +64,30 @@ func (o *credentialUserBuilder) IssueCapabilityDetails(_ context.Context) (*v2.C
 				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 				SecretResourceTypeId: programmaticAccessTokenResourceType.Id,
 			}.Build(),
+			v2.CredentialIssueOptionDescriptor_builder{
+				Option: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY,
+				Expiry: v2.IssuanceExpiryCapability_builder{
+					Min: durationpb.New(programmaticAccessTokenMinLifetime),
+					Max: durationpb.New(programmaticAccessTokenMaxLifetime),
+				}.Build(),
+				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
+				SecretResourceTypeId: programmaticAccessTokenResourceType.Id,
+			}.Build(),
 		},
 		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN,
 	}.Build(), nil, nil
 }
 
-func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (*connectorbuilder.CredentialIssueOutput, error) {
+func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (_ *connectorbuilder.CredentialIssueOutput, issueErr error) {
 	if input == nil || input.IdentityID == nil || input.IdentityID.ResourceType != userResourceType.Id || input.IdentityID.Resource == "" {
 		return nil, fmt.Errorf("baton-snowflake: a Snowflake user identity is required")
+	}
+	// The existing TOKEN arm continues to emit raw PAT bytes. API_KEY selects the
+	// api_key_v2 JsonV1 representation, while both arms create the same Snowflake
+	// PAT and use the same discoverable resource type and revocation handle.
+	nativeAPIKey := input.CredentialOptions != nil && input.CredentialOptions.GetApiKey() != nil
+	if input.CredentialOptions != nil && !nativeAPIKey && input.CredentialOptions.GetToken() == nil {
+		return nil, fmt.Errorf("baton-snowflake: unsupported credential option")
 	}
 
 	tokenName := "c1-" + input.RequestID
@@ -126,26 +142,25 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 
 	plaintext, err := o.client.CreateProgrammaticAccessToken(ctx, input.IdentityID.Resource, tokenName, roleRestriction, days)
 	if err != nil {
-		return nil, fmt.Errorf("baton-snowflake: create programmatic access token: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: create programmatic access token; provider outcome may be unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
-
-	// The token now exists in Snowflake. Every failure below discards the plaintext
-	// without recording a secret resource, so without this the credential is left
-	// live and unreferenced: the SDK does not retry issuance, and nothing else
-	// holds a handle to revoke it.
+	// A successful readback locates the newly created PAT by its recorded name.
+	// Keep the historical cleanup for subsequent failures with a located target,
+	// while leaving a missing/ambiguous name for manual reconciliation. Snowflake
+	// has no immutable-ID predicate, so external rename/name reuse remains a
+	// limitation of this name-based spike.
+	located := false
 	issued := false
 	defer func() {
-		if issued {
+		if issued || !located {
 			return
 		}
-		// Detached from ctx so cleanup still runs when the caller's context is done.
-		if rmErr := o.client.RemoveProgrammaticAccessToken(
+		if rmErr := o.client.RemoveProgrammaticAccessTokenStrict(
 			context.WithoutCancel(ctx), input.IdentityID.Resource, tokenName,
 		); rmErr != nil {
-			ctxzap.Extract(ctx).Error("baton-snowflake: failed to remove orphaned programmatic access token",
-				zap.String("username", input.IdentityID.Resource),
-				zap.String("token_name", tokenName),
-				zap.Error(rmErr))
+			issueErr = errors.Join(issueErr, fmt.Errorf(
+				"baton-snowflake: cleanup of located programmatic access token failed; outcome unknown, verify/reconcile in Snowflake before retry: %w", rmErr,
+			))
 		}
 	}()
 
@@ -157,11 +172,12 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			if token.Name == tokenName {
 				expiresAt = token.ExpiresAt
 				found = true
+				located = true
 				break
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake")
+			return nil, fmt.Errorf("baton-snowflake: created programmatic access token was not returned by Snowflake; outcome unknown, verify/reconcile in Snowflake before retry")
 		}
 		if input.ExpiresAt != nil && expiresAt.After(input.ExpiresAt.AsTime()) {
 			return nil, fmt.Errorf("baton-snowflake: provider expiry exceeds requested expiry")
@@ -177,19 +193,28 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 			zap.String("username", input.IdentityID.Resource),
 			zap.Time("estimated_expires_at", expiresAt))
 	default:
-		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
+		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
 
 	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("baton-snowflake: build issued token resource: %w", err)
+	}
+	plaintextBytes := []byte(plaintext)
+	plaintextName := "token"
+	if nativeAPIKey {
+		plaintextBytes, err = encodeNativeProgrammaticAccessToken(plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("baton-snowflake: encode issued token: %w", err)
+		}
+		plaintextName = "api_key_v2"
 	}
 
 	issued = true
 	return &connectorbuilder.CredentialIssueOutput{
 		Secret: secret,
 		PlaintextData: []*v2.PlaintextData{
-			v2.PlaintextData_builder{Name: "token", Bytes: []byte(plaintext)}.Build(),
+			v2.PlaintextData_builder{Name: plaintextName, Bytes: plaintextBytes}.Build(),
 		},
 		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 	}, nil

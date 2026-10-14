@@ -11,6 +11,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type programmaticAccessTokenBuilder struct {
@@ -68,13 +70,27 @@ func (o *programmaticAccessTokenBuilder) Grants(context.Context, *v2.Resource, r
 	return nil, nil, nil
 }
 
-func (o *programmaticAccessTokenBuilder) Delete(ctx context.Context, resourceID *v2.ResourceId, _ *v2.ResourceId) (annotations.Annotations, error) {
+func (o *programmaticAccessTokenBuilder) Delete(ctx context.Context, resourceID *v2.ResourceId, parentID *v2.ResourceId) (annotations.Annotations, error) {
+	if resourceID == nil || resourceID.GetResourceType() != programmaticAccessTokenResourceType.Id {
+		return nil, status.Error(codes.InvalidArgument, "baton-snowflake: a programmatic access token resource id is required")
+	}
 	userName, tokenName, err := parseProgrammaticAccessTokenID(resourceID.GetResource())
 	if err != nil {
 		return nil, err
 	}
-	if err := o.client.RemoveProgrammaticAccessToken(ctx, userName, tokenName); err != nil {
-		return nil, fmt.Errorf("baton-snowflake: remove programmatic access token: %w", err)
+	if parentID != nil && (parentID.GetResourceType() != userResourceType.Id || parentID.GetResource() != userName) {
+		return nil, status.Error(codes.FailedPrecondition,
+			"baton-snowflake: programmatic access token parent does not match its recorded user; verify/reconcile in Snowflake")
+	}
+	// Snowflake REMOVE addresses a PAT by mutable name. Omit IF EXISTS so a
+	// missing/renamed name fails visibly rather than reporting a no-op revoke.
+	// A different PAT created later with the same name cannot be distinguished
+	// by this API; external rename/name reuse remains a documented limitation.
+	if err := o.client.RemoveProgrammaticAccessTokenStrict(ctx, userName, tokenName); err != nil {
+		return nil, fmt.Errorf(
+			"baton-snowflake: programmatic access token removal failed; if Snowflake reports the recorded name missing, "+
+				"it may already have been deleted or renamed; verify/reconcile in Snowflake: %w", err,
+		)
 	}
 	return nil, nil
 }

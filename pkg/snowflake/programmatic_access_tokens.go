@@ -103,6 +103,18 @@ func (c *Client) RemoveProgrammaticAccessToken(ctx context.Context, userName, to
 	return err
 }
 
+// RemoveProgrammaticAccessTokenStrict requires Snowflake to find the named PAT.
+// The IF EXISTS variant above is retained for callers that explicitly need an
+// idempotent remove; credential revocation must not treat its no-op as success.
+func (c *Client) RemoveProgrammaticAccessTokenStrict(ctx context.Context, userName, tokenName string) error {
+	statement := fmt.Sprintf(
+		"ALTER USER %s REMOVE PROGRAMMATIC ACCESS TOKEN %s;",
+		quoteIdentifier(userName), quoteIdentifier(tokenName),
+	)
+	_, err := c.executeStatementAsUserAdmin(ctx, statement)
+	return err
+}
+
 func (c *Client) executeStatement(ctx context.Context, statement string) (*StatementsApiResponseBase, error) {
 	result, err := c.executeStatementWithRole(ctx, statement, "")
 	if err != nil {
