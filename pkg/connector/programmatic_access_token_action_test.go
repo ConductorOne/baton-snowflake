@@ -52,7 +52,7 @@ func patActionJWEConfig(t *testing.T) (*v2.EncryptionConfig, hpke.PrivateKey, []
 	if err != nil {
 		t.Fatal(err)
 	}
-	aad := []byte(`{"content_type":"api_key_v2","ticket":"approved-fixture"}`)
+	aad := []byte(`{"purpose":"c1/fk-credential-delivery","version":1,"content_type":"api_key_v2","ticket":"approved-fixture"}`)
 	config := v2.EncryptionConfig_builder{
 		Provider: jwe.EncryptionProvider,
 		KeyId:    keyID,
@@ -133,7 +133,7 @@ func TestProgrammaticAccessTokenActionSchemaAndGate(t *testing.T) {
 		if len(schema.GetReturnTypes()) != 2 || schema.GetReturnTypes()[0].GetName() != patActionIssuedResourceReturn ||
 			schema.GetReturnTypes()[0].GetIsSecret() || !schema.GetReturnTypes()[0].HasResourceField() ||
 			schema.GetReturnTypes()[1].GetName() != patActionNativeReturnName || !schema.GetReturnTypes()[1].GetIsSecret() ||
-			!schema.GetReturnTypes()[1].GetIsRequired() {
+			!schema.GetReturnTypes()[1].GetIsRequired() || schema.GetReturnTypes()[1].GetSecretContentType() != "api_key_v2" {
 			t.Fatalf("schema returns = %#v", schema.GetReturnTypes())
 		}
 	}

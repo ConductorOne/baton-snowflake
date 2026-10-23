@@ -60,7 +60,8 @@ var issueProgrammaticAccessTokenSchema = &v2.BatonActionSchema{
 		},
 		{
 			Name: patActionNativeReturnName, DisplayName: "API key", IsRequired: true, IsSecret: true,
-			Field: &config.Field_StringField{StringField: &config.StringField{}},
+			SecretContentType: stringPtr("api_key_v2"),
+			Field:             &config.Field_StringField{StringField: &config.StringField{}},
 		},
 	},
 }
