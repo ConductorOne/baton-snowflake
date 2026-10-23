@@ -98,6 +98,10 @@ func (c *Client) ListIntegrations(ctx context.Context) ([]Integration, error) {
 		}
 	}
 
+	if err := c.drainRemainingPartitions(ctx, "ListIntegrations", &response.StatementsApiResponseBase); err != nil {
+		return nil, err
+	}
+
 	integrations, err := response.GetIntegrations()
 	if err != nil {
 		return nil, err

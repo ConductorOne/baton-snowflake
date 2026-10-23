@@ -43,7 +43,11 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    concurrency:
+      group: snowflake-account-provisioning-test
+      cancel-in-progress: false
     env:
       BATON_LOG_LEVEL: debug
       # Snowflake connection configuration
