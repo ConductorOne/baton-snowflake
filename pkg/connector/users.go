@@ -200,21 +200,20 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 	if err != nil {
 		return nil, fmt.Errorf("baton-snowflake: build issued token resource: %w", err)
 	}
-	plaintextBytes := []byte(plaintext)
-	plaintextName := "token"
+	plaintextBytes, plaintextName, contentType := []byte(plaintext), "token", ""
 	if nativeAPIKey {
-		plaintextBytes, err = encodeNativeProgrammaticAccessToken(plaintext)
+		payload, err := encodeNativeProgrammaticAccessToken(plaintext)
 		if err != nil {
 			return nil, fmt.Errorf("baton-snowflake: encode issued token: %w", err)
 		}
-		plaintextName = "api_key_v2"
+		plaintextBytes, plaintextName, contentType = payload.Bytes, "api_key_v2", payload.ContentType
 	}
 
 	issued = true
 	return &connectorbuilder.CredentialIssueOutput{
 		Secret: secret,
 		PlaintextData: []*v2.PlaintextData{
-			v2.PlaintextData_builder{Name: plaintextName, Bytes: plaintextBytes}.Build(),
+			v2.PlaintextData_builder{Name: plaintextName, Bytes: plaintextBytes, Schema: contentType}.Build(),
 		},
 		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 	}, nil
