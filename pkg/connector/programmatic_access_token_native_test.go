@@ -4,20 +4,24 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/conductorone/baton-sdk/pkg/secretcontracts"
 )
 
 func TestEncodeNativeProgrammaticAccessToken(t *testing.T) {
 	const input = "Snowflake.PAT-<>&\"\\\n\x01"
-	encoded, err := encodeNativeProgrammaticAccessToken(input)
+	payload, err := encodeNativeProgrammaticAccessToken(input)
 	if err != nil {
 		t.Fatalf("encodeNativeProgrammaticAccessToken() error = %v", err)
 	}
-	const wantBytes = "{\"key_value\":\"Snowflake.PAT-<>&\\\"\\\\\\n\\u0001\",\"provider\":\"snowflake\",\"header_name\":\"Authorization\"}"
-	if string(encoded) != wantBytes {
-		t.Fatalf("native payload bytes = %q, want %q", encoded, wantBytes)
+	if payload.ContentType != "api_key_v2" {
+		t.Fatalf("content type = %q, want the literal api_key_v2", payload.ContentType)
+	}
+	if secretcontracts.TypeAPIKeyV2 != "api_key_v2" {
+		t.Fatalf("exported type ID = %q", secretcontracts.TypeAPIKeyV2)
 	}
 	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
+	if err := json.Unmarshal(payload.Bytes, &fields); err != nil {
 		t.Fatalf("native payload is not JSON: %v", err)
 	}
 	want := map[string]any{
@@ -31,7 +35,11 @@ func TestEncodeNativeProgrammaticAccessToken(t *testing.T) {
 }
 
 func TestEncodeNativeProgrammaticAccessTokenRejectsEmptyToken(t *testing.T) {
-	if _, err := encodeNativeProgrammaticAccessToken(""); err == nil {
+	payload, err := encodeNativeProgrammaticAccessToken("")
+	if err == nil {
 		t.Fatal("empty token was encoded")
+	}
+	if payload.ContentType != "" || payload.Bytes != nil {
+		t.Fatalf("empty token returned a payload: %#v", payload)
 	}
 }

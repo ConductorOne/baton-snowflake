@@ -11,6 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/secretcontracts"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -60,7 +61,8 @@ var issueProgrammaticAccessTokenSchema = &v2.BatonActionSchema{
 		},
 		{
 			Name: patActionNativeReturnName, DisplayName: "API key", IsRequired: true, IsSecret: true,
-			Field: &config.Field_StringField{StringField: &config.StringField{}},
+			SecretContentType: stringPtr(secretcontracts.TypeAPIKeyV2),
+			Field:             &config.Field_StringField{StringField: &config.StringField{}},
 		},
 	},
 }
@@ -98,7 +100,10 @@ func (o *credentialUserBuilder) issueProgrammaticAccessTokenAction(
 		return nil, nil, nil, fmt.Errorf("baton-snowflake: encode issued token resource; outcome unknown, verify/reconcile in Snowflake before retry: %w", err)
 	}
 	response := &structpb.Struct{Fields: map[string]*structpb.Value{resourceField.Key: resourceField.Value}}
-	output.PlaintextData[0].SetSchema("api_key_v2")
+	// The helper's content type is the declared one; a mismatch is a connector bug.
+	if output.PlaintextData[0].GetSchema() != secretcontracts.TypeAPIKeyV2 {
+		return nil, nil, nil, fmt.Errorf("baton-snowflake: issued token does not carry the declared content type; outcome unknown, verify/reconcile in Snowflake before retry")
+	}
 	return response, output.PlaintextData, output.Annotations, nil
 }
 
