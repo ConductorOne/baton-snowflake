@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	filippo.io/age v1.3.1
 	filippo.io/hpke v0.4.0
-	github.com/conductorone/baton-sdk v0.42.4-0.20261023162145-b4c6a5b06b11
+	github.com/conductorone/baton-sdk v0.42.5-0.20261026163633-165ebbd882a0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
