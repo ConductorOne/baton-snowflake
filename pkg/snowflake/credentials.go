@@ -17,9 +17,10 @@ const (
 	CredentialTypeKeyPair = "KEYPAIR"
 	CredentialTypePAT     = "PAT"
 
-	// Ordered by user so each user's rows are contiguous and can be flushed to the session store per partition.
+	// Rows without a last use carry nothing to report. Ordered by user so each user's rows are contiguous
+	// and can be flushed to the session store per partition.
 	credentialsQuery = "SELECT USER_NAME, TYPE, NAME, ADDITIONAL_DETAILS:PUBLIC_KEY_FP::STRING AS PUBLIC_KEY_FP, LAST_USED_ON " +
-		"FROM SNOWFLAKE.ACCOUNT_USAGE.CREDENTIALS WHERE TYPE IN ('KEYPAIR', 'PAT') ORDER BY USER_NAME;"
+		"FROM SNOWFLAKE.ACCOUNT_USAGE.CREDENTIALS WHERE TYPE IN ('KEYPAIR', 'PAT') AND LAST_USED_ON IS NOT NULL ORDER BY USER_NAME;"
 
 	// A role without access to the SNOWFLAKE database gets "does not exist or not authorized" instead of 003001.
 	sqlObjectNotAuthorizedErrorCode = "002003"
