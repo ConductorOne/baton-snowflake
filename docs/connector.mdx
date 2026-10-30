@@ -87,6 +87,16 @@ Configuring the connector requires you to pass in credentials generated in Snowf
 Give the service account the `MONITOR USAGE` and `MANAGE GRANTS` global permissions for the default warehouse and namespace, plus the `MONITOR` privilege on each user secret and database. 
 </Tip>
 
+<Note>
+**Optional: show when RSA keys and programmatic access tokens were last used.** To see an accurate last-used date for these credentials on the **Inventory** page, give the connector's role read access to Snowflake's security views:
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector-role>;
+```
+
+This role is read-only, but it also lets the connector's role read other security information in Snowflake, such as login history. Without it, syncs still work, but these credentials have no last-used date, so C1 never flags them as unused. Snowflake can take up to 2 hours to record a credential's latest use. For RSA keys, the date the key was set in Snowflake appears as its creation date.
+</Note>
+
 ### Generate a private key and set the public key on a Snowflake user
 
 <Steps>

@@ -134,5 +134,8 @@ func (r *RsaGetUserRawResponse) GetUserRsa(ctx context.Context) (*UserRsa, error
 		rsa.RsaPublicKeyLastSetTime2 = &rsa2Time
 	}
 
+	rsa.RsaPublicKeyFp = NormalizeNullValue(findUserDescriptionPropertyValue(userDescriptions, "RSA_PUBLIC_KEY_FP"))
+	rsa.RsaPublicKeyFp2 = NormalizeNullValue(findUserDescriptionPropertyValue(userDescriptions, "RSA_PUBLIC_KEY_2_FP"))
+
 	return rsa, nil
 }

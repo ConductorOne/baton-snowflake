@@ -25,7 +25,7 @@ func (o *programmaticAccessTokenBuilder) ResourceType(context.Context) *v2.Resou
 	return programmaticAccessTokenResourceType
 }
 
-func (o *programmaticAccessTokenBuilder) List(ctx context.Context, parentID *v2.ResourceId, _ rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+func (o *programmaticAccessTokenBuilder) List(ctx context.Context, parentID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	if parentID == nil || parentID.GetResourceType() != userResourceType.Id {
 		return nil, nil, nil
 	}
@@ -49,9 +49,23 @@ func (o *programmaticAccessTokenBuilder) List(ctx context.Context, parentID *v2.
 		}
 		return nil, nil, fmt.Errorf("baton-snowflake: list programmatic access tokens: %w", err)
 	}
+	if len(tokens) == 0 {
+		return nil, nil, nil
+	}
+	credentials, _, err := o.client.UserCredentials(ctx, opts.Session, parentID.GetResource())
+	if err != nil {
+		return nil, nil, fmt.Errorf("baton-snowflake: list credentials for user %q: %w", parentID.GetResource(), err)
+	}
 	resources := make([]*v2.Resource, 0, len(tokens))
 	for _, token := range tokens {
-		resource, err := newProgrammaticAccessTokenResource(parentID, token.Name, token.ExpiresAt)
+		var lastUsed *time.Time
+		credential := findCredential(credentials, func(c snowflake.Credential) bool {
+			return c.Type == snowflake.CredentialTypePAT && c.Name == token.Name
+		})
+		if credential != nil {
+			lastUsed = credential.LastUsedOn
+		}
+		resource, err := newProgrammaticAccessTokenResource(parentID, token.Name, token.ExpiresAt, token.CreatedOn, lastUsed)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -79,19 +93,27 @@ func (o *programmaticAccessTokenBuilder) Delete(ctx context.Context, resourceID 
 	return nil, nil
 }
 
-func newProgrammaticAccessTokenResource(identityID *v2.ResourceId, tokenName string, expiresAt time.Time) (*v2.Resource, error) {
+func newProgrammaticAccessTokenResource(identityID *v2.ResourceId, tokenName string, expiresAt time.Time, createdOn, lastUsed *time.Time) (*v2.Resource, error) {
+	secretTraits := []rs.SecretTraitOption{
+		rs.WithSecretCreatedByID(identityID),
+		rs.WithSecretIdentityID(identityID),
+		rs.WithSecretExpiresAt(expiresAt),
+		rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_STATIC_SECRET),
+		rs.WithSecretDetail("snowflake.programmatic_access_token"),
+	}
+	if lastUsed != nil {
+		secretTraits = append(secretTraits, rs.WithSecretLastUsedAt(*lastUsed))
+	}
+	resourceOpts := []rs.ResourceOption{rs.WithParentResourceID(identityID)}
+	if createdOn != nil {
+		resourceOpts = append(resourceOpts, rs.WithResourceCreatedAt(*createdOn))
+	}
 	return rs.NewSecretResource(
 		tokenName,
 		programmaticAccessTokenResourceType,
 		programmaticAccessTokenID(identityID.Resource, tokenName),
-		[]rs.SecretTraitOption{
-			rs.WithSecretCreatedByID(identityID),
-			rs.WithSecretIdentityID(identityID),
-			rs.WithSecretExpiresAt(expiresAt),
-			rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_STATIC_SECRET),
-			rs.WithSecretDetail("snowflake.programmatic_access_token"),
-		},
-		rs.WithParentResourceID(identityID),
+		secretTraits,
+		resourceOpts...,
 	)
 }
 
