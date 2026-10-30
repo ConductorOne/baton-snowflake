@@ -174,16 +174,24 @@ func TestUserCredentials_LoadsOncePerSession(t *testing.T) {
 	assert.Empty(t, none)
 }
 
-func TestUserCredentials_DenialIsCachedAsUnavailable(t *testing.T) {
-	for _, code := range []string{"003001", "002003"} {
-		t.Run(code, func(t *testing.T) {
-			mock := &credentialsMock{status: http.StatusUnprocessableEntity, code: code}
+func TestUserCredentials_UnavailableIsCached(t *testing.T) {
+	tests := []struct {
+		code      string
+		wantError error
+	}{
+		{code: "003001", wantError: ErrInsufficientPrivileges},
+		{code: "002003", wantError: ErrInsufficientPrivileges},
+		{code: "000606", wantError: errNoWarehouse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			mock := &credentialsMock{status: http.StatusUnprocessableEntity, code: tt.code}
 			server := mock.serve(t)
 			defer server.Close()
 
 			client := newCredentialsClient(t, server)
 			err := client.listCredentials(context.Background(), func(map[string][]Credential) error { return nil })
-			require.True(t, IsInsufficientPrivileges(err))
+			require.ErrorIs(t, err, tt.wantError)
 
 			var warnings atomic.Int32
 			core := zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(io.Discard), zap.WarnLevel)

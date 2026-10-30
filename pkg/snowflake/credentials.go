@@ -2,6 +2,7 @@ package snowflake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 )
 
@@ -25,10 +27,18 @@ const (
 	// A role without access to the SNOWFLAKE database gets "does not exist or not authorized" instead of 003001.
 	sqlObjectNotAuthorizedErrorCode = "002003"
 
+	// Unlike the SHOW/DESCRIBE statements the rest of the sync runs, this SELECT needs a warehouse.
+	// Snowflake answers 000606 when the role has no usable default warehouse, or it is suspended.
+	noActiveWarehouseErrorCode = "000606"
+
 	credentialsStatusKey         = "status"
 	credentialsStatusLoaded      = "loaded"
 	credentialsStatusUnavailable = "unavailable"
 )
+
+// errNoWarehouse marks a credentials query that could not run for lack of a usable warehouse.
+// Last-used dates are optional, so this degrades like a denial instead of failing the sync.
+var errNoWarehouse = errors.New("baton-snowflake: no usable warehouse")
 
 type Credential struct {
 	UserName    string     `json:"user_name"`
@@ -47,7 +57,7 @@ func (c *Client) UserCredentials(ctx context.Context, ss sessions.SessionStore, 
 			userCredentials = append(userCredentials, batch[userName]...)
 			return nil
 		})
-		if IsInsufficientPrivileges(err) {
+		if IsInsufficientPrivileges(err) || errors.Is(err, errNoWarehouse) {
 			return nil, false, nil
 		}
 		if err != nil {
@@ -90,6 +100,10 @@ func (c *Client) loadCredentials(ctx context.Context, ss sessions.SessionStore) 
 		// The status is cached for the session, so this logs once per sync.
 		ctxzap.Extract(ctx).Warn("baton-snowflake: secret last-used dates unavailable; " +
 			"grant SNOWFLAKE.SECURITY_VIEWER to the connector role to populate them")
+		status = credentialsStatusUnavailable
+	case errors.Is(err, errNoWarehouse):
+		ctxzap.Extract(ctx).Warn("baton-snowflake: secret last-used dates unavailable; "+
+			"set a DEFAULT_WAREHOUSE the connector role has USAGE on to populate them", zap.Error(err))
 		status = credentialsStatusUnavailable
 	case err != nil:
 		return "", err
@@ -230,6 +244,13 @@ func classifyCredentialsError(resp *http.Response, apiErr *SnowflakeError, err e
 			codes.PermissionDenied,
 			"baton-snowflake: insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
 			ErrInsufficientPrivileges, err,
+		)
+	}
+	if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == noActiveWarehouseErrorCode {
+		return uhttp.WrapErrors(
+			codes.FailedPrecondition,
+			"baton-snowflake: no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
+			errNoWarehouse, err,
 		)
 	}
 	return dedupeAPIError(err)

@@ -167,8 +167,16 @@ GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector-role>;
 
 `SECURITY_VIEWER` is read-only, but it also exposes other security views such as `LOGIN_HISTORY`.
 Without it the sync still succeeds and logs one warning; RSA keys and tokens are synced without a
-last-used date. Snowflake can take up to 2 hours to record a credential's latest use. The date a key
-was set is reported as the key's creation date.
+last-used date. Unlike the rest of the sync, this query runs on a warehouse: the connector user's
+`DEFAULT_WAREHOUSE`, which the connector role needs `USAGE` on:
+
+```sql
+GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE <connector-role>;
+```
+
+Without a usable warehouse the sync also succeeds without last-used dates and logs one warning.
+Snowflake can take up to 2 hours to record a credential's latest use. The date a key was set is
+reported as the key's creation date.
 
 ### License data
 
