@@ -156,6 +156,28 @@ Compare both outputs. If both outputs match, the user correctly configured their
 To sync secrets the account needs this role
 permission https://docs.snowflake.com/en/sql-reference/sql/show-secrets#access-control-requirements
 
+#### Last-used dates for RSA keys and programmatic access tokens (optional)
+
+The connector reads when each RSA public key and programmatic access token was last used from
+`SNOWFLAKE.ACCOUNT_USAGE.CREDENTIALS`, once per sync. This requires the `SECURITY_VIEWER` database role:
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector-role>;
+```
+
+`SECURITY_VIEWER` is read-only, but it also exposes other security views such as `LOGIN_HISTORY`.
+Without it the sync still succeeds and logs one warning; RSA keys and tokens are synced without a
+last-used date. Unlike the rest of the sync, this query runs on a warehouse: the connector user's
+`DEFAULT_WAREHOUSE`, which the connector role needs `USAGE` on:
+
+```sql
+GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE <connector-role>;
+```
+
+Without a usable warehouse the sync also succeeds without last-used dates and logs one warning.
+Snowflake can take up to 2 hours to record a credential's latest use. The date a key was set is
+reported as the key's creation date.
+
 ### License data
 
 The connector can sync a `license` resource that reports the Snowflake edition

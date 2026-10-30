@@ -14,6 +14,7 @@ import (
 type ProgrammaticAccessToken struct {
 	Name      string
 	ExpiresAt time.Time
+	CreatedOn *time.Time
 }
 
 func (c *Client) RoleGrantedToUser(ctx context.Context, userName, roleName string) (bool, error) {
@@ -56,7 +57,17 @@ func (c *Client) ListProgrammaticAccessTokens(ctx context.Context, userName stri
 		if err != nil {
 			return nil, fmt.Errorf("snowflake: read programmatic access token expiry: %w", err)
 		}
-		tokens = append(tokens, ProgrammaticAccessToken{Name: name, ExpiresAt: expiresAt})
+		token := ProgrammaticAccessToken{Name: name, ExpiresAt: expiresAt}
+		if found, _, _ := result.ResultSetMetadata.FindRowTypeByName("created_on"); found {
+			createdOn, err := result.ResultSetMetadata.GetTimeValueFromRow(row, "created_on")
+			if err != nil {
+				return nil, fmt.Errorf("snowflake: read programmatic access token creation time: %w", err)
+			}
+			if !createdOn.IsZero() {
+				token.CreatedOn = &createdOn
+			}
+		}
+		tokens = append(tokens, token)
 	}
 	return tokens, nil
 }

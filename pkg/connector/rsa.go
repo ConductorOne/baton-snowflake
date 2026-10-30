@@ -31,27 +31,42 @@ func (o *rsaBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return rsaPublicKeyResourceType
 }
 
-func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id *v2.ResourceId) (*v2.Resource, error) {
-	var rsaTime *time.Time
+func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id *v2.ResourceId, credentials []snowflake.Credential) (*v2.Resource, error) {
+	var lastSetTime *time.Time
+	var fp string
 
 	switch rsaIdx {
 	case RsaIndex1:
-		rsaTime = user.RsaPublicKeyLastSetTime
+		lastSetTime = user.RsaPublicKeyLastSetTime
+		fp = normalizeFp(user.RsaPublicKeyFp)
 	case RsaIndex2:
-		rsaTime = user.RsaPublicKeyLastSetTime2
+		lastSetTime = user.RsaPublicKeyLastSetTime2
+		fp = normalizeFp(user.RsaPublicKeyFp2)
 	default:
 		return nil, fmt.Errorf("invalid rsa index: %d", rsaIdx)
 	}
 
-	if rsaTime == nil {
+	if lastSetTime == nil && fp == "" {
 		return nil, nil
 	}
 
 	secretTraits := []rs.SecretTraitOption{
-		rs.WithSecretLastUsedAt(*rsaTime),
 		rs.WithSecretCreatedByID(id),
 		rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_ASYMMETRIC_KEY),
 		rs.WithSecretDetail("snowflake.rsa_key_pair"),
+	}
+	if fp != "" {
+		credential := findCredential(credentials, func(c snowflake.Credential) bool {
+			return c.Type == snowflake.CredentialTypeKeyPair && normalizeFp(c.PublicKeyFp) == fp
+		})
+		if credential != nil && credential.LastUsedOn != nil {
+			secretTraits = append(secretTraits, rs.WithSecretLastUsedAt(*credential.LastUsedOn))
+		}
+	}
+
+	resourceOpts := []rs.ResourceOption{rs.WithParentResourceID(id)}
+	if lastSetTime != nil {
+		resourceOpts = append(resourceOpts, rs.WithResourceCreatedAt(*lastSetTime))
 	}
 
 	rsaId := fmt.Sprintf("%s-%s", user.Username, rsaIdx.String())
@@ -61,7 +76,7 @@ func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id
 		rsaPublicKeyResourceType,
 		rsaId,
 		secretTraits,
-		rs.WithParentResourceID(id),
+		resourceOpts...,
 	)
 
 	if err != nil {
@@ -73,7 +88,7 @@ func rsaResource(_ context.Context, user *snowflake.UserRsa, rsaIdx RsaIndex, id
 
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
-func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, _ rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, opts rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	l := ctxzap.Extract(ctx)
 
 	if parentResourceID == nil {
@@ -102,11 +117,16 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 
 	l.Debug("UserRsa", zap.Any("user", user))
 
+	credentials, _, err := o.client.UserCredentials(ctx, opts.Session, userName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("baton-snowflake: list credentials for user %q: %w", userName, err)
+	}
+
 	indx := []RsaIndex{RsaIndex1, RsaIndex2}
 	var resources []*v2.Resource
 
 	for _, idx := range indx {
-		resource, err := rsaResource(ctx, user, idx, parentResourceID)
+		resource, err := rsaResource(ctx, user, idx, parentResourceID, credentials)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -24,6 +24,8 @@ var (
 	userNamespace               = sessions.WithPrefix("user")
 	tableGrantsNamespace        = sessions.WithPrefix("table_grants")
 	tableGrantsPartialNamespace = sessions.WithPrefix("table_grants_partial")
+	credentialsNamespace        = sessions.WithPrefix("credentials")
+	credentialsStatusNamespace  = sessions.WithPrefix("credentials_status")
 )
 
 const (

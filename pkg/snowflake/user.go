@@ -83,6 +83,8 @@ type (
 		Username                 string
 		RsaPublicKeyLastSetTime  *time.Time
 		RsaPublicKeyLastSetTime2 *time.Time
+		RsaPublicKeyFp           string
+		RsaPublicKeyFp2          string
 	}
 
 	UserDescriptionProperty struct {

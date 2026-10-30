@@ -180,7 +180,7 @@ func (o *credentialUserBuilder) Issue(ctx context.Context, input *connectorbuild
 		return nil, fmt.Errorf("baton-snowflake: read created programmatic access token expiry: %w", err)
 	}
 
-	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt)
+	secret, err := newProgrammaticAccessTokenResource(input.IdentityID, tokenName, expiresAt, nil, nil)
 	if err != nil {
 		return nil, err
 	}
