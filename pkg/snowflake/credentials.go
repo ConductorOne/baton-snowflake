@@ -116,6 +116,10 @@ func (c *Client) loadCredentials(ctx context.Context, ss sessions.SessionStore) 
 
 // listCredentials streams the view to emit one partition at a time, grouped by user.
 // A user's rows are held back until the next user starts, since they may continue in the following partition.
+//
+// Accepted risk: the result is fetched with a single follow-up GET, without polling. If the statement is still
+// running after it, the result is read as empty and the sync has no last-used dates, without a warning.
+// The view is small, so this needs an unusually slow warehouse, and the dates are optional.
 func (c *Client) listCredentials(ctx context.Context, emit func(map[string][]Credential) error) error {
 	req, err := c.PostStatementRequest(ctx, []string{credentialsQuery})
 	if err != nil {
