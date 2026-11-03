@@ -52,7 +52,7 @@ func (o *programmaticAccessTokenBuilder) List(ctx context.Context, parentID *v2.
 	if len(tokens) == 0 {
 		return nil, nil, nil
 	}
-	credentials, _, err := o.client.UserCredentials(ctx, opts.Session, parentID.GetResource())
+	credentials, err := o.client.UserCredentials(ctx, opts.Session, parentID.GetResource())
 	if err != nil {
 		return nil, nil, fmt.Errorf("baton-snowflake: list credentials for user %q: %w", parentID.GetResource(), err)
 	}

@@ -122,7 +122,7 @@ func (o *rsaBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, 
 		return nil, nil, nil
 	}
 
-	credentials, _, err := o.client.UserCredentials(ctx, opts.Session, userName)
+	credentials, err := o.client.UserCredentials(ctx, opts.Session, userName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("baton-snowflake: list credentials for user %q: %w", userName, err)
 	}

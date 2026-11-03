@@ -39,7 +39,7 @@ const (
 
 // errNoWarehouse marks a credentials query that could not run for lack of a usable warehouse.
 // Last-used dates are optional, so this degrades like a denial instead of failing the sync.
-var errNoWarehouse = errors.New("baton-snowflake: no usable warehouse")
+var errNoWarehouse = errors.New("no usable warehouse")
 
 // missingSessionWarning logs once per process, since without a session store every call would hit this.
 var missingSessionWarning sync.Once
@@ -52,42 +52,44 @@ type Credential struct {
 	LastUsedOn  *time.Time `json:"last_used_on,omitempty"`
 }
 
-// UserCredentials returns the user's key pair and PAT rows from ACCOUNT_USAGE.CREDENTIALS, loading the view once per session.
-// available is false when the connector role may not read the view.
-func (c *Client) UserCredentials(ctx context.Context, ss sessions.SessionStore, userName string) ([]Credential, bool, error) {
+// UserCredentials returns the user's KEYPAIR and PAT rows with a LAST_USED_ON, loading
+// SNOWFLAKE.ACCOUNT_USAGE.CREDENTIALS once per session (POST /api/v2/statements).
+// Requires the SNOWFLAKE.SECURITY_VIEWER database role and USAGE on the default warehouse;
+// without either, or without a session store, it returns no rows and a nil error.
+func (c *Client) UserCredentials(ctx context.Context, ss sessions.SessionStore, userName string) ([]Credential, error) {
 	// Without a cache the whole view would be queried per user, so skip the optional dates instead.
 	if ss == nil {
 		missingSessionWarning.Do(func() {
 			ctxzap.Extract(ctx).Warn("baton-snowflake: secret last-used dates unavailable; no session store to cache them")
 		})
-		return nil, false, nil
+		return nil, nil
 	}
 
 	status, found, err := session.GetJSON[string](ctx, ss, credentialsStatusKey, credentialsStatusNamespace)
 	if err != nil {
-		return nil, false, fmt.Errorf("baton-snowflake: read credentials cache status: %w", err)
+		return nil, fmt.Errorf("read credentials cache status: %w", err)
 	}
 	if !found {
 		status, err = c.loadCredentials(ctx, ss)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
 	if status == credentialsStatusUnavailable {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	userCredentials, _, err := session.GetJSON[[]Credential](ctx, ss, userName, credentialsNamespace)
 	if err != nil {
-		return nil, false, fmt.Errorf("baton-snowflake: read cached credentials: %w", err)
+		return nil, fmt.Errorf("read cached credentials: %w", err)
 	}
-	return userCredentials, true, nil
+	return userCredentials, nil
 }
 
 func (c *Client) loadCredentials(ctx context.Context, ss sessions.SessionStore) (string, error) {
 	err := c.listCredentials(ctx, func(batch map[string][]Credential) error {
 		if err := session.SetManyJSON(ctx, ss, batch, credentialsNamespace); err != nil {
-			return fmt.Errorf("baton-snowflake: cache credentials: %w", err)
+			return fmt.Errorf("cache credentials: %w", err)
 		}
 		return nil
 	})
@@ -106,7 +108,7 @@ func (c *Client) loadCredentials(ctx context.Context, ss sessions.SessionStore) 
 		return "", err
 	}
 	if err := session.SetJSON(ctx, ss, credentialsStatusKey, status, credentialsStatusNamespace); err != nil {
-		return "", fmt.Errorf("baton-snowflake: cache credentials status: %w", err)
+		return "", fmt.Errorf("cache credentials status: %w", err)
 	}
 	return status, nil
 }
@@ -146,7 +148,7 @@ func (c *Client) listCredentials(ctx context.Context, emit func(map[string][]Cre
 	metadata := response.ResultSetMetadata
 	numPartitions := len(metadata.PartitionInfo)
 	if numPartitions > 1 && response.StatementHandle == "" {
-		return fmt.Errorf("baton-snowflake: ListCredentials: result spans %d partitions but has no statement handle", numPartitions)
+		return fmt.Errorf("ListCredentials: result spans %d partitions but has no statement handle", numPartitions)
 	}
 
 	var pendingUser string
@@ -179,7 +181,7 @@ func (c *Client) listCredentials(ctx context.Context, emit func(map[string][]Cre
 	for partitionID := 1; partitionID < numPartitions; partitionID++ {
 		rows, err := c.fetchPartitionRows(ctx, response.StatementHandle, partitionID)
 		if err != nil {
-			return fmt.Errorf("baton-snowflake: failed to fetch credentials partition %d: %w", partitionID, err)
+			return fmt.Errorf("failed to fetch credentials partition %d: %w", partitionID, err)
 		}
 		if err := process(rows); err != nil {
 			return err
@@ -187,7 +189,7 @@ func (c *Client) listCredentials(ctx context.Context, emit func(map[string][]Cre
 	}
 
 	if metadata.NumRows > 0 && totalRows != metadata.NumRows {
-		return fmt.Errorf("baton-snowflake: ListCredentials: got %d rows but Snowflake declared %d (statementHandle=%s)",
+		return fmt.Errorf("ListCredentials: got %d rows but Snowflake declared %d (statementHandle=%s)",
 			totalRows, metadata.NumRows, response.StatementHandle)
 	}
 	if len(pending) > 0 {
@@ -196,41 +198,26 @@ func (c *Client) listCredentials(ctx context.Context, emit func(map[string][]Cre
 	return nil
 }
 
-func (c *Client) fetchPartitionRows(ctx context.Context, handle string, partitionID int) ([][]string, error) {
-	req, err := c.GetStatementPartition(ctx, handle, partitionID)
-	if err != nil {
-		return nil, err
-	}
-	var partition StatementsApiResponseBase
-	var apiErr SnowflakeError
-	resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(&apiErr))
-	closeResponseBody(resp)
-	if err != nil {
-		return nil, dedupeAPIError(err)
-	}
-	return partition.Data, nil
-}
-
 func parseCredentialRow(metadata *ResultSetMetadata, row []string) (Credential, error) {
 	var credential Credential
 	var err error
 	if credential.UserName, err = metadata.GetStringValueFromRow(row, "USER_NAME"); err != nil {
-		return Credential{}, fmt.Errorf("baton-snowflake: read credential user name: %w", err)
+		return Credential{}, fmt.Errorf("read credential user name: %w", err)
 	}
 	if credential.Type, err = metadata.GetStringValueFromRow(row, "TYPE"); err != nil {
-		return Credential{}, fmt.Errorf("baton-snowflake: read credential type: %w", err)
+		return Credential{}, fmt.Errorf("read credential type: %w", err)
 	}
 	if credential.Name, err = metadata.GetStringValueFromRow(row, "NAME"); err != nil {
-		return Credential{}, fmt.Errorf("baton-snowflake: read credential name: %w", err)
+		return Credential{}, fmt.Errorf("read credential name: %w", err)
 	}
 	fp, err := metadata.GetStringValueFromRow(row, "PUBLIC_KEY_FP")
 	if err != nil {
-		return Credential{}, fmt.Errorf("baton-snowflake: read credential public key fingerprint: %w", err)
+		return Credential{}, fmt.Errorf("read credential public key fingerprint: %w", err)
 	}
 	credential.PublicKeyFp = NormalizeNullValue(fp)
 	lastUsedOn, err := metadata.GetTimeValueFromRow(row, "LAST_USED_ON")
 	if err != nil {
-		return Credential{}, fmt.Errorf("baton-snowflake: read credential last used on: %w", err)
+		return Credential{}, fmt.Errorf("read credential last used on: %w", err)
 	}
 	if !lastUsedOn.IsZero() {
 		credential.LastUsedOn = &lastUsedOn
@@ -243,14 +230,14 @@ func classifyCredentialsError(resp *http.Response, apiErr *SnowflakeError, err e
 		(resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == sqlObjectNotAuthorizedErrorCode) {
 		return uhttp.WrapErrors(
 			codes.PermissionDenied,
-			"baton-snowflake: insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
+			"insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
 			ErrInsufficientPrivileges, err,
 		)
 	}
 	if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == noActiveWarehouseErrorCode {
 		return uhttp.WrapErrors(
 			codes.FailedPrecondition,
-			"baton-snowflake: no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
+			"no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
 			errNoWarehouse, err,
 		)
 	}

@@ -93,9 +93,8 @@ func TestUserCredentials_ParsesRowsAndNulls(t *testing.T) {
 	server := mock.serve(t)
 	defer server.Close()
 
-	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
+	credentials, err := newCredentialsClient(t, server).UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
 	require.NoError(t, err)
-	require.True(t, available)
 	require.Len(t, credentials, 2)
 
 	assert.Equal(t, CredentialTypeKeyPair, credentials[0].Type)
@@ -116,9 +115,8 @@ func TestUserCredentials_FollowUpFetch(t *testing.T) {
 	server := mock.serve(t)
 	defer server.Close()
 
-	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
+	credentials, err := newCredentialsClient(t, server).UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
 	require.NoError(t, err)
-	require.True(t, available)
 	require.Len(t, credentials, 1)
 	assert.NotNil(t, credentials[0].LastUsedOn)
 }
@@ -130,9 +128,8 @@ func TestUserCredentials_NilSessionSkipsQuery(t *testing.T) {
 	server := mock.serve(t)
 	defer server.Close()
 
-	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), nil, "ALICE")
+	credentials, err := newCredentialsClient(t, server).UserCredentials(context.Background(), nil, "ALICE")
 	require.NoError(t, err)
-	assert.False(t, available)
 	assert.Nil(t, credentials)
 	assert.Zero(t, mock.posts.Load())
 }
@@ -155,14 +152,13 @@ func TestUserCredentials_GroupsUserAcrossPartitions(t *testing.T) {
 	ss := newFakeSessionStore()
 	ctx := context.Background()
 
-	bob, available, err := client.UserCredentials(ctx, ss, "BOB")
+	bob, err := client.UserCredentials(ctx, ss, "BOB")
 	require.NoError(t, err)
-	require.True(t, available)
 	require.Len(t, bob, 2)
 	assert.Equal(t, "TOKEN_1", bob[0].Name)
 	assert.Equal(t, "TOKEN_2", bob[1].Name)
 
-	carol, _, err := client.UserCredentials(ctx, ss, "CAROL")
+	carol, err := client.UserCredentials(ctx, ss, "CAROL")
 	require.NoError(t, err)
 	assert.Len(t, carol, 1)
 }
@@ -177,13 +173,12 @@ func TestUserCredentials_LoadsOncePerSession(t *testing.T) {
 	client := newCredentialsClient(t, server)
 	ss := newFakeSessionStore()
 	for _, user := range []string{"ALICE", "BOB", "CAROL", "ALICE"} {
-		_, available, err := client.UserCredentials(context.Background(), ss, user)
+		_, err := client.UserCredentials(context.Background(), ss, user)
 		require.NoError(t, err)
-		require.True(t, available)
 	}
 	assert.Equal(t, int32(1), mock.posts.Load())
 
-	none, _, err := client.UserCredentials(context.Background(), ss, "BOB")
+	none, err := client.UserCredentials(context.Background(), ss, "BOB")
 	require.NoError(t, err)
 	assert.Empty(t, none)
 }
@@ -219,9 +214,8 @@ func TestUserCredentials_UnavailableIsCached(t *testing.T) {
 			for range 2 {
 				ss := newFakeSessionStore()
 				for range 3 {
-					credentials, available, err := client.UserCredentials(ctx, ss, "ALICE")
+					credentials, err := client.UserCredentials(ctx, ss, "ALICE")
 					require.NoError(t, err)
-					assert.False(t, available)
 					assert.Nil(t, credentials)
 				}
 			}
@@ -249,7 +243,7 @@ func TestUserCredentials_OtherErrorsAreReturnedAndNotCached(t *testing.T) {
 			client := newCredentialsClient(t, server)
 			ss := newFakeSessionStore()
 			for range 2 {
-				_, _, err := client.UserCredentials(context.Background(), ss, "ALICE")
+				_, err := client.UserCredentials(context.Background(), ss, "ALICE")
 				require.Error(t, err)
 				assert.False(t, IsInsufficientPrivileges(err))
 			}
