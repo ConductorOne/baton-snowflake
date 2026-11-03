@@ -129,13 +129,25 @@ func TestRsaListEmitsKeysWhenCredentialsAreDenied(t *testing.T) {
 	require.NoError(t, err)
 
 	userID := v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "ALICE"}.Build()
-	resources, _, err := newRsaBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{})
+	resources, _, err := newRsaBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{Session: newMemorySessionStore()})
 	require.NoError(t, err)
 	require.Len(t, resources, 2)
 	for _, resource := range resources {
 		assert.True(t, resource.HasCreatedAt())
 		assert.False(t, secretTrait(t, resource).HasLastUsedAt())
 	}
+}
+
+func TestRsaListSkipsCredentialsForUserWithoutKeys(t *testing.T) {
+	server := serveSecretsMock(t, secretsMock{noRsaKeys: true})
+	defer server.Close()
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+	require.NoError(t, err)
+
+	userID := v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "ALICE"}.Build()
+	resources, _, err := newRsaBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{Session: newMemorySessionStore()})
+	require.NoError(t, err)
+	assert.Empty(t, resources)
 }
 
 func TestRsaListSetsLastUsedFromCredentials(t *testing.T) {
@@ -145,7 +157,7 @@ func TestRsaListSetsLastUsedFromCredentials(t *testing.T) {
 	require.NoError(t, err)
 
 	userID := v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "ALICE"}.Build()
-	resources, _, err := newRsaBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{})
+	resources, _, err := newRsaBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{Session: newMemorySessionStore()})
 	require.NoError(t, err)
 	require.Len(t, resources, 2)
 

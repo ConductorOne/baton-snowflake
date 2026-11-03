@@ -93,7 +93,7 @@ func TestUserCredentials_ParsesRowsAndNulls(t *testing.T) {
 	server := mock.serve(t)
 	defer server.Close()
 
-	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), nil, "ALICE")
+	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
 	require.NoError(t, err)
 	require.True(t, available)
 	require.Len(t, credentials, 2)
@@ -116,11 +116,25 @@ func TestUserCredentials_FollowUpFetch(t *testing.T) {
 	server := mock.serve(t)
 	defer server.Close()
 
-	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), nil, "ALICE")
+	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
 	require.NoError(t, err)
 	require.True(t, available)
 	require.Len(t, credentials, 1)
 	assert.NotNil(t, credentials[0].LastUsedOn)
+}
+
+func TestUserCredentials_NilSessionSkipsQuery(t *testing.T) {
+	mock := &credentialsMock{partitions: [][][]*string{{
+		{str("ALICE"), str("PAT"), str("TOKEN_1"), nil, str("1790726400")},
+	}}}
+	server := mock.serve(t)
+	defer server.Close()
+
+	credentials, available, err := newCredentialsClient(t, server).UserCredentials(context.Background(), nil, "ALICE")
+	require.NoError(t, err)
+	assert.False(t, available)
+	assert.Nil(t, credentials)
+	assert.Zero(t, mock.posts.Load())
 }
 
 func TestUserCredentials_GroupsUserAcrossPartitions(t *testing.T) {

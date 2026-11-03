@@ -23,6 +23,7 @@ const lastUsedEpoch = "1790726400.000000000"
 
 type secretsMock struct {
 	denyCredentials bool
+	noRsaKeys       bool
 }
 
 func serveSecretsMock(t *testing.T, mock secretsMock) *httptest.Server {
@@ -39,6 +40,10 @@ func serveSecretsMock(t *testing.T, mock secretsMock) *httptest.Server {
 		switch {
 		case strings.HasPrefix(request.Statement, "DESCRIBE USER"):
 			rowTypes = textColumns("property", "value", "default", "description")
+			data = [][]*string{{ptr("NAME"), ptr("ALICE"), nil, nil}}
+			if mock.noRsaKeys {
+				break
+			}
 			data = [][]*string{
 				{ptr("NAME"), ptr("ALICE"), nil, nil},
 				{ptr("RSA_PUBLIC_KEY_FP"), ptr("SHA256:key1="), nil, nil},
@@ -57,6 +62,9 @@ func serveSecretsMock(t *testing.T, mock secretsMock) *httptest.Server {
 				{ptr("UNUSED_TOKEN"), ptr("1893456000"), ptr("1744192800")},
 			}
 		case strings.Contains(request.Statement, "ACCOUNT_USAGE.CREDENTIALS"):
+			if mock.noRsaKeys {
+				t.Errorf("credentials queried for a user without RSA keys")
+			}
 			if mock.denyCredentials {
 				w.WriteHeader(http.StatusUnprocessableEntity)
 				_ = json.NewEncoder(w).Encode(map[string]string{
@@ -118,7 +126,7 @@ func TestProgrammaticAccessTokenListSetsLastUsedFromCredentials(t *testing.T) {
 	require.NoError(t, err)
 
 	userID := v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "ALICE"}.Build()
-	resources, _, err := newProgrammaticAccessTokenBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{})
+	resources, _, err := newProgrammaticAccessTokenBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{Session: newMemorySessionStore()})
 	require.NoError(t, err)
 	require.Len(t, resources, 2)
 
@@ -139,7 +147,7 @@ func TestProgrammaticAccessTokenListEmitsTokensWhenCredentialsAreDenied(t *testi
 	require.NoError(t, err)
 
 	userID := v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "ALICE"}.Build()
-	resources, _, err := newProgrammaticAccessTokenBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{})
+	resources, _, err := newProgrammaticAccessTokenBuilder(client).List(context.Background(), userID, rs.SyncOpAttrs{Session: newMemorySessionStore()})
 	require.NoError(t, err)
 	require.Len(t, resources, 2)
 	for _, resource := range resources {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/conductorone/baton-sdk/pkg/session"
@@ -40,6 +41,9 @@ const (
 // Last-used dates are optional, so this degrades like a denial instead of failing the sync.
 var errNoWarehouse = errors.New("baton-snowflake: no usable warehouse")
 
+// missingSessionWarning logs once per process, since without a session store every call would hit this.
+var missingSessionWarning sync.Once
+
 type Credential struct {
 	UserName    string     `json:"user_name"`
 	Type        string     `json:"type"`
@@ -51,19 +55,12 @@ type Credential struct {
 // UserCredentials returns the user's key pair and PAT rows from ACCOUNT_USAGE.CREDENTIALS, loading the view once per session.
 // available is false when the connector role may not read the view.
 func (c *Client) UserCredentials(ctx context.Context, ss sessions.SessionStore, userName string) ([]Credential, bool, error) {
+	// Without a cache the whole view would be queried per user, so skip the optional dates instead.
 	if ss == nil {
-		var userCredentials []Credential
-		err := c.listCredentials(ctx, func(batch map[string][]Credential) error {
-			userCredentials = append(userCredentials, batch[userName]...)
-			return nil
+		missingSessionWarning.Do(func() {
+			ctxzap.Extract(ctx).Warn("baton-snowflake: secret last-used dates unavailable; no session store to cache them")
 		})
-		if IsInsufficientPrivileges(err) || errors.Is(err, errNoWarehouse) {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		return userCredentials, true, nil
+		return nil, false, nil
 	}
 
 	status, found, err := session.GetJSON[string](ctx, ss, credentialsStatusKey, credentialsStatusNamespace)
