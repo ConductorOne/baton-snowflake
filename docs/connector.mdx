@@ -41,8 +41,6 @@ C1 selects one of the supported options each time it creates an account. The con
 - C1 can only use a random password when the account has somewhere to put it, which means a vault on the provision policy or personal credentials for the user. Without either, C1 selects **No password**.
 - When a vault or personal credentials are available, C1 prefers the random password option, so the new user is created with a password.
 
-For SSO-only users, Snowflake's SAML integration does not create users on first sign-in. The user must already exist, and its `LOGIN_NAME` must match the identity your identity provider sends. Map the `login` profile field to that value when you provision the account. To block password sign-in entirely, also assign a Snowflake [authentication policy](https://docs.snowflake.com/en/sql-reference/sql/create-authentication-policy) that allows only `SAML`.
-
 ### Issuing programmatic access tokens
 
 Enable **Issue credentials** to let the connector issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and revoke one it has issued. Issued tokens appear as **Programmatic access token** resources alongside the user they belong to once that resource type is enabled (see the note below).
