@@ -24,6 +24,8 @@ var (
 	userNamespace               = sessions.WithPrefix("user")
 	tableGrantsNamespace        = sessions.WithPrefix("table_grants")
 	tableGrantsPartialNamespace = sessions.WithPrefix("table_grants_partial")
+	credentialsNamespace        = sessions.WithPrefix("credentials")
+	credentialsStatusNamespace  = sessions.WithPrefix("credentials_status")
 )
 
 const (
@@ -345,6 +347,21 @@ func (c *Client) GetStatementPartition(ctx context.Context, statementHandle stri
 	)
 }
 
+func (c *Client) fetchPartitionRows(ctx context.Context, handle string, partitionID int) ([][]string, error) {
+	req, err := c.GetStatementPartition(ctx, handle, partitionID)
+	if err != nil {
+		return nil, err
+	}
+	var partition StatementsApiResponseBase
+	var apiErr SnowflakeError
+	resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(&apiErr))
+	closeResponseBody(resp)
+	if err != nil {
+		return nil, dedupeAPIError(err)
+	}
+	return partition.Data, nil
+}
+
 // fetchRemainingPartitions GETs partitions 1..numPartitions-1 of a statement whose partition 0
 // already arrived (inline on the POST, or via the plain handle GET) and returns their rows,
 // combined in partition order, plus the number of rows actually fetched from each one (so the
@@ -361,21 +378,12 @@ func (c *Client) fetchRemainingPartitions(ctx context.Context, handle string, nu
 	var rows [][]string
 	var fetchedRowCounts []int
 	for partitionID := 1; partitionID < numPartitions; partitionID++ {
-		req, err := c.GetStatementPartition(ctx, handle, partitionID)
+		partitionRows, err := c.fetchPartitionRows(ctx, handle, partitionID)
 		if err != nil {
 			return nil, nil, err
 		}
-
-		var partition StatementsApiResponseBase
-		var apiErr SnowflakeError
-		resp, err := c.Do(req, uhttp.WithJSONResponse(&partition), uhttp.WithErrorResponse(&apiErr))
-		closeResponseBody(resp)
-		if err != nil {
-			return nil, nil, dedupeAPIError(err)
-		}
-
-		rows = append(rows, partition.Data...)
-		fetchedRowCounts = append(fetchedRowCounts, len(partition.Data))
+		rows = append(rows, partitionRows...)
+		fetchedRowCounts = append(fetchedRowCounts, len(partitionRows))
 	}
 	return rows, fetchedRowCounts, nil
 }
