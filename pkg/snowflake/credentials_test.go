@@ -33,6 +33,8 @@ type credentialsMock struct {
 	status     int
 	code       string
 	async      bool
+	getStatus  int
+	getCode    string
 	partitions [][][]*string
 }
 
@@ -54,6 +56,11 @@ func (m *credentialsMock) serve(t *testing.T) *httptest.Server {
 				_ = json.NewEncoder(w).Encode(map[string]string{"statementHandle": "handle"})
 				return
 			}
+		}
+		if r.Method == http.MethodGet && m.getStatus != 0 {
+			w.WriteHeader(m.getStatus)
+			_ = json.NewEncoder(w).Encode(map[string]string{"code": m.getCode, "message": "statement failed"})
+			return
 		}
 		partition := 0
 		if p := r.URL.Query().Get("partition"); p != "" {
@@ -191,6 +198,8 @@ func TestUserCredentials_UnavailableIsCached(t *testing.T) {
 		{code: "003001", wantError: ErrInsufficientPrivileges},
 		{code: "002003", wantError: ErrInsufficientPrivileges},
 		{code: "000606", wantError: errNoWarehouse},
+		{code: "000608", wantError: errNoWarehouse},
+		{code: "391920", wantError: errNoWarehouse},
 	}
 	for _, tt := range tests {
 		t.Run(tt.code, func(t *testing.T) {
@@ -233,6 +242,7 @@ func TestUserCredentials_OtherErrorsAreReturnedAndNotCached(t *testing.T) {
 	}{
 		{name: "server error", status: http.StatusInternalServerError},
 		{name: "compilation error", status: http.StatusUnprocessableEntity, code: "001003"},
+		{name: "warehouse code on server error", status: http.StatusInternalServerError, code: "391920"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -246,10 +256,25 @@ func TestUserCredentials_OtherErrorsAreReturnedAndNotCached(t *testing.T) {
 				_, err := client.UserCredentials(context.Background(), ss, "ALICE")
 				require.Error(t, err)
 				assert.False(t, IsInsufficientPrivileges(err))
+				assert.NotErrorIs(t, err, errNoWarehouse)
 			}
 			assert.Equal(t, int32(2), mock.posts.Load())
 		})
 	}
+}
+
+func TestUserCredentials_FollowUpFetchWarehouseUnavailable(t *testing.T) {
+	mock := &credentialsMock{async: true, getStatus: http.StatusUnprocessableEntity, getCode: "000608"}
+	server := mock.serve(t)
+	defer server.Close()
+
+	client := newCredentialsClient(t, server)
+	err := client.listCredentials(context.Background(), func(map[string][]Credential) error { return nil })
+	require.ErrorIs(t, err, errNoWarehouse)
+
+	credentials, err := client.UserCredentials(context.Background(), newFakeSessionStore(), "ALICE")
+	require.NoError(t, err)
+	assert.Nil(t, credentials)
 }
 
 func TestGetUserRsa_ParsesFingerprints(t *testing.T) {

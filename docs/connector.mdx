@@ -100,7 +100,7 @@ GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE <connector-role>;
 GRANT DATABASE ROLE SNOWFLAKE.SECURITY_VIEWER TO ROLE <connector-role>;
 ```
 
-This role is read-only, but it also lets the connector's role read other security information in Snowflake, such as login history. Without it, syncs still work, but these credentials have no last-used date, so C1 never flags them as unused. Reading these dates runs a query on the service account's default warehouse, so the connector's role also needs `USAGE` on that warehouse, with the same fallback if it doesn't. Snowflake can take up to 2 hours to record a credential's latest use. For RSA keys, the date the key was set in Snowflake appears as its creation date.
+This role is read-only, but it also lets the connector's role read other security information in Snowflake, such as login history. Without it, syncs still work, but these credentials have no last-used date, so C1 never flags them as unused. Reading these dates runs a query on the service account's default warehouse, so the connector's role also needs `USAGE` on that warehouse, and the warehouse must be running or set to auto-resume. If the warehouse isn't usable, syncs still work the same way, just without these dates. Snowflake can take up to 2 hours to record a credential's latest use. For RSA keys, the date the key was set in Snowflake appears as its creation date.
 </Note>
 
 ### Generate a private key and set the public key on a Snowflake user
@@ -339,6 +339,10 @@ Check that the connector data uploaded correctly. In C1, click **Apps**. On the 
 ### 4xx errors
 
 If you're seeing a `422 unprocessable entity` or `401 unauthorized` error in the logs, make sure that your service account has the `DEFAULT_WAREHOUSE`property, and that you've correctly looked up your Snowflake account identifier. 
+
+### Warning that last-used dates are unavailable
+
+If the sync logs a warning that secret last-used dates are unavailable, the sync still completed. RSA keys and programmatic access tokens are synced without a last-used date. To populate the dates, grant `SNOWFLAKE.SECURITY_VIEWER` to the connector's role, and make sure the service account has a `DEFAULT_WAREHOUSE` that the connector's role has `USAGE` on and that is running or set to auto-resume.
 
 ### Connector fails when Snowflake IP allowlisting is enabled
 

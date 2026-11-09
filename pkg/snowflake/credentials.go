@@ -29,8 +29,12 @@ const (
 	sqlObjectNotAuthorizedErrorCode = "002003"
 
 	// Unlike the SHOW/DESCRIBE statements the rest of the sync runs, this SELECT needs a warehouse.
-	// Snowflake answers 000606 when the role has no usable default warehouse, or it is suspended.
+	// No active warehouse in the session.
 	noActiveWarehouseErrorCode = "000606"
+	// Warehouse suspended and not resumable (AUTO_RESUME = FALSE, or suspended by a resource monitor).
+	warehouseSuspendedErrorCode = "000608"
+	// SQL API: no warehouse resolvable for the request (no DEFAULT_WAREHOUSE, or no USAGE on it).
+	noWarehouseSpecifiedErrorCode = "391920"
 
 	credentialsStatusKey         = "status"
 	credentialsStatusLoaded      = "loaded"
@@ -102,7 +106,8 @@ func (c *Client) loadCredentials(ctx context.Context, ss sessions.SessionStore) 
 		status = credentialsStatusUnavailable
 	case errors.Is(err, errNoWarehouse):
 		ctxzap.Extract(ctx).Warn("baton-snowflake: secret last-used dates unavailable; "+
-			"set a DEFAULT_WAREHOUSE the connector role has USAGE on to populate them", zap.Error(err))
+			"the connector user needs a DEFAULT_WAREHOUSE that the connector role has USAGE on "+
+			"and that is running or set to AUTO_RESUME", zap.Error(err))
 		status = credentialsStatusUnavailable
 	case err != nil:
 		return "", err
@@ -234,7 +239,7 @@ func classifyCredentialsError(resp *http.Response, apiErr *SnowflakeError, err e
 			ErrInsufficientPrivileges, err,
 		)
 	}
-	if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == noActiveWarehouseErrorCode {
+	if isWarehouseUnavailable(resp, apiErr) {
 		return uhttp.WrapErrors(
 			codes.FailedPrecondition,
 			"no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
@@ -242,4 +247,16 @@ func classifyCredentialsError(resp *http.Response, apiErr *SnowflakeError, err e
 		)
 	}
 	return dedupeAPIError(err)
+}
+
+// isWarehouseUnavailable reports whether a response is the 422 that means the statement had no usable warehouse.
+func isWarehouseUnavailable(resp *http.Response, apiErr *SnowflakeError) bool {
+	if resp == nil || resp.StatusCode != http.StatusUnprocessableEntity || apiErr == nil {
+		return false
+	}
+	switch apiErr.Code {
+	case noActiveWarehouseErrorCode, warehouseSuspendedErrorCode, noWarehouseSpecifiedErrorCode:
+		return true
+	}
+	return false
 }
