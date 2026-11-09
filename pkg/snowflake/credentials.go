@@ -31,7 +31,7 @@ const (
 	// Unlike the SHOW/DESCRIBE statements the rest of the sync runs, this SELECT needs a warehouse.
 	// No active warehouse in the session.
 	noActiveWarehouseErrorCode = "000606"
-	// Warehouse suspended and not resumable (AUTO_RESUME = FALSE, or suspended by a resource monitor).
+	// Warehouse suspended with AUTO_RESUME = FALSE.
 	warehouseSuspendedErrorCode = "000608"
 	// SQL API: no warehouse resolvable for the request (no DEFAULT_WAREHOUSE, or no USAGE on it).
 	noWarehouseSpecifiedErrorCode = "391920"
@@ -58,7 +58,8 @@ type Credential struct {
 
 // UserCredentials returns the user's KEYPAIR and PAT rows with a LAST_USED_ON, loading
 // SNOWFLAKE.ACCOUNT_USAGE.CREDENTIALS once per session (POST /api/v2/statements).
-// Requires the SNOWFLAKE.SECURITY_VIEWER database role and USAGE on the default warehouse;
+// Requires the SNOWFLAKE.SECURITY_VIEWER database role and USAGE on a default warehouse that is
+// running or set to AUTO_RESUME;
 // without either, or without a session store, it returns no rows and a nil error.
 func (c *Client) UserCredentials(ctx context.Context, ss sessions.SessionStore, userName string) ([]Credential, error) {
 	// Without a cache the whole view would be queried per user, so skip the optional dates instead.
@@ -235,14 +236,14 @@ func classifyCredentialsError(resp *http.Response, apiErr *SnowflakeError, err e
 		(resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == sqlObjectNotAuthorizedErrorCode) {
 		return uhttp.WrapErrors(
 			codes.PermissionDenied,
-			"insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
+			"baton-snowflake: insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
 			ErrInsufficientPrivileges, err,
 		)
 	}
 	if isWarehouseUnavailable(resp, apiErr) {
 		return uhttp.WrapErrors(
 			codes.FailedPrecondition,
-			"no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
+			"baton-snowflake: no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
 			errNoWarehouse, err,
 		)
 	}
