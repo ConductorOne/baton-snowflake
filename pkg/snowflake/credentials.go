@@ -29,8 +29,12 @@ const (
 	sqlObjectNotAuthorizedErrorCode = "002003"
 
 	// Unlike the SHOW/DESCRIBE statements the rest of the sync runs, this SELECT needs a warehouse.
-	// Snowflake answers 000606 when the role has no usable default warehouse, or it is suspended.
+	// No active warehouse in the session.
 	noActiveWarehouseErrorCode = "000606"
+	// Warehouse suspended with AUTO_RESUME = FALSE.
+	warehouseSuspendedErrorCode = "000608"
+	// SQL API: no warehouse resolvable for the request (no DEFAULT_WAREHOUSE, or no USAGE on it).
+	noWarehouseSpecifiedErrorCode = "391920"
 
 	credentialsStatusKey         = "status"
 	credentialsStatusLoaded      = "loaded"
@@ -54,7 +58,8 @@ type Credential struct {
 
 // UserCredentials returns the user's KEYPAIR and PAT rows with a LAST_USED_ON, loading
 // SNOWFLAKE.ACCOUNT_USAGE.CREDENTIALS once per session (POST /api/v2/statements).
-// Requires the SNOWFLAKE.SECURITY_VIEWER database role and USAGE on the default warehouse;
+// Requires the SNOWFLAKE.SECURITY_VIEWER database role and USAGE on a default warehouse that is
+// running or set to AUTO_RESUME;
 // without either, or without a session store, it returns no rows and a nil error.
 func (c *Client) UserCredentials(ctx context.Context, ss sessions.SessionStore, userName string) ([]Credential, error) {
 	// Without a cache the whole view would be queried per user, so skip the optional dates instead.
@@ -102,7 +107,8 @@ func (c *Client) loadCredentials(ctx context.Context, ss sessions.SessionStore) 
 		status = credentialsStatusUnavailable
 	case errors.Is(err, errNoWarehouse):
 		ctxzap.Extract(ctx).Warn("baton-snowflake: secret last-used dates unavailable; "+
-			"set a DEFAULT_WAREHOUSE the connector role has USAGE on to populate them", zap.Error(err))
+			"the connector user needs a DEFAULT_WAREHOUSE that the connector role has USAGE on "+
+			"and that is running or set to AUTO_RESUME", zap.Error(err))
 		status = credentialsStatusUnavailable
 	case err != nil:
 		return "", err
@@ -230,16 +236,28 @@ func classifyCredentialsError(resp *http.Response, apiErr *SnowflakeError, err e
 		(resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == sqlObjectNotAuthorizedErrorCode) {
 		return uhttp.WrapErrors(
 			codes.PermissionDenied,
-			"insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
+			"baton-snowflake: insufficient privileges to read ACCOUNT_USAGE.CREDENTIALS",
 			ErrInsufficientPrivileges, err,
 		)
 	}
-	if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Code == noActiveWarehouseErrorCode {
+	if isWarehouseUnavailable(resp, apiErr) {
 		return uhttp.WrapErrors(
 			codes.FailedPrecondition,
-			"no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
+			"baton-snowflake: no usable warehouse to read ACCOUNT_USAGE.CREDENTIALS",
 			errNoWarehouse, err,
 		)
 	}
 	return dedupeAPIError(err)
+}
+
+// isWarehouseUnavailable reports whether a response is the 422 that means the statement had no usable warehouse.
+func isWarehouseUnavailable(resp *http.Response, apiErr *SnowflakeError) bool {
+	if resp == nil || resp.StatusCode != http.StatusUnprocessableEntity || apiErr == nil {
+		return false
+	}
+	switch apiErr.Code {
+	case noActiveWarehouseErrorCode, warehouseSuspendedErrorCode, noWarehouseSpecifiedErrorCode:
+		return true
+	}
+	return false
 }

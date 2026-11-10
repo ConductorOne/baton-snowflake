@@ -174,7 +174,8 @@ last-used date. Unlike the rest of the sync, this query runs on a warehouse: the
 GRANT USAGE ON WAREHOUSE <warehouse> TO ROLE <connector-role>;
 ```
 
-Without a usable warehouse the sync also succeeds without last-used dates and logs one warning.
+Without a usable warehouse (no `DEFAULT_WAREHOUSE`, no `USAGE` on it, or a warehouse that is suspended
+and not set to `AUTO_RESUME`) the sync also succeeds without last-used dates and logs one warning.
 Snowflake can take up to 2 hours to record a credential's latest use. The date a key was set is
 reported as the key's creation date.
 
