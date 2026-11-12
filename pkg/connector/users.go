@@ -560,24 +560,24 @@ func (o *userBuilder) existingAccountResult(
 
 	user, err := o.fetchUserWithSQLRetry(ctx, userName)
 	if err != nil {
-		l.Error("user already exists but could not be fetched", zap.String("user_name", userName), zap.Error(err))
+		l.Debug("user already exists but could not be fetched", zap.String("user_name", userName), zap.Error(err))
 		return nil, false
 	}
 
 	// The name alone does not establish that the account is the requester's, and C1 binds the returned
 	// resource to the requesting identity. Refuse when an identifier the request carries contradicts it.
 	if mismatch := identityMismatch(createReq, user); mismatch != "" {
-		l.Warn("user already exists but belongs to a different identity, not linking",
+		l.Debug("user already exists but belongs to a different identity, not linking",
 			zap.String("user_name", userName), zap.String("mismatched_field", mismatch))
 		return nil, false
 	}
 
 	resource, err := userResource(ctx, user, o.secrets)
 	if err != nil {
-		l.Error("failed to build resource for existing user", zap.String("user_name", userName), zap.Error(err))
+		l.Debug("failed to build resource for existing user", zap.String("user_name", userName), zap.Error(err))
 		return nil, false
 	}
-	l.Info("user already exists in Snowflake, returning existing account", zap.String("user_name", userName))
+	l.Debug("user already exists in Snowflake, returning existing account", zap.String("user_name", userName))
 	// No credentials are returned because none were set on the existing account.
 	return &v2.CreateAccountResponse_AlreadyExistsResult{Resource: resource}, true
 }
