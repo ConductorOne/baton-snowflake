@@ -503,7 +503,7 @@ func (o *userBuilder) CreateAccount(
 				return res, nil, annos, nil
 			}
 		}
-		l.Error("failed to create user",
+		l.Debug("failed to create user",
 			zap.String("user_name", userName),
 			zap.Error(err),
 		)
