@@ -42,7 +42,7 @@ With a vault on the provision policy or personal credentials for the user, C1 se
 
 ### Accounts that already exist
 
-If Snowflake reports that the user already exists, the connector links the existing account instead of failing the request, and it sets no password. It does not link the account when the profile's `email` or `login` differs from the existing user's.
+If Snowflake reports that the user already exists, the connector links the existing account instead of failing the request, and it sets no password. The account is matched by the Snowflake user `name`. It does not link the account when the profile's `email` or `login` differs from the existing user's. If the profile has no `email` or `login`, or the existing user has none, nothing else is compared and the match is on `name` alone, so make sure the profile `name` identifies the requester.
 
 ### Issuing programmatic access tokens
 
