@@ -499,11 +499,13 @@ func (o *userBuilder) CreateAccount(
 			annos = annotations.New(rateLimitDesc)
 		}
 		if status.Code(err) == codes.AlreadyExists {
-			if res, ok := o.existingAccountResult(ctx, userName, createReq, annos); ok {
-				return res, nil, annos, nil
+			res, linkErr := o.existingAccountResult(ctx, userName, createReq, err)
+			if linkErr != nil {
+				return nil, nil, annos, linkErr
 			}
+			return res, nil, annos, nil
 		}
-		l.Debug("failed to create user",
+		l.Error("failed to create user",
 			zap.String("user_name", userName),
 			zap.Error(err),
 		)
@@ -548,20 +550,21 @@ func (o *userBuilder) CreateAccount(
 }
 
 // existingAccountResult returns the pre-existing Snowflake user as an AlreadyExistsResult so the
-// caller links it instead of failing the request. ok is false when the account must not be linked
-// (it cannot be fetched, or it belongs to a different person) and the caller keeps the original error.
+// caller links it instead of failing the request. createErr is the 409 from the create call. When the
+// account must not be linked (it cannot be read, or it belongs to a different person) the returned
+// error says which, so the admin can tell those cases apart from a plain duplicate.
 func (o *userBuilder) existingAccountResult(
 	ctx context.Context,
 	userName string,
 	createReq *snowflake.CreateUserRequest,
-	annos annotations.Annotations,
-) (connectorbuilder.CreateAccountResponse, bool) {
+	createErr error,
+) (connectorbuilder.CreateAccountResponse, error) {
 	l := ctxzap.Extract(ctx)
 
 	user, err := o.fetchUserWithSQLRetry(ctx, userName)
 	if err != nil {
 		l.Debug("user already exists but could not be fetched", zap.String("user_name", userName), zap.Error(err))
-		return nil, false
+		return nil, wrapError(err, "user already exists but could not be read")
 	}
 
 	// The name alone does not establish that the account is the requester's, and C1 binds the returned
@@ -569,17 +572,17 @@ func (o *userBuilder) existingAccountResult(
 	if mismatch := identityMismatch(createReq, user); mismatch != "" {
 		l.Debug("user already exists but belongs to a different identity, not linking",
 			zap.String("user_name", userName), zap.String("mismatched_field", mismatch))
-		return nil, false
+		return nil, wrapError(createErr, fmt.Sprintf("user already exists but its %s differs from the request", mismatch))
 	}
 
 	resource, err := userResource(ctx, user, o.secrets)
 	if err != nil {
 		l.Debug("failed to build resource for existing user", zap.String("user_name", userName), zap.Error(err))
-		return nil, false
+		return nil, wrapError(err, "user already exists but could not be read")
 	}
 	l.Debug("user already exists in Snowflake, returning existing account", zap.String("user_name", userName))
 	// No credentials are returned because none were set on the existing account.
-	return &v2.CreateAccountResponse_AlreadyExistsResult{Resource: resource}, true
+	return &v2.CreateAccountResponse_AlreadyExistsResult{Resource: resource}, nil
 }
 
 // identityMismatch names the first of email or login that the request supplied and the existing user

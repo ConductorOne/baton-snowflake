@@ -139,6 +139,7 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 		createStatus   int
 		describeStatus int
 		wantCode       codes.Code
+		wantMsg        string
 		wantDescribes  int32
 	}{
 		{
@@ -147,6 +148,7 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 			createStatus:   http.StatusConflict,
 			describeStatus: http.StatusOK,
 			wantCode:       codes.AlreadyExists,
+			wantMsg:        "its email differs from the request",
 			wantDescribes:  1,
 		},
 		{
@@ -155,6 +157,7 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 			createStatus:   http.StatusConflict,
 			describeStatus: http.StatusOK,
 			wantCode:       codes.AlreadyExists,
+			wantMsg:        "its login differs from the request",
 			wantDescribes:  1,
 		},
 		{
@@ -162,7 +165,8 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 			profile:        map[string]any{"name": "alice"},
 			createStatus:   http.StatusConflict,
 			describeStatus: http.StatusForbidden,
-			wantCode:       codes.AlreadyExists,
+			wantCode:       codes.PermissionDenied,
+			wantMsg:        "could not be read",
 			wantDescribes:  1,
 		},
 		{
@@ -182,7 +186,9 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 
 			require.Error(t, err)
 			require.Nil(t, result, "must not return a result that C1 would bind to the requester")
-			require.Equal(t, tc.wantCode, status.Code(err), "the original create error must be preserved: %v", err)
+			require.Equal(t, tc.wantCode, status.Code(err), "the error code must say why the account was not linked: %v", err)
+			require.Contains(t, err.Error(), tc.wantMsg)
+			require.NotContains(t, err.Error(), "alice@example.com", "identifier values must not leak into the error")
 			require.Equal(t, tc.wantDescribes, describes.Load())
 		})
 	}
