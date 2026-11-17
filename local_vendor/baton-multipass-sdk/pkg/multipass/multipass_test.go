@@ -1,4 +1,5 @@
-// Adapted from github.com/conductorone/baton-multipass-sdk/pkg/multipass v0.0.1 (b9f4b677). Replace with that module once it is public (IGA-5320).
+// Adapted from github.com/conductorone/baton-multipass-sdk/pkg/multipass v0.0.1.
+// Replace with the published module when it is available.
 
 package multipass
 
