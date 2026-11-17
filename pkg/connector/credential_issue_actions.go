@@ -111,6 +111,7 @@ func programmaticAccessTokenActionSchema() *v2.BatonActionSchema {
 				Name:        actionArgRoleRestriction,
 				DisplayName: "Role restriction",
 				Description: "Optional. Snowflake role the token is restricted to; it must be granted to the user. " +
+					"Unquoted names are case-insensitive (analyst is ANALYST); a double-quoted name (\"Mixed Case\") is matched exactly. " +
 					"Defaults to the user's default role for service users, which must have one, and to no restriction for PERSON users.",
 				StringField: configv1.StringField_builder{}.Build(),
 			}.Build(),
@@ -292,6 +293,9 @@ func parseIssuerOptions(args *structpb.Struct) (snowflake.ProgrammaticAccessToke
 	if opts.RoleRestriction, err = optionalStringArg(args, actionArgRoleRestriction, maxRoleRestrictionLen); err != nil {
 		return opts, err
 	}
+	if opts.RoleRestriction, err = normalizeRoleIdentifier(opts.RoleRestriction); err != nil {
+		return opts, err
+	}
 	if opts.Comment, err = optionalStringArg(args, actionArgComment, maxCommentLen); err != nil {
 		return opts, err
 	}
@@ -346,6 +350,33 @@ func optionalStringArg(args *structpb.Struct, key string, maxLen int) (string, e
 		}
 	}
 	return s, nil
+}
+
+// normalizeRoleIdentifier resolves an admin-supplied role name by Snowflake
+// identifier rules, because ROLE_RESTRICTION's string literal is matched as an
+// exact-case name. A double-quoted value keeps its case, with "" unescaped to ".
+// An unquoted value is uppercased and must not contain a double quote. An empty
+// input stays empty, meaning "not supplied".
+func normalizeRoleIdentifier(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if len(raw) >= 2 && strings.HasPrefix(raw, `"`) && strings.HasSuffix(raw, `"`) {
+		inner := raw[1 : len(raw)-1]
+		// Inside quotes every " must be doubled.
+		if strings.Contains(strings.ReplaceAll(inner, `""`, ""), `"`) {
+			return "", status.Errorf(codes.InvalidArgument, "baton-snowflake: %s has an unescaped double quote", actionArgRoleRestriction)
+		}
+		name := strings.ReplaceAll(inner, `""`, `"`)
+		if name == "" {
+			return "", status.Errorf(codes.InvalidArgument, "baton-snowflake: %s must not be an empty quoted name", actionArgRoleRestriction)
+		}
+		return name, nil
+	}
+	if strings.Contains(raw, `"`) {
+		return "", status.Errorf(codes.InvalidArgument, "baton-snowflake: %s contains a double quote outside a fully quoted name", actionArgRoleRestriction)
+	}
+	return strings.ToUpper(raw), nil
 }
 
 // discardToken best-effort removes a token that cannot be returned, since

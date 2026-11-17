@@ -316,7 +316,7 @@ func TestIssuerOptionalArgumentsEmitted(t *testing.T) {
 	require.NoError(t, err)
 	adds := statementsMatching(*statements, `ADD PROGRAMMATIC ACCESS TOKEN`)
 	require.Len(t, adds, 1)
-	require.Contains(t, adds[0], ` ROLE_RESTRICTION = 'analyst' DAYS_TO_EXPIRY = 3 MINS_TO_BYPASS_NETWORK_POLICY_REQUIREMENT = 45 COMMENT = 'it''s \\ ok';`)
+	require.Contains(t, adds[0], ` ROLE_RESTRICTION = 'ANALYST' DAYS_TO_EXPIRY = 3 MINS_TO_BYPASS_NETWORK_POLICY_REQUIREMENT = 45 COMMENT = 'it''s \\ ok';`)
 }
 
 func TestIssuerOmittedArgumentsUseDefaults(t *testing.T) {
@@ -336,7 +336,7 @@ func TestIssuerExplicitRoleOverridesDefaultAndIsChecked(t *testing.T) {
 	b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "SERVICE", defaultRole: "other_role", roleGranted: true})
 	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: "other_role"}))
 	require.NoError(t, err)
-	require.Contains(t, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0], `ROLE_RESTRICTION = 'other_role'`)
+	require.Contains(t, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0], `ROLE_RESTRICTION = 'OTHER_ROLE'`)
 
 	// A role that is not granted is refused before the mint statement.
 	b, statements = issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: "x", roleGranted: false})
@@ -385,5 +385,44 @@ func TestIssuerBypassRefusedForServiceUsers(t *testing.T) {
 		_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgMinsToBypass: float64(10)}))
 		require.Equal(t, codes.InvalidArgument, status.Code(err), userType)
 		require.Empty(t, statementsMatching(*statements, `PROGRAMMATIC ACCESS TOKEN`), "no mint statement")
+	}
+}
+
+func TestNormalizeRoleIdentifier(t *testing.T) {
+	for in, want := range map[string]string{
+		"":             "",
+		"analyst":      "ANALYST",
+		"Analyst_2":    "ANALYST_2",
+		`"Mixed Case"`: "Mixed Case",
+		`"a""b"`:       `a"b`,
+		`"lower"`:      "lower",
+	} {
+		got, err := normalizeRoleIdentifier(in)
+		require.NoError(t, err, in)
+		require.Equal(t, want, got, in)
+	}
+	for _, bad := range []string{`ana"lyst`, `""`, `"a"b"`, `"abc`, `abc"`} {
+		_, err := normalizeRoleIdentifier(bad)
+		require.Equal(t, codes.InvalidArgument, status.Code(err), bad)
+	}
+}
+
+func TestIssuerRoleRestrictionNormalizedInStatement(t *testing.T) {
+	for in, want := range map[string]string{
+		"analyst":      `ROLE_RESTRICTION = 'ANALYST'`,
+		`"Mixed Case"`: `ROLE_RESTRICTION = 'Mixed Case'`,
+		`"a""b"`:       `ROLE_RESTRICTION = 'a"b'`,
+	} {
+		b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: strings.Trim(strings.ReplaceAll(want[len("ROLE_RESTRICTION = '"):], `'`, ""), ""), roleGranted: true})
+		_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: in}))
+		require.NoError(t, err, in)
+		require.Contains(t, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0], want, in)
+	}
+
+	for _, bad := range []string{`ana"lyst`, `""`} {
+		b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: "x", roleGranted: true})
+		_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: bad}))
+		require.Equal(t, codes.InvalidArgument, status.Code(err), bad)
+		require.Empty(t, *statements)
 	}
 }
