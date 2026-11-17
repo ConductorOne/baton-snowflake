@@ -72,19 +72,43 @@ func (c *Client) ListProgrammaticAccessTokens(ctx context.Context, userName stri
 	return tokens, nil
 }
 
+// ProgrammaticAccessTokenOptions are the optional clauses of ALTER USER ... ADD
+// PROGRAMMATIC ACCESS TOKEN. Zero values omit the clause, except DaysToExpiry,
+// which must be set.
+type ProgrammaticAccessTokenOptions struct {
+	// RoleRestriction is a role name, emitted as a string literal.
+	RoleRestriction string
+	// DaysToExpiry is required and at least one.
+	DaysToExpiry int
+	// MinsToBypassNetworkPolicy is emitted when positive.
+	MinsToBypassNetworkPolicy int
+	// Comment is emitted as a string literal when non-empty.
+	Comment string
+}
+
 // CreateProgrammaticAccessToken creates a token and returns the secret supplied
 // by Snowflake in the one response where it is available. It never logs it.
-func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, tokenName, roleRestriction string, daysToExpiry int) (string, error) {
-	if daysToExpiry < 1 {
+func (c *Client) CreateProgrammaticAccessToken(ctx context.Context, userName, tokenName string, opts ProgrammaticAccessTokenOptions) (string, error) {
+	if opts.DaysToExpiry < 1 {
 		return "", fmt.Errorf("snowflake: days to expiry must be at least one")
 	}
-	roleClause := ""
-	if roleRestriction != "" {
-		roleClause = fmt.Sprintf(" ROLE_RESTRICTION = %s", quoteIdentifier(roleRestriction))
+	if opts.MinsToBypassNetworkPolicy < 0 {
+		return "", fmt.Errorf("snowflake: minutes to bypass network policy must not be negative")
+	}
+	var clauses strings.Builder
+	if opts.RoleRestriction != "" {
+		fmt.Fprintf(&clauses, " ROLE_RESTRICTION = %s", quoteStringLiteral(opts.RoleRestriction))
+	}
+	fmt.Fprintf(&clauses, " DAYS_TO_EXPIRY = %d", opts.DaysToExpiry)
+	if opts.MinsToBypassNetworkPolicy > 0 {
+		fmt.Fprintf(&clauses, " MINS_TO_BYPASS_NETWORK_POLICY_REQUIREMENT = %d", opts.MinsToBypassNetworkPolicy)
+	}
+	if opts.Comment != "" {
+		fmt.Fprintf(&clauses, " COMMENT = %s", quoteStringLiteral(opts.Comment))
 	}
 	statement := fmt.Sprintf(
-		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s%s DAYS_TO_EXPIRY = %d;",
-		quoteIdentifier(userName), quoteIdentifier(tokenName), roleClause, daysToExpiry,
+		"ALTER USER %s ADD PROGRAMMATIC ACCESS TOKEN %s%s;",
+		quoteIdentifier(userName), quoteIdentifier(tokenName), clauses.String(),
 	)
 	result, err := c.executeStatementAsUserAdmin(ctx, statement)
 	if err != nil {
@@ -179,6 +203,11 @@ func classifyStatementError(resp *http.Response, apiErr *SnowflakeError, err err
 		)
 	}
 	return dedupeAPIError(err)
+}
+
+// quoteStringLiteral renders s as a single-quoted SQL string literal.
+func quoteStringLiteral(s string) string {
+	return "'" + escapeStringLiteral(s) + "'"
 }
 
 func quoteIdentifier(identifier string) string {

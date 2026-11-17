@@ -12,26 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The issuance statement is built from one format string with an optional role
-// clause interpolated into it. These pin both shapes: the clause cannot simply be
-// appended, because the statement ends with a semicolon and Snowflake rejects
-// anything after the terminator with a SQL compilation error.
+// The issuance statement is built from optional clauses. These pin each shape:
+// clauses cannot simply be appended after the terminator, and string values must
+// be literals (single quotes), not identifiers.
 func TestCreateProgrammaticAccessTokenStatementShape(t *testing.T) {
+	const head = `ALTER USER "svc" ADD PROGRAMMATIC ACCESS TOKEN "c1-request-1"`
 	for _, tc := range []struct {
-		name            string
-		roleRestriction string
-		want            string
+		name string
+		opts ProgrammaticAccessTokenOptions
+		want string
 	}{
-		{
-			name:            "without a role restriction",
-			roleRestriction: "",
-			want:            `ALTER USER "svc" ADD PROGRAMMATIC ACCESS TOKEN "c1-request-1" DAYS_TO_EXPIRY = 7;`,
-		},
-		{
-			name:            "with a role restriction",
-			roleRestriction: "svc_role",
-			want:            `ALTER USER "svc" ADD PROGRAMMATIC ACCESS TOKEN "c1-request-1" ROLE_RESTRICTION = "svc_role" DAYS_TO_EXPIRY = 7;`,
-		},
+		{"days only", ProgrammaticAccessTokenOptions{DaysToExpiry: 7}, head + ` DAYS_TO_EXPIRY = 7;`},
+		{"role restriction", ProgrammaticAccessTokenOptions{DaysToExpiry: 7, RoleRestriction: "svc_role"},
+			head + ` ROLE_RESTRICTION = 'svc_role' DAYS_TO_EXPIRY = 7;`},
+		{"bypass minutes", ProgrammaticAccessTokenOptions{DaysToExpiry: 7, MinsToBypassNetworkPolicy: 30},
+			head + ` DAYS_TO_EXPIRY = 7 MINS_TO_BYPASS_NETWORK_POLICY_REQUIREMENT = 30;`},
+		{"comment", ProgrammaticAccessTokenOptions{DaysToExpiry: 1, Comment: "ci token"},
+			head + ` DAYS_TO_EXPIRY = 1 COMMENT = 'ci token';`},
+		{"everything", ProgrammaticAccessTokenOptions{DaysToExpiry: 365, RoleRestriction: "r", MinsToBypassNetworkPolicy: 1440, Comment: "c"},
+			head + ` ROLE_RESTRICTION = 'r' DAYS_TO_EXPIRY = 365 MINS_TO_BYPASS_NETWORK_POLICY_REQUIREMENT = 1440 COMMENT = 'c';`},
+		{"quote and backslash escaped", ProgrammaticAccessTokenOptions{DaysToExpiry: 7, RoleRestriction: `a'b`, Comment: `it's a \ trap\`},
+			head + ` ROLE_RESTRICTION = 'a''b' DAYS_TO_EXPIRY = 7 COMMENT = 'it''s a \\ trap\\';`},
+		{"injection attempt stays inside the literal", ProgrammaticAccessTokenOptions{DaysToExpiry: 7, Comment: `x'; DROP USER y; --`},
+			head + ` DAYS_TO_EXPIRY = 7 COMMENT = 'x''; DROP USER y; --';`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := &statementRecorder{}
@@ -40,9 +43,7 @@ func TestCreateProgrammaticAccessTokenStatementShape(t *testing.T) {
 			client, err := New(server.URL, JWTConfig{}, server.Client())
 			require.NoError(t, err)
 
-			secret, err := client.CreateProgrammaticAccessToken(
-				context.Background(), "svc", "c1-request-1", tc.roleRestriction, 7,
-			)
+			secret, err := client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", tc.opts)
 			require.NoError(t, err)
 			require.Equal(t, "the-secret", secret)
 			statements, _ := recorder.snapshot()
@@ -51,12 +52,26 @@ func TestCreateProgrammaticAccessTokenStatementShape(t *testing.T) {
 	}
 }
 
-func TestCreateProgrammaticAccessTokenRejectsNonPositiveExpiry(t *testing.T) {
-	client, err := New("https://example.snowflakecomputing.com", JWTConfig{}, http.DefaultClient)
+func TestQuoteStringLiteral(t *testing.T) {
+	require.Equal(t, `''`, quoteStringLiteral(""))
+	require.Equal(t, `'a''b'`, quoteStringLiteral("a'b"))
+	require.Equal(t, `'a\\b'`, quoteStringLiteral(`a\b`))
+	require.Equal(t, `'\\'''`, quoteStringLiteral(`\'`), "a quote after a backslash cannot close the literal")
+}
+
+func TestCreateProgrammaticAccessTokenRejectsInvalidOptions(t *testing.T) {
+	recorder := &statementRecorder{}
+	server := newTokenCreateServer(t, recorder)
+	defer server.Close()
+	client, err := New(server.URL, JWTConfig{}, server.Client())
 	require.NoError(t, err)
 
-	_, err = client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", "", 0)
+	_, err = client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", ProgrammaticAccessTokenOptions{})
 	require.ErrorContains(t, err, "days to expiry must be at least one")
+	_, err = client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", ProgrammaticAccessTokenOptions{DaysToExpiry: 1, MinsToBypassNetworkPolicy: -1})
+	require.Error(t, err)
+	statements, _ := recorder.snapshot()
+	require.Empty(t, statements)
 }
 
 // statementRecorder captures what each request carried. The handler runs on the
@@ -166,7 +181,7 @@ func TestTokenMutationsRunAsUserAdmin(t *testing.T) {
 		client, err := New(server.URL, JWTConfig{}, server.Client())
 		require.NoError(t, err)
 
-		_, err = client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", "", 7)
+		_, err = client.CreateProgrammaticAccessToken(context.Background(), "svc", "c1-request-1", ProgrammaticAccessTokenOptions{DaysToExpiry: 7})
 		require.NoError(t, err)
 		_, roles := recorder.snapshot()
 		require.Equal(t, []string{UserAdminRole}, roles)
