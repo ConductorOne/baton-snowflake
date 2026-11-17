@@ -32,10 +32,11 @@ func (c *Client) RoleGrantedToUser(ctx context.Context, userName, roleName strin
 			return false, fmt.Errorf("snowflake: read user role grant name: %w", err)
 		}
 		// SHOW GRANTS wraps a mixed-case or spaced identifier in double quotes, while
-		// DESCRIBE USER reports DEFAULT_ROLE bare, so comparing the two raw strings
-		// reports a granted role as ungranted and blocks issuance entirely.
+		// DESCRIBE USER reports DEFAULT_ROLE bare, so both sides are unquoted first.
+		// The names then compare exactly: ROLE_RESTRICTION resolves a role by exact
+		// case, so a case-insensitive match would approve a role Snowflake rejects.
 		if strings.EqualFold(grantedOn, "ROLE") &&
-			strings.EqualFold(unquoteSnowflakeIdentifier(name), unquoteSnowflakeIdentifier(roleName)) {
+			unquoteSnowflakeIdentifier(name) == unquoteSnowflakeIdentifier(roleName) {
 			return true, nil
 		}
 	}

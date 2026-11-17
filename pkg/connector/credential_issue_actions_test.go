@@ -308,7 +308,7 @@ func withArgs(t *testing.T, kv map[string]any) *structpb.Struct {
 }
 
 func TestIssuerOptionalArgumentsEmitted(t *testing.T) {
-	b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: "analyst", roleGranted: true})
+	b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: "ANALYST", roleGranted: true})
 	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{
 		actionArgDaysToExpiry:    float64(3),
 		actionArgRoleRestriction: "analyst",
@@ -335,7 +335,7 @@ func TestIssuerOmittedArgumentsUseDefaults(t *testing.T) {
 
 func TestIssuerExplicitRoleOverridesDefaultAndIsChecked(t *testing.T) {
 	// A service user with an explicit role: the explicit role wins over the default role.
-	b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "SERVICE", defaultRole: "other_role", roleGranted: true})
+	b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "SERVICE", defaultRole: "OTHER_ROLE", roleGranted: true})
 	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: "other_role"}))
 	require.NoError(t, err)
 	require.Contains(t, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0], `ROLE_RESTRICTION = 'OTHER_ROLE'`)
@@ -482,4 +482,30 @@ func TestNewIssuedTokenNameCustomPrefix(t *testing.T) {
 	name, err := newIssuedTokenName("Team_A-ci", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), bytes.NewReader([]byte{0, 0, 0, 0}))
 	require.NoError(t, err)
 	require.Equal(t, "Team_A-ci-20260102T030405Z-aaaaaa", name)
+}
+
+// SHOW GRANTS TO USER needs privileges that creating the token does not, so a
+// denied role check must not block issuance; the token is still minted with the
+// restriction.
+func TestIssuerRoleCheckDeniedStillIssues(t *testing.T) {
+	b, statements := issuerTestBuilder(t, credentialIssueMock{
+		userType: "SERVICE", defaultRole: "SVC_ROLE", denyPrefix: "SHOW GRANTS TO USER",
+	})
+	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, nil))
+	require.NoError(t, err)
+	require.Len(t, statementsMatching(*statements, `^SHOW GRANTS TO USER`), 1)
+	adds := statementsMatching(*statements, `ADD PROGRAMMATIC ACCESS TOKEN`)
+	require.Len(t, adds, 1)
+	require.Contains(t, adds[0], `ROLE_RESTRICTION = 'SVC_ROLE'`)
+	require.Empty(t, statementsMatching(*statements, `REMOVE PROGRAMMATIC ACCESS TOKEN`))
+}
+
+// A role check that fails for any other reason refuses before the token exists.
+func TestIssuerRoleCheckErrorRefusesBeforeMint(t *testing.T) {
+	b, statements := issuerTestBuilder(t, credentialIssueMock{
+		userType: "PERSON", defaultRole: "ANALYST", roleGranted: false,
+	})
+	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: "analyst"}))
+	require.Error(t, err)
+	require.Empty(t, statementsMatching(*statements, `ADD PROGRAMMATIC ACCESS TOKEN`))
 }

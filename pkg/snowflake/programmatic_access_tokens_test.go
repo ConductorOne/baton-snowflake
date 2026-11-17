@@ -226,7 +226,8 @@ func TestRoleGrantedToUserMatchesQuotedIdentifiers(t *testing.T) {
 	}{
 		{name: "bare name", showName: "SVC_ROLE", lookFor: "SVC_ROLE", want: true},
 		{name: "quoted mixed case", showName: `"Mixed Case Role"`, lookFor: "Mixed Case Role", want: true},
-		{name: "case differs", showName: "SVC_ROLE", lookFor: "svc_role", want: true},
+		{name: "case differs is a different role", showName: "SVC_ROLE", lookFor: "svc_role", want: false},
+		{name: "quoted lowercase", showName: `"svc_role"`, lookFor: "svc_role", want: true},
 		{name: "genuinely absent", showName: "SVC_ROLE", lookFor: "OTHER_ROLE", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
