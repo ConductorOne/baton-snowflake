@@ -52,6 +52,10 @@ const (
 	actionArgRoleRestriction = "role_restriction"
 	actionArgMinsToBypass    = "mins_to_bypass_network_policy_requirement"
 	actionArgComment         = "comment"
+	actionArgNamePrefix      = "name_prefix"
+
+	defaultTokenNamePrefix = "c1"
+	maxNamePrefixLen       = 64
 
 	minDaysToExpiry       = 1
 	maxDaysToExpiry       = 365
@@ -125,6 +129,14 @@ func programmaticAccessTokenActionSchema() *v2.BatonActionSchema {
 				}.Build(),
 			}.Build(),
 			configv1.Field_builder{
+				Name:        actionArgNamePrefix,
+				DisplayName: "Token name prefix",
+				Description: fmt.Sprintf("Optional. Prefix of the token name, which is <prefix>-<UTC timestamp, 20060102T150405Z>-<6 random lowercase characters>. "+
+					"1 to %d characters: ASCII letters, digits, _ and -, starting with a letter; case is kept. Defaults to %s. "+
+					"The timestamp and random suffix are always appended.", maxNamePrefixLen, defaultTokenNamePrefix),
+				StringField: configv1.StringField_builder{}.Build(),
+			}.Build(),
+			configv1.Field_builder{
 				Name:        actionArgComment,
 				DisplayName: "Comment",
 				Description: fmt.Sprintf("Optional. Comment stored on the token, at most %d characters, no control characters. Omitted by default.", maxCommentLen),
@@ -180,7 +192,11 @@ func (o *programmaticAccessTokenBuilder) issueProgrammaticAccessToken(
 		return nil, nil, nil, err
 	}
 
-	tokenName, err := newIssuedTokenName(time.Now(), rand.Reader)
+	prefix, err := parseNamePrefix(args)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	tokenName, err := newIssuedTokenName(prefix, time.Now(), rand.Reader)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -352,6 +368,36 @@ func optionalStringArg(args *structpb.Struct, key string, maxLen int) (string, e
 	return s, nil
 }
 
+// parseNamePrefix validates the optional token name prefix. Blank means the
+// default. The prefix keeps its case: the token name is a double-quoted
+// identifier, and REMOVE quotes it the same way.
+func parseNamePrefix(args *structpb.Struct) (string, error) {
+	v, ok := argPresent(args, actionArgNamePrefix)
+	if !ok {
+		return defaultTokenNamePrefix, nil
+	}
+	sv, isStr := v.GetKind().(*structpb.Value_StringValue)
+	if !isStr {
+		return "", status.Errorf(codes.InvalidArgument, "baton-snowflake: %s must be a string", actionArgNamePrefix)
+	}
+	prefix := strings.TrimSpace(sv.StringValue)
+	if prefix == "" {
+		return defaultTokenNamePrefix, nil
+	}
+	if len(prefix) > maxNamePrefixLen {
+		return "", status.Errorf(codes.InvalidArgument, "baton-snowflake: %s must be at most %d characters", actionArgNamePrefix, maxNamePrefixLen)
+	}
+	for i := 0; i < len(prefix); i++ {
+		c := prefix[i]
+		letter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if !letter && (i == 0 || !((c >= '0' && c <= '9') || c == '_' || c == '-')) {
+			return "", status.Errorf(codes.InvalidArgument,
+				"baton-snowflake: %s must start with an ASCII letter and contain only ASCII letters, digits, _ and -", actionArgNamePrefix)
+		}
+	}
+	return prefix, nil
+}
+
 // normalizeRoleIdentifier resolves an admin-supplied role name by Snowflake
 // identifier rules, because ROLE_RESTRICTION's string literal is matched as an
 // exact-case name. A double-quoted value keeps its case, with "" unescaped to ".
@@ -392,14 +438,14 @@ func (o *programmaticAccessTokenBuilder) discardToken(ctx context.Context, userN
 	}
 }
 
-// newIssuedTokenName names a token the issuer creates: c1-<UTC
+// newIssuedTokenName names a token the issuer creates: <prefix>-<UTC
 // 20060102T150405Z>-<6 random lowercase>, e.g. c1-20261110T201426Z-k3x9qa. The
 // clock and randomness are arguments so tests can pin them.
-func newIssuedTokenName(now time.Time, random io.Reader) (string, error) {
+func newIssuedTokenName(prefix string, now time.Time, random io.Reader) (string, error) {
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(random, buf); err != nil {
 		return "", fmt.Errorf("baton-snowflake: generate token name: %w", err)
 	}
 	suffix := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(buf))[:issuedTokenNameSuffixLen]
-	return "c1-" + now.UTC().Format("20060102T150405Z") + "-" + suffix, nil
+	return prefix + "-" + now.UTC().Format("20060102T150405Z") + "-" + suffix, nil
 }

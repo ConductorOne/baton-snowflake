@@ -103,7 +103,7 @@ func TestIssuerSchemaShape(t *testing.T) {
 
 	// One required subject, then the optional admin-fixed settings; never the name.
 	args := schema.GetArguments()
-	require.Len(t, args, 5)
+	require.Len(t, args, 6)
 	subject := args[0]
 	require.Equal(t, actionArgSubject, subject.GetName())
 	require.True(t, subject.GetIsRequired())
@@ -114,7 +114,9 @@ func TestIssuerSchemaShape(t *testing.T) {
 		require.NotEmpty(t, a.GetDescription(), a.GetName())
 		got[a.GetName()] = a
 	}
-	require.Len(t, got, 4)
+	require.Len(t, got, 5)
+	require.True(t, got[actionArgNamePrefix].HasStringField())
+	require.Contains(t, got[actionArgNamePrefix].GetDescription(), "c1")
 	require.True(t, got[actionArgDaysToExpiry].HasIntField())
 	require.EqualValues(t, 1, got[actionArgDaysToExpiry].GetIntField().GetRules().GetGte())
 	require.EqualValues(t, 365, got[actionArgDaysToExpiry].GetIntField().GetRules().GetLte())
@@ -282,15 +284,15 @@ func TestIssuerSecretTraitExpiryIsDefaultDays(t *testing.T) {
 
 func TestNewIssuedTokenName(t *testing.T) {
 	now := time.Date(2026, 1, 2, 15, 4, 5, 0, time.FixedZone("x", 3600))
-	name, err := newIssuedTokenName(now, bytes.NewReader([]byte{0, 0, 0, 0}))
+	name, err := newIssuedTokenName("c1", now, bytes.NewReader([]byte{0, 0, 0, 0}))
 	require.NoError(t, err)
 	require.Equal(t, "c1-20260102T140405Z-aaaaaa", name)
 
-	again, err := newIssuedTokenName(now, rand.Reader)
+	again, err := newIssuedTokenName("c1", now, rand.Reader)
 	require.NoError(t, err)
 	require.Regexp(t, `^c1-\d{8}T\d{6}Z-[a-z2-7]{6}$`, again)
 
-	_, err = newIssuedTokenName(now, bytes.NewReader(nil))
+	_, err = newIssuedTokenName("c1", now, bytes.NewReader(nil))
 	require.Error(t, err)
 }
 
@@ -425,4 +427,58 @@ func TestIssuerRoleRestrictionNormalizedInStatement(t *testing.T) {
 		require.Equal(t, codes.InvalidArgument, status.Code(err), bad)
 		require.Empty(t, *statements)
 	}
+}
+
+var customTokenNameRE = regexp.MustCompile(`"(Team_A-ci)-(\d{8}T\d{6}Z)-([a-z2-7]{6})"`)
+
+func TestIssuerDefaultNamePrefix(t *testing.T) {
+	for _, kv := range []map[string]any{nil, {actionArgNamePrefix: "   "}, {actionArgNamePrefix: ""}} {
+		b, statements := issuerTestBuilder(t, serviceUserMock())
+		_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, kv))
+		require.NoError(t, err)
+		require.Regexp(t, `TOKEN "c1-\d{8}T\d{6}Z-[a-z2-7]{6}"`, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0])
+	}
+}
+
+func TestIssuerCustomNamePrefixAndDelete(t *testing.T) {
+	ctx := context.Background()
+	b, statements := issuerTestBuilder(t, serviceUserMock())
+	response, plaintext, _, err := b.issueProgrammaticAccessToken(ctx, withArgs(t, map[string]any{actionArgNamePrefix: " Team_A-ci "}))
+	require.NoError(t, err)
+	add := statementsMatching(*statements, `ADD PROGRAMMATIC`)[0]
+	m := customTokenNameRE.FindStringSubmatch(add)
+	require.NotNil(t, m, add)
+	name := m[0][1 : len(m[0])-1]
+	require.Contains(t, string(plaintext[0].GetBytes()), `"key_id":"`+name+`"`)
+
+	returned := response.GetFields()[actionReturnResource].GetStructValue().GetFields()["resourceId"].GetStructValue().GetFields()["resourceId"].GetStringValue()
+	require.Equal(t, programmaticAccessTokenID(issuerTestUser, name), returned)
+	_, err = b.Delete(ctx, v2.ResourceId_builder{ResourceType: programmaticAccessTokenResourceType.Id, Resource: returned}.Build(), nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{`ALTER USER IF EXISTS "service-user" REMOVE PROGRAMMATIC ACCESS TOKEN IF EXISTS "` + name + `";`},
+		statementsMatching(*statements, `REMOVE PROGRAMMATIC`))
+}
+
+func TestIssuerInvalidNamePrefixRefusedBeforeAnyStatement(t *testing.T) {
+	for name, prefix := range map[string]any{
+		"leading digit": "9abc", "space": "a b", "quote": `a"b`, "too long": strings.Repeat("a", 65),
+		"non-ascii": "caf\u00e9", "leading dash": "-a", "leading underscore": "_a", "semicolon": "a;b", "wrong type": float64(1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, statements := issuerTestBuilder(t, serviceUserMock())
+			_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgNamePrefix: prefix}))
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			require.Empty(t, *statements)
+		})
+	}
+	// 64 characters is allowed.
+	b, _ := issuerTestBuilder(t, serviceUserMock())
+	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgNamePrefix: strings.Repeat("a", 64)}))
+	require.NoError(t, err)
+}
+
+func TestNewIssuedTokenNameCustomPrefix(t *testing.T) {
+	name, err := newIssuedTokenName("Team_A-ci", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), bytes.NewReader([]byte{0, 0, 0, 0}))
+	require.NoError(t, err)
+	require.Equal(t, "Team_A-ci-20260102T030405Z-aaaaaa", name)
 }
