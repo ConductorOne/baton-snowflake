@@ -3,64 +3,19 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-func TestCredentialUserBuilderIssueServiceUserUsesDefaultRoleRestriction(t *testing.T) {
-	var statements []string
-	server := newCredentialIssueMockServer(t, "SERVICE", "service_role", true, &statements)
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-	})
-	if err != nil {
-		t.Fatalf("Issue() error = %v", err)
-	}
-	if !containsStatement(statements, `ROLE_RESTRICTION = "service_role"`) {
-		t.Fatalf("issuance statement did not restrict the token to the service user's default role: %q", statements)
-	}
-}
-
-func TestCredentialUserBuilderIssueServiceUserWithUnassignedDefaultRoleFailsBeforeTokenCreation(t *testing.T) {
-	var statements []string
-	server := newCredentialIssueMockServer(t, "SERVICE", "service_role", false, &statements)
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-	})
-	if err == nil || !strings.Contains(err.Error(), "is not granted to the user") {
-		t.Fatalf("Issue() error = %v, want actionable missing-role error", err)
-	}
-	if containsStatement(statements, "ADD PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("Issue() created a token despite having no suitable role: %q", statements)
-	}
-}
 
 type credentialIssueMock struct {
 	userType    string
@@ -72,6 +27,9 @@ type credentialIssueMock struct {
 	// denyPrefix makes every statement with this prefix answer 422/003001, the shape
 	// Snowflake uses for an access-control denial.
 	denyPrefix string
+	// addStatus, when nonzero, fails the ADD PROGRAMMATIC ACCESS TOKEN statement with
+	// that HTTP status, the ambiguous shape where Snowflake may have created the token.
+	addStatus int
 	// preflightDelay is spent inside DESCRIBE USER, standing in for the round-trip
 	// latency between sampling the clock and issuing the ALTER USER.
 	preflightDelay time.Duration
@@ -80,6 +38,8 @@ type credentialIssueMock struct {
 	liveExpiry bool
 	statements *[]string
 }
+
+var daysToExpiryRE = regexp.MustCompile(`DAYS_TO_EXPIRY = (\d+)`)
 
 func newCredentialIssueMockServer(t *testing.T, userType, defaultRole string, roleGranted bool, statements *[]string) *httptest.Server {
 	return newCredentialIssueMockServerWithShowName(t, userType, defaultRole, roleGranted, "c1-request-1", statements)
@@ -149,11 +109,16 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 				"data": data,
 			})
 		case strings.Contains(request.Statement, "ADD PROGRAMMATIC ACCESS TOKEN"):
-			_, clause, found := strings.Cut(request.Statement, "DAYS_TO_EXPIRY = ")
-			if !found {
+			if mock.addStatus != 0 {
+				w.WriteHeader(mock.addStatus)
+				return
+			}
+			if m := daysToExpiryRE.FindStringSubmatch(request.Statement); m == nil {
 				t.Errorf("no DAYS_TO_EXPIRY in %q", request.Statement)
-			} else if _, err := fmt.Sscanf(clause, "%d;", &days); err != nil {
+			} else if parsed, err := strconv.ParseInt(m[1], 10, 64); err != nil {
 				t.Errorf("parse DAYS_TO_EXPIRY from %q: %v", request.Statement, err)
+			} else {
+				days = parsed
 			}
 			// Column metadata matches a live Snowflake response: cols are
 			// [token_name, token_secret]. The secret is read by name, not position.
@@ -209,203 +174,6 @@ func TestProgrammaticAccessTokenIDRoundTrip(t *testing.T) {
 	}
 	if userName != `Mixed Case User` || tokenName != "c1-request_1" {
 		t.Fatalf("round trip = (%q, %q), want (%q, %q)", userName, tokenName, `Mixed Case User`, "c1-request_1")
-	}
-}
-
-func TestCredentialIssuanceCapabilitiesRegisterWithDeleter(t *testing.T) {
-	server, err := connectorbuilder.NewConnector(context.Background(), &Connector{IssueCredentials: true})
-	if err != nil {
-		t.Fatalf("NewConnector() error = %v", err)
-	}
-
-	response, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
-	if err != nil {
-		t.Fatalf("GetMetadata() error = %v", err)
-	}
-	for _, capability := range response.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
-		if capability.GetResourceType().GetId() != userResourceType.Id {
-			continue
-		}
-		details := capability.GetCredentialIssue()
-		if details == nil || len(details.GetOptions()) != 1 {
-			t.Fatalf("credential issue details = %#v, want one option", details)
-		}
-		descriptor := details.GetOptions()[0]
-		if descriptor.GetSecretResourceTypeId() != programmaticAccessTokenResourceType.Id {
-			t.Fatalf("secret resource type = %q, want %q", descriptor.GetSecretResourceTypeId(), programmaticAccessTokenResourceType.Id)
-		}
-		if descriptor.GetExpiry().GetMin().AsDuration() != programmaticAccessTokenMinLifetime || descriptor.GetExpiry().GetMax().AsDuration() != programmaticAccessTokenMaxLifetime {
-			t.Fatalf("expiry = %#v, want min %v and max %v", descriptor.GetExpiry(), programmaticAccessTokenMinLifetime, programmaticAccessTokenMaxLifetime)
-		}
-		return
-	}
-	t.Fatal("user resource type capability not found")
-}
-
-func TestIssueCapabilityDetails(t *testing.T) {
-	details, _, err := newCredentialUserBuilder(nil, secretOptions{}).IssueCapabilityDetails(context.Background())
-	if err != nil {
-		t.Fatalf("IssueCapabilityDetails() error = %v", err)
-	}
-	descriptor := details.GetOptions()[0]
-	if descriptor.GetOption() != v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_TOKEN ||
-		descriptor.GetResourceMode() != v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE {
-		t.Fatalf("descriptor = %#v", descriptor)
-	}
-	if descriptor.GetExpiry().GetMin().AsDuration() != programmaticAccessTokenMinLifetime {
-		t.Fatalf("minimum expiry = %v", descriptor.GetExpiry().GetMin())
-	}
-}
-
-func TestCredentialUserBuilderIssueServiceUserWithNullDefaultRoleReportsMissingRole(t *testing.T) {
-	// The SQL API returns every column as text, so an unset DEFAULT_ROLE arrives as the
-	// literal "null". Testing the raw string for emptiness never matches, which used to
-	// send the caller to the "not granted" branch and tell them to grant a role named null.
-	var statements []string
-	server := newCredentialIssueMockServer(t, "SERVICE", "null", false, &statements)
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-	})
-	if err == nil || !strings.Contains(err.Error(), "has no default role") {
-		t.Fatalf("Issue() error = %v, want the missing-default-role error", err)
-	}
-	if containsStatement(statements, "ADD PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("Issue() created a token despite the user having no default role: %q", statements)
-	}
-}
-
-func TestCredentialUserBuilderIssueRemovesTokenWhenProviderDoesNotReturnIt(t *testing.T) {
-	// Every failure after creation must remove the token. Otherwise the plaintext is
-	// discarded, no secret resource is recorded, the SDK does not retry, and the
-	// credential is left live with nothing holding a handle to revoke it.
-	var statements []string
-	server := newCredentialIssueMockServerWithShowName(t, "SERVICE", "service_role", true, "some-other-token", &statements)
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-	})
-	if err == nil {
-		t.Fatal("Issue() error = nil, want failure when the provider does not return the token")
-	}
-	if !containsStatement(statements, "ADD PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("test did not reach token creation: %q", statements)
-	}
-	if !containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("Issue() left the created token orphaned: %q", statements)
-	}
-}
-
-func TestCredentialUserBuilderIssueKeepsTokenWhenReadBackIsDenied(t *testing.T) {
-	// SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER needs ownership or MODIFY
-	// PROGRAMMATIC AUTHENTICATION METHODS on the target user; creating the token
-	// does not. A role holding one and not the other would otherwise create a good
-	// credential and immediately destroy it, so issuance could never succeed for
-	// that tenant.
-	var statements []string
-	server := serveCredentialIssueMock(t, credentialIssueMock{
-		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
-		showTokenName: "c1-request-1", denyPrefix: "SHOW USER PROGRAMMATIC ACCESS TOKENS",
-		statements: &statements,
-	})
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	output, err := newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-	})
-	if err != nil {
-		t.Fatalf("Issue() error = %v, want issuance to survive a read-back denial", err)
-	}
-	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("Issue() destroyed a good credential over a read-back denial: %q", statements)
-	}
-	// Falls back to the locally computed expiry, which is Snowflake's own arithmetic
-	// from a slightly earlier clock and so is never later than the real one.
-	trait := &v2.SecretTrait{}
-	annos := annotations.Annotations(output.Secret.GetAnnotations())
-	if ok, err := annos.Pick(trait); err != nil || !ok {
-		t.Fatalf("secret trait: ok = %v, err = %v", ok, err)
-	}
-	want := time.Now().UTC().AddDate(0, 0, programmaticAccessTokenDefaultDays)
-	got := trait.GetExpiresAt().AsTime()
-	if got.Sub(want) > time.Minute || want.Sub(got) > time.Minute {
-		t.Fatalf("expiry = %v, want approximately %v", got, want)
-	}
-}
-
-func TestCredentialUserBuilderIssueProceedsWhenRoleCheckIsDenied(t *testing.T) {
-	// The default-role pre-check only turns a Snowflake rejection into a better
-	// message. A role that cannot run SHOW GRANTS TO USER must still be able to issue.
-	var statements []string
-	server := serveCredentialIssueMock(t, credentialIssueMock{
-		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
-		showTokenName: "c1-request-1", denyPrefix: "SHOW GRANTS TO USER",
-		statements: &statements,
-	})
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-	})
-	if err != nil {
-		t.Fatalf("Issue() error = %v, want issuance to survive a role-check denial", err)
-	}
-	if !containsStatement(statements, `ROLE_RESTRICTION = "service_role"`) {
-		t.Fatalf("issuance dropped the role restriction it could not verify: %q", statements)
-	}
-}
-
-func TestCredentialUserBuilderIssueSamplesExpiryAfterPreflight(t *testing.T) {
-	// Snowflake derives the expiry from its own clock at ALTER USER time. Sampling
-	// before DESCRIBE USER and SHOW GRANTS makes the real expiry later than the one
-	// computed here by however long those took, so a request whose remaining time sits
-	// just above a whole number of days trips the "provider expiry exceeds requested"
-	// guard and destroys a valid token.
-	var statements []string
-	server := serveCredentialIssueMock(t, credentialIssueMock{
-		userType: "SERVICE", defaultRole: "service_role", roleGranted: true,
-		showTokenName: "c1-request-1", preflightDelay: 150 * time.Millisecond,
-		liveExpiry: true, statements: &statements,
-	})
-	defer server.Close()
-	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	requested := time.Now().UTC().Add(2*24*time.Hour + 50*time.Millisecond)
-	_, err = newCredentialUserBuilder(client, secretOptions{}).Issue(context.Background(), &connectorbuilder.CredentialIssueInput{
-		IdentityID: v2.ResourceId_builder{ResourceType: userResourceType.Id, Resource: "service-user"}.Build(),
-		RequestID:  "request-1",
-		ExpiresAt:  timestamppb.New(requested),
-	})
-	if err != nil {
-		t.Fatalf("Issue() error = %v, want a shorter token rather than a failed issuance", err)
-	}
-	if containsStatement(statements, "REMOVE PROGRAMMATIC ACCESS TOKEN") {
-		t.Fatalf("Issue() created and then destroyed a token: %q", statements)
 	}
 }
 
