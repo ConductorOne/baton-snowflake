@@ -27,6 +27,9 @@ type credentialIssueMock struct {
 	// denyPrefix makes every statement with this prefix answer 422/003001, the shape
 	// Snowflake uses for an access-control denial.
 	denyPrefix string
+	// grantsStatus, when nonzero, fails SHOW GRANTS TO USER with that HTTP status
+	// and a non-privilege error, the generic role-check failure.
+	grantsStatus int
 	// addStatus, when nonzero, fails the ADD PROGRAMMATIC ACCESS TOKEN statement with
 	// that HTTP status, the ambiguous shape where Snowflake may have created the token.
 	addStatus int
@@ -64,6 +67,11 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 		}
 		*mock.statements = append(*mock.statements, request.Statement)
 		w.Header().Set("Content-Type", "application/json")
+		if mock.grantsStatus != 0 && strings.HasPrefix(request.Statement, "SHOW GRANTS TO USER") {
+			w.WriteHeader(mock.grantsStatus)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": "002003", "message": "SQL compilation error"})
+			return
+		}
 		if mock.denyPrefix != "" && strings.HasPrefix(request.Statement, mock.denyPrefix) {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_ = json.NewEncoder(w).Encode(map[string]any{

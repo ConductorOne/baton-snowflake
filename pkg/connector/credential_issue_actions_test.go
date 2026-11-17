@@ -500,12 +500,14 @@ func TestIssuerRoleCheckDeniedStillIssues(t *testing.T) {
 	require.Empty(t, statementsMatching(*statements, `REMOVE PROGRAMMATIC ACCESS TOKEN`))
 }
 
-// A role check that fails for any other reason refuses before the token exists.
+// A role check that fails for any reason other than insufficient privileges
+// refuses before the token exists.
 func TestIssuerRoleCheckErrorRefusesBeforeMint(t *testing.T) {
 	b, statements := issuerTestBuilder(t, credentialIssueMock{
-		userType: "PERSON", defaultRole: "ANALYST", roleGranted: false,
+		userType: "PERSON", defaultRole: "ANALYST", grantsStatus: http.StatusBadRequest,
 	})
 	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: "analyst"}))
-	require.Error(t, err)
-	require.Empty(t, statementsMatching(*statements, `ADD PROGRAMMATIC ACCESS TOKEN`))
+	require.ErrorContains(t, err, "verify token role restriction")
+	require.Len(t, statementsMatching(*statements, `^SHOW GRANTS TO USER`), 1)
+	require.Empty(t, statementsMatching(*statements, `PROGRAMMATIC ACCESS TOKEN`))
 }
