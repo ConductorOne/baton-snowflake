@@ -41,17 +41,6 @@ type credentialIssueMock struct {
 
 var daysToExpiryRE = regexp.MustCompile(`DAYS_TO_EXPIRY = (\d+)`)
 
-func newCredentialIssueMockServer(t *testing.T, userType, defaultRole string, roleGranted bool, statements *[]string) *httptest.Server {
-	return newCredentialIssueMockServerWithShowName(t, userType, defaultRole, roleGranted, "c1-request-1", statements)
-}
-
-func newCredentialIssueMockServerWithShowName(t *testing.T, userType, defaultRole string, roleGranted bool, showTokenName string, statements *[]string) *httptest.Server {
-	return serveCredentialIssueMock(t, credentialIssueMock{
-		userType: userType, defaultRole: defaultRole, roleGranted: roleGranted,
-		showTokenName: showTokenName, statements: statements,
-	})
-}
-
 func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.Server {
 	t.Helper()
 	var days int64 = 1
@@ -156,15 +145,6 @@ func serveCredentialIssueMock(t *testing.T, mock credentialIssueMock) *httptest.
 			w.WriteHeader(http.StatusBadRequest)
 		}
 	}))
-}
-
-func containsStatement(statements []string, want string) bool {
-	for _, statement := range statements {
-		if strings.Contains(statement, want) {
-			return true
-		}
-	}
-	return false
 }
 
 func TestProgrammaticAccessTokenIDRoundTrip(t *testing.T) {

@@ -47,10 +47,11 @@ const (
 	actionArgSubject = "user"
 
 	// Optional admin-fixed arguments, one per clause of ALTER USER ... ADD
-	// PROGRAMMATIC ACCESS TOKEN. The token name is never an argument.
+	// PROGRAMMATIC ACCESS TOKEN. Only the name prefix is an argument; the connector
+	// always appends the timestamp and random suffix.
 	actionArgDaysToExpiry    = "days_to_expiry"
 	actionArgRoleRestriction = "role_restriction"
-	actionArgMinsToBypass    = "mins_to_bypass_network_policy_requirement"
+	actionArgMinsToBypass    = "mins_to_bypass_network_policy_requirement" //nolint:gosec // G101: an argument name, not a credential.
 	actionArgComment         = "comment"
 	actionArgNamePrefix      = "name_prefix"
 
@@ -390,7 +391,7 @@ func parseNamePrefix(args *structpb.Struct) (string, error) {
 	for i := 0; i < len(prefix); i++ {
 		c := prefix[i]
 		letter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-		if !letter && (i == 0 || !((c >= '0' && c <= '9') || c == '_' || c == '-')) {
+		if !letter && (i == 0 || ((c < '0' || c > '9') && c != '_' && c != '-')) {
 			return "", status.Errorf(codes.InvalidArgument,
 				"baton-snowflake: %s must start with an ASCII letter and contain only ASCII letters, digits, _ and -", actionArgNamePrefix)
 		}

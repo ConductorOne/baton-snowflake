@@ -415,7 +415,8 @@ func TestIssuerRoleRestrictionNormalizedInStatement(t *testing.T) {
 		`"Mixed Case"`: `ROLE_RESTRICTION = 'Mixed Case'`,
 		`"a""b"`:       `ROLE_RESTRICTION = 'a"b'`,
 	} {
-		b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: strings.Trim(strings.ReplaceAll(want[len("ROLE_RESTRICTION = '"):], `'`, ""), ""), roleGranted: true})
+		role := strings.TrimSuffix(strings.TrimPrefix(want, "ROLE_RESTRICTION = '"), "'")
+		b, statements := issuerTestBuilder(t, credentialIssueMock{userType: "PERSON", defaultRole: role, roleGranted: true})
 		_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgRoleRestriction: in}))
 		require.NoError(t, err, in)
 		require.Contains(t, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0], want, in)
