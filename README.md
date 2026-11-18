@@ -182,10 +182,11 @@ reported as the key's creation date.
 #### Programmatic access tokens (optional)
 
 The **Programmatic access token** resource type is opt-in. While it is enabled, the connector runs
-`SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER` for every user in the account, including the
-account-owner user. Snowflake requires the connector's role to hold `OWNERSHIP` or the
-`MODIFY PROGRAMMATIC AUTHENTICATION METHODS` privilege on each of those users. `SECURITYADMIN` and
-`USERADMIN` alone do not cover users they do not own:
+[`SHOW USER PROGRAMMATIC ACCESS TOKENS`](https://docs.snowflake.com/en/sql-reference/sql/show-user-programmatic-access-tokens)
+for every user in the account, including the account-owner user. For another user, Snowflake requires
+[`OWNERSHIP` or the `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` privilege](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens#privileges-required-for-programmatic-access-tokens)
+on that user. Privileges are per user: a role that does not own a user needs the privilege
+[granted](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege) on it explicitly.
 
 ```sql
 GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <user> TO ROLE <connector-role>;
