@@ -17,6 +17,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -65,6 +66,11 @@ const (
 	maxRoleRestrictionLen = 255
 	maxCommentLen         = 256
 
+	// namePrefixPattern is the POSIX ERE form of what parseNamePrefix accepts
+	// for a non-empty, trimmed prefix: an ASCII letter, then ASCII letters,
+	// digits, _ or -.
+	namePrefixPattern = `^[A-Za-z][A-Za-z0-9_-]*$`
+
 	// actionReturnSecret is the secret return and the PlaintextData name.
 	actionReturnSecret = "api_key"
 	// actionReturnResource is the created token resource, carrying its SecretTrait.
@@ -81,6 +87,28 @@ const (
 	// returned.
 	discardTimeout = 30 * time.Second
 )
+
+// namePrefixRules is the one rule set for name_prefix. The schema publishes it
+// and parseNamePrefix enforces it, so the two cannot drift.
+func namePrefixRules() *configv1.StringRules {
+	return configv1.StringRules_builder{
+		MinLen:  proto.Uint64(1),
+		MaxLen:  proto.Uint64(maxNamePrefixLen),
+		Pattern: proto.String(namePrefixPattern),
+	}.Build()
+}
+
+// noControlRules publishes a length limit for a free-text argument as an
+// advisory rule. Pattern counts code points, which is how the parser counts, so
+// MaxLen (bytes) is not used. The SDK compiles patterns with regexp.CompilePOSIX,
+// where ^ and $ match at every line boundary, so this cannot reject an embedded
+// newline: optionalStringArg's own rune-length and unicode control-character
+// checks remain the enforcement.
+func noControlRules(maxLen int) *configv1.StringRules {
+	return configv1.StringRules_builder{
+		Pattern: proto.String(fmt.Sprintf(`^[^[:cntrl:]]{1,%d}$`, maxLen)),
+	}.Build()
+}
 
 // programmaticAccessTokenActionSchema is the issuer schema. The user is the one
 // required subject; every other argument is an optional setting an admin can
@@ -109,7 +137,8 @@ func programmaticAccessTokenActionSchema() *v2.BatonActionSchema {
 				DisplayName: "Days to expiry",
 				Description: fmt.Sprintf("Optional. Days until the token expires, %d to %d. Defaults to %d.", minDaysToExpiry, maxDaysToExpiry, programmaticAccessTokenDefaultDays),
 				IntField: configv1.IntField_builder{
-					Rules: configv1.Int64Rules_builder{Gte: proto.Int64(minDaysToExpiry), Lte: proto.Int64(maxDaysToExpiry)}.Build(),
+					DefaultValue: programmaticAccessTokenDefaultDays,
+					Rules:        configv1.Int64Rules_builder{Gte: proto.Int64(minDaysToExpiry), Lte: proto.Int64(maxDaysToExpiry)}.Build(),
 				}.Build(),
 			}.Build(),
 			configv1.Field_builder{
@@ -118,7 +147,7 @@ func programmaticAccessTokenActionSchema() *v2.BatonActionSchema {
 				Description: "Optional. Snowflake role the token is restricted to; it must be granted to the user. " +
 					"Unquoted names are case-insensitive (analyst is ANALYST); a double-quoted name (\"Mixed Case\") is matched exactly. " +
 					"Defaults to the user's default role for service users, which must have one, and to no restriction for PERSON users.",
-				StringField: configv1.StringField_builder{}.Build(),
+				StringField: configv1.StringField_builder{Rules: noControlRules(maxRoleRestrictionLen)}.Build(),
 			}.Build(),
 			configv1.Field_builder{
 				Name:        actionArgMinsToBypass,
@@ -132,16 +161,19 @@ func programmaticAccessTokenActionSchema() *v2.BatonActionSchema {
 			configv1.Field_builder{
 				Name:        actionArgNamePrefix,
 				DisplayName: "Token name prefix",
-				Description: fmt.Sprintf("Optional. Prefix of the token name, which is <prefix>-<UTC timestamp, 20060102T150405Z>-<6 random lowercase characters>. "+
-					"1 to %d characters: ASCII letters, digits, _ and -, starting with a letter; case is kept. Defaults to %s. "+
+				Description: fmt.Sprintf("Optional. Prefix of the token name, which is <prefix>-<UTC timestamp, 20060102T150405Z>-<6 lowercase base32 characters (letters and digits 2-7)>. "+
+					"1 to %d characters: ASCII letters, digits, _ and -, starting with a letter; case is kept. Blank or omitted uses %s. "+
 					"The timestamp and random suffix are always appended.", maxNamePrefixLen, defaultTokenNamePrefix),
-				StringField: configv1.StringField_builder{}.Build(),
+				StringField: configv1.StringField_builder{
+					DefaultValue: defaultTokenNamePrefix,
+					Rules:        namePrefixRules(),
+				}.Build(),
 			}.Build(),
 			configv1.Field_builder{
 				Name:        actionArgComment,
 				DisplayName: "Comment",
 				Description: fmt.Sprintf("Optional. Comment stored on the token, at most %d characters, no control characters. Omitted by default.", maxCommentLen),
-				StringField: configv1.StringField_builder{}.Build(),
+				StringField: configv1.StringField_builder{Rules: noControlRules(maxCommentLen)}.Build(),
 			}.Build(),
 		},
 		ReturnTypes: []*configv1.Field{
@@ -385,16 +417,12 @@ func parseNamePrefix(args *structpb.Struct) (string, error) {
 	if prefix == "" {
 		return defaultTokenNamePrefix, nil
 	}
-	if len(prefix) > maxNamePrefixLen {
-		return "", status.Errorf(codes.InvalidArgument, "baton-snowflake: %s must be at most %d characters", actionArgNamePrefix, maxNamePrefixLen)
-	}
-	for i := 0; i < len(prefix); i++ {
-		c := prefix[i]
-		letter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-		if !letter && (i == 0 || ((c < '0' || c > '9') && c != '_' && c != '-')) {
-			return "", status.Errorf(codes.InvalidArgument,
-				"baton-snowflake: %s must start with an ASCII letter and contain only ASCII letters, digits, _ and -", actionArgNamePrefix)
-		}
+	// field.ValidateStringRules compiles the pattern with regexp.CompilePOSIX,
+	// where ^ and $ match at line boundaries, so the rules alone would accept
+	// "a\nb". Refuse newlines here to keep the prefix a single line.
+	if err := field.ValidateStringRules(namePrefixRules(), prefix, actionArgNamePrefix); err != nil || strings.Contains(prefix, "\n") {
+		return "", status.Errorf(codes.InvalidArgument,
+			"baton-snowflake: %s must be 1 to %d characters, start with an ASCII letter and contain only ASCII letters, digits, _ and -", actionArgNamePrefix, maxNamePrefixLen)
 	}
 	return prefix, nil
 }

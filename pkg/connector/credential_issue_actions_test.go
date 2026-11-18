@@ -117,6 +117,15 @@ func TestIssuerSchemaShape(t *testing.T) {
 	require.Len(t, got, 5)
 	require.True(t, got[actionArgNamePrefix].HasStringField())
 	require.Contains(t, got[actionArgNamePrefix].GetDescription(), "c1")
+	require.Contains(t, got[actionArgNamePrefix].GetDescription(), "base32")
+	prefixField := got[actionArgNamePrefix].GetStringField()
+	require.Equal(t, defaultTokenNamePrefix, prefixField.GetDefaultValue())
+	require.EqualValues(t, 1, prefixField.GetRules().GetMinLen())
+	require.EqualValues(t, maxNamePrefixLen, prefixField.GetRules().GetMaxLen())
+	require.Equal(t, namePrefixPattern, prefixField.GetRules().GetPattern())
+	require.EqualValues(t, programmaticAccessTokenDefaultDays, got[actionArgDaysToExpiry].GetIntField().GetDefaultValue())
+	require.Equal(t, `^[^[:cntrl:]]{1,255}$`, got[actionArgRoleRestriction].GetStringField().GetRules().GetPattern())
+	require.Equal(t, `^[^[:cntrl:]]{1,256}$`, got[actionArgComment].GetStringField().GetRules().GetPattern())
 	require.True(t, got[actionArgDaysToExpiry].HasIntField())
 	require.EqualValues(t, 1, got[actionArgDaysToExpiry].GetIntField().GetRules().GetGte())
 	require.EqualValues(t, 365, got[actionArgDaysToExpiry].GetIntField().GetRules().GetLte())
@@ -510,4 +519,37 @@ func TestIssuerRoleCheckErrorRefusesBeforeMint(t *testing.T) {
 	require.ErrorContains(t, err, "verify token role restriction")
 	require.Len(t, statementsMatching(*statements, `^SHOW GRANTS TO USER`), 1)
 	require.Empty(t, statementsMatching(*statements, `PROGRAMMATIC ACCESS TOKEN`))
+}
+
+func TestParseNamePrefix(t *testing.T) {
+	for name, tc := range map[string]struct {
+		arg     any
+		want    string
+		invalid bool
+	}{
+		"plain":            {arg: "ci-bot_1", want: "ci-bot_1"},
+		"trimmed":          {arg: "  Ab  ", want: "Ab"},
+		"blank":            {arg: "  ", want: defaultTokenNamePrefix},
+		"empty":            {arg: "", want: defaultTokenNamePrefix},
+		"null":             {arg: nil, want: defaultTokenNamePrefix},
+		"64 accepted":      {arg: strings.Repeat("a", 64), want: strings.Repeat("a", 64)},
+		"65 rejected":      {arg: strings.Repeat("a", 65), invalid: true},
+		"leading digit":    {arg: "9abc", invalid: true},
+		"embedded newline": {arg: "a\nb", invalid: true},
+		"embedded tab":     {arg: "a\tb", invalid: true},
+		"wrong type":       {arg: float64(1), invalid: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseNamePrefix(withArgs(t, map[string]any{actionArgNamePrefix: tc.arg}))
+			if tc.invalid {
+				require.Equal(t, codes.InvalidArgument, status.Code(err))
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	got, err := parseNamePrefix(withArgs(t, map[string]any{}))
+	require.NoError(t, err)
+	require.Equal(t, defaultTokenNamePrefix, got)
 }
