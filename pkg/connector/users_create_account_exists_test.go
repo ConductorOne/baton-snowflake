@@ -16,9 +16,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// existingUser is the Snowflake user the mock already holds.
+// existingUser is the Snowflake user the mock already holds. An empty userType means PERSON.
 type existingUser struct {
-	name, login, email string
+	name, login, email, userType string
 }
 
 // mockSnowflake serves POST /api/v2/users with createStatus (409 = the user exists) and answers
@@ -43,14 +43,21 @@ func mockSnowflake(t *testing.T, createStatus, describeStatus int, u existingUse
 		_, _ = fmt.Fprintf(w, `{"code":"090001","statementHandle":"h1",
 "resultSetMetaData":{"numRows":12,"rowType":[{"name":"property","type":"text"},{"name":"value","type":"text"}]},
 "data":[["NAME",%q],["LOGIN_NAME",%q],["DISPLAY_NAME",%q],["FIRST_NAME","null"],["LAST_NAME","null"],
-["EMAIL",%q],["DISABLED","false"],["SNOWFLAKE_LOCK","false"],["DEFAULT_ROLE","null"],["TYPE","PERSON"],
-["HAS_MFA","false"],["COMMENT","null"]]}`, u.name, u.login, u.name, describeValue(u.email))
+["EMAIL",%q],["DISABLED","false"],["SNOWFLAKE_LOCK","false"],["DEFAULT_ROLE","null"],["TYPE",%q],
+["HAS_MFA","false"],["COMMENT","null"]]}`, u.name, u.login, u.name, describeValue(u.email), userType(u))
 	}))
 	t.Cleanup(srv.Close)
 
 	client, err := snowflake.New(srv.URL, snowflake.JWTConfig{}, srv.Client())
 	require.NoError(t, err)
 	return client, describes
+}
+
+func userType(u existingUser) string {
+	if u.userType == "" {
+		return "PERSON"
+	}
+	return u.userType
 }
 
 // describeValue renders a property the way DESCRIBE USER does: an unset one is the literal "null".
@@ -147,6 +154,7 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 		profile        map[string]any
 		createStatus   int
 		describeStatus int
+		existing       *existingUser
 		wantCode       codes.Code
 		wantMsg        string
 		wantDescribes  int32
@@ -179,6 +187,46 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 			wantDescribes:  1,
 		},
 		{
+			name:           "existing user is a SERVICE user",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "SERVICE"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is a SERVICE_AGENT user",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "SERVICE_AGENT"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is a LEGACY_SERVICE user",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "LEGACY_SERVICE"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing service user is refused even when the request email matches",
+			profile:        map[string]any{"name": "svc", "email": "svc@example.com"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", email: "svc@example.com", userType: "service"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
 			name:           "other create failures are unchanged and never look the user up",
 			profile:        map[string]any{"name": "alice"},
 			createStatus:   http.StatusInternalServerError,
@@ -189,7 +237,11 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			client, describes := mockSnowflake(t, tc.createStatus, tc.describeStatus, alice)
+			existing := alice
+			if tc.existing != nil {
+				existing = *tc.existing
+			}
+			client, describes := mockSnowflake(t, tc.createStatus, tc.describeStatus, existing)
 
 			result, _, err := createAccountFor(t, client, tc.profile, noPasswordOpts())
 

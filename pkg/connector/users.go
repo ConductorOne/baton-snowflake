@@ -567,6 +567,15 @@ func (o *userBuilder) existingAccountResult(
 		return nil, wrapError(err, "user already exists but could not be read")
 	}
 
+	// This connector only creates PERSON users, so a collision with a service user is never the
+	// requester's own account. Linking it would bind a shared non-human account, and whatever
+	// standing credential it holds, to a human identity and grant it the requested role.
+	if isServiceUserType(user.Type) {
+		l.Debug("user already exists but is a service user, not linking",
+			zap.String("user_name", userName), zap.String("user_type", user.Type))
+		return nil, wrapError(createErr, "user already exists but is a service user, not a person")
+	}
+
 	// The name alone does not establish that the account is the requester's, and C1 binds the returned
 	// resource to the requesting identity. Refuse when an identifier the request carries contradicts it.
 	if mismatch := identityMismatch(createReq, user); mismatch != "" {
