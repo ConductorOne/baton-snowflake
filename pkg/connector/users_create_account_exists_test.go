@@ -39,17 +39,26 @@ func mockSnowflake(t *testing.T, createStatus, describeStatus int, u existingUse
 			_, _ = w.Write([]byte(`{"code":"003001","message":"not authorized"}`))
 			return
 		}
+		// Like the real DESCRIBE USER, unset properties are rendered as the literal "null", not "".
 		_, _ = fmt.Fprintf(w, `{"code":"090001","statementHandle":"h1",
 "resultSetMetaData":{"numRows":12,"rowType":[{"name":"property","type":"text"},{"name":"value","type":"text"}]},
-"data":[["NAME",%q],["LOGIN_NAME",%q],["DISPLAY_NAME",%q],["FIRST_NAME",""],["LAST_NAME",""],
-["EMAIL",%q],["DISABLED","false"],["SNOWFLAKE_LOCK","false"],["DEFAULT_ROLE",""],["TYPE","PERSON"],
-["HAS_MFA","false"],["COMMENT",""]]}`, u.name, u.login, u.name, u.email)
+"data":[["NAME",%q],["LOGIN_NAME",%q],["DISPLAY_NAME",%q],["FIRST_NAME","null"],["LAST_NAME","null"],
+["EMAIL",%q],["DISABLED","false"],["SNOWFLAKE_LOCK","false"],["DEFAULT_ROLE","null"],["TYPE","PERSON"],
+["HAS_MFA","false"],["COMMENT","null"]]}`, u.name, u.login, u.name, describeValue(u.email))
 	}))
 	t.Cleanup(srv.Close)
 
 	client, err := snowflake.New(srv.URL, snowflake.JWTConfig{}, srv.Client())
 	require.NoError(t, err)
 	return client, describes
+}
+
+// describeValue renders a property the way DESCRIBE USER does: an unset one is the literal "null".
+func describeValue(v string) string {
+	if v == "" {
+		return "null"
+	}
+	return v
 }
 
 func noPasswordOpts() *v2.LocalCredentialOptions {

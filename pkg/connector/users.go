@@ -587,11 +587,15 @@ func (o *userBuilder) existingAccountResult(
 
 // identityMismatch names the first of email or login that the request supplied and the existing user
 // holds with a different value. Empty means no contradiction; a field missing on either side is not one.
+// existing comes from DESCRIBE USER, which renders an unset property as the literal "null", so the
+// existing values are normalized before testing them for absence.
 func identityMismatch(req *snowflake.CreateUserRequest, existing *snowflake.User) string {
+	existingEmail := snowflake.NormalizeNullValue(existing.Email)
+	existingLogin := snowflake.NormalizeNullValue(existing.Login)
 	switch {
-	case req.Email != "" && existing.Email != "" && !strings.EqualFold(req.Email, existing.Email):
+	case req.Email != "" && existingEmail != "" && !strings.EqualFold(req.Email, existingEmail):
 		return "email"
-	case req.LoginName != "" && existing.Login != "" && !strings.EqualFold(req.LoginName, existing.Login):
+	case req.LoginName != "" && existingLogin != "" && !strings.EqualFold(req.LoginName, existingLogin):
 		return "login"
 	}
 	return ""
