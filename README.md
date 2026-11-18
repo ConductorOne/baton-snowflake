@@ -179,6 +179,24 @@ and not set to `AUTO_RESUME`) the sync also succeeds without last-used dates and
 Snowflake can take up to 2 hours to record a credential's latest use. The date a key was set is
 reported as the key's creation date.
 
+#### Programmatic access tokens (optional)
+
+The **Programmatic access token** resource type is opt-in. While it is enabled, the connector runs
+[`SHOW USER PROGRAMMATIC ACCESS TOKENS`](https://docs.snowflake.com/en/sql-reference/sql/show-user-programmatic-access-tokens)
+for every user in the account, including the account-owner user. For another user, Snowflake requires
+[`OWNERSHIP` or the `MODIFY PROGRAMMATIC AUTHENTICATION METHODS` privilege](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens#privileges-required-for-programmatic-access-tokens)
+on that user. Privileges are per user: a role that does not own a user needs the privilege
+[granted](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege) on it explicitly.
+
+```sql
+GRANT MODIFY PROGRAMMATIC AUTHENTICATION METHODS ON USER <user> TO ROLE <connector-role>;
+```
+
+One missing grant fails the whole sync. This is intentional: a sync that skipped the denied user
+would report no tokens for it, and ConductorOne would drop its records of tokens that still work in
+Snowflake, losing the ability to revoke them. Grant the privilege on every user, or leave the
+resource type disabled.
+
 ### License data
 
 The connector can sync a `license` resource that reports the Snowflake edition
