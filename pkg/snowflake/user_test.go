@@ -2,11 +2,16 @@ package snowflake
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestListUsers_EscapesCursor verifies that the pagination cursor - the bare name of the
@@ -70,6 +75,69 @@ func TestSetUserDisabled_RendersBooleanValue(t *testing.T) {
 			err = client.SetUserDisabled(context.Background(), "testuser", tt.disabled)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, capturedSQL)
+		})
+	}
+}
+
+// TestClearDescribeUserNulls walks every string field of User, so a field added later without being
+// covered fails here instead of silently reaching C1 as "null".
+func TestClearDescribeUserNulls(t *testing.T) {
+	user := &User{}
+	reflected := reflect.ValueOf(user).Elem()
+	for i := 0; i < reflected.NumField(); i++ {
+		if reflected.Field(i).Kind() == reflect.String {
+			reflected.Field(i).SetString("null")
+		}
+	}
+
+	ClearDescribeUserNulls(user)
+
+	for i := 0; i < reflected.NumField(); i++ {
+		field := reflected.Type().Field(i)
+		if field.Type.Kind() != reflect.String {
+			continue
+		}
+		if field.Name == "Username" {
+			assert.Equal(t, "null", reflected.Field(i).String(), "Username is the resource ID and must be kept")
+			continue
+		}
+		assert.Empty(t, reflected.Field(i).String(), "field %s", field.Name)
+	}
+
+	kept := &User{Email: "a@example.com", Comment: " null "}
+	ClearDescribeUserNulls(kept)
+	assert.Equal(t, "a@example.com", kept.Email)
+	assert.Equal(t, " null ", kept.Comment, "only the exact literal is cleared")
+}
+
+// TestGetUser_AccessControlDenialIsClassified verifies that a 422/003001 from DESCRIBE USER is
+// recognisable as a privilege denial while keeping the error's original gRPC code.
+func TestGetUser_AccessControlDenialIsClassified(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		wantPriv bool
+	}{
+		{name: "access control denial", code: "003001", wantPriv: true},
+		{name: "user does not exist", code: "002003", wantPriv: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = fmt.Fprintf(w, `{"code":%q,"message":"denied"}`, tc.code)
+			}))
+			defer srv.Close()
+			client, err := New(srv.URL, JWTConfig{}, srv.Client())
+			require.NoError(t, err)
+
+			_, statusCode, err := client.GetUser(context.Background(), nil, "alice")
+
+			require.Error(t, err)
+			assert.Equal(t, http.StatusUnprocessableEntity, statusCode)
+			assert.Equal(t, tc.wantPriv, IsInsufficientPrivileges(err))
+			assert.NotEqual(t, codes.Unknown, status.Code(err), "the original gRPC code must survive the join")
 		})
 	}
 }

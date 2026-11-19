@@ -17,9 +17,12 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// existingUser is the Snowflake user the mock already holds. An empty userType means PERSON.
+// existingUser is the Snowflake user the mock already holds. An empty userType means PERSON. masked
+// renders it the way DESCRIBE USER does for a role holding MONITOR on the user but neither ownership
+// nor MANAGE GRANTS: 200, with every property except NAME as the literal null.
 type existingUser struct {
 	name, login, email, userType string
+	masked                       bool
 }
 
 // mockSnowflake serves POST /api/v2/users with createStatus (409 = the user exists) and answers
@@ -41,11 +44,15 @@ func mockSnowflake(t *testing.T, createStatus, describeStatus int, u existingUse
 			return
 		}
 		// Like the real DESCRIBE USER, unset properties are rendered as the literal "null", not "".
+		login, display, email, typ, flag := describeValue(u.login), describeValue(u.name), describeValue(u.email), userType(u), "false"
+		if u.masked {
+			login, display, email, typ, flag = "null", "null", "null", "null", "null"
+		}
 		_, _ = fmt.Fprintf(w, `{"code":"090001","statementHandle":"h1",
 "resultSetMetaData":{"numRows":12,"rowType":[{"name":"property","type":"text"},{"name":"value","type":"text"}]},
 "data":[["NAME",%q],["LOGIN_NAME",%q],["DISPLAY_NAME",%q],["FIRST_NAME","null"],["LAST_NAME","null"],
-["EMAIL",%q],["DISABLED","false"],["SNOWFLAKE_LOCK","false"],["DEFAULT_ROLE","null"],["TYPE",%q],
-["HAS_MFA","false"],["COMMENT","null"]]}`, u.name, u.login, u.name, describeValue(u.email), userType(u))
+["EMAIL",%q],["DISABLED",%q],["SNOWFLAKE_LOCK",%q],["DEFAULT_ROLE","null"],["TYPE",%q],
+["HAS_MFA",%q],["COMMENT","null"]]}`, u.name, login, display, email, flag, flag, typ, flag)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -155,7 +162,7 @@ func requireNoDescribeNulls(t *testing.T, resource *v2.Resource, wantEmail strin
 	ut, err := rs.GetUserTrait(resource)
 	require.NoError(t, err)
 	profile := rs.GetProfile(resource).AsMap()
-	for _, key := range []string{"email", "first_name", "last_name", profileKeyComment} {
+	for _, key := range []string{"email", "login", "display_name", "first_name", "last_name", profileKeyComment} {
 		require.NotEqual(t, "null", profile[key], "profile %s must not carry DESCRIBE USER's literal null", key)
 	}
 	require.Equal(t, wantEmail, profile["email"])
@@ -256,6 +263,45 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 			existing:       &existingUser{name: "svc", login: "SVC", email: "svc@example.com", userType: "service"},
 			wantCode:       codes.AlreadyExists,
 			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is masked, request carries a different email",
+			profile:        map[string]any{"name": "alice", "email": "someone.else@example.com"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "alice", login: "alice", email: "alice@example.com", masked: true},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing service user is masked",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "SERVICE", masked: true},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is masked, name-only request",
+			profile:        map[string]any{"name": "alice"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "alice", login: "alice", masked: true},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
+			name:           "privilege denial on the read is not retried",
+			profile:        map[string]any{"name": "alice"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusUnprocessableEntity,
+			wantCode:       codes.InvalidArgument,
+			wantMsg:        "could not be read",
 			wantDescribes:  1,
 		},
 		{
