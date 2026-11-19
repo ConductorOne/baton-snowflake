@@ -127,8 +127,8 @@ func TestIssuerSchemaShape(t *testing.T) {
 	require.False(t, prefixField.GetRules().GetValidateEmpty())
 	require.Equal(t, namePrefixPattern, prefixField.GetRules().GetPattern())
 	require.EqualValues(t, programmaticAccessTokenDefaultDays, got[actionArgDaysToExpiry].GetIntField().GetDefaultValue())
-	require.Equal(t, `^[^[:cntrl:]]{1,255}$`, got[actionArgRoleRestriction].GetStringField().GetRules().GetPattern())
-	require.Equal(t, `^[^[:cntrl:]]{1,256}$`, got[actionArgComment].GetStringField().GetRules().GetPattern())
+	require.Equal(t, `^[^\x00-\x1F\x7F-\x9F]{1,255}$`, got[actionArgRoleRestriction].GetStringField().GetRules().GetPattern())
+	require.Equal(t, `^[^\x00-\x1F\x7F-\x9F]{1,256}$`, got[actionArgComment].GetStringField().GetRules().GetPattern())
 	require.True(t, got[actionArgDaysToExpiry].HasIntField())
 	require.EqualValues(t, 1, got[actionArgDaysToExpiry].GetIntField().GetRules().GetGte())
 	require.EqualValues(t, 365, got[actionArgDaysToExpiry].GetIntField().GetRules().GetLte())
@@ -603,6 +603,15 @@ func TestNamePrefixPatternAcceptsEveryParserAcceptedCase(t *testing.T) {
 
 // Every rune the parser accepts, alone or after "a", must match the advisory
 // pattern, so the schema never turns away a valid prefix.
+// The published patterns must compile in ECMAScript as well as Go: no \x{...}
+// escapes and no POSIX bracket classes.
+func TestPublishedPatternsArePortable(t *testing.T) {
+	for _, p := range []string{namePrefixPattern, noControlRules(255).GetPattern()} {
+		require.NotContains(t, p, `\x{`)
+		require.NotContains(t, p, `[:`)
+	}
+}
+
 func TestNamePrefixPatternSupersetOfParserForEveryRune(t *testing.T) {
 	re := regexp.MustCompilePOSIX(namePrefixPattern)
 	for r := rune(0); r <= unicode.MaxRune; r++ {

@@ -64,15 +64,15 @@ const (
 	maxRoleRestrictionLen = 255
 	maxCommentLen         = 256
 
-	// namePrefixPattern is an advisory POSIX ERE that accepts a superset of what
-	// validNamePrefix accepts. The SDK compiles patterns with regexp.CompilePOSIX,
-	// which cannot name Unicode letter, mark or digit classes and anchors ^ and $
-	// per line, so the pattern is a published hint: it treats every non-ASCII
-	// code point from U+00C0 up, and the letters U+00AA, U+00B5 and U+00BA, as a possible
-	// letter, mark or digit. The
-	// length bound is in code points, which is why the schema sets no MaxLen
-	// (it counts bytes). validNamePrefix, called by parseNamePrefix, enforces.
-	namePrefixPattern = `^[A-Za-z\x{AA}\x{B5}\x{BA}\x{C0}-\x{10FFFF}][-_0-9A-Za-z\x{AA}\x{B5}\x{BA}\x{C0}-\x{10FFFF}]{0,63}$`
+	// namePrefixPattern is an advisory pattern that accepts a superset of what
+	// validNamePrefix accepts. It uses only \xHH escapes, so Go (RE2/POSIX) and
+	// ECMAScript consumers both compile it. It is a negated class that excludes
+	// ASCII and Latin-1 non-letters; every code point from U+00C0 up, and the
+	// letters U+00AA, U+00B5 and U+00BA, pass as a possible letter, mark or digit.
+	// The first character also excludes digits, "_" and "-". The length bound is
+	// in code points, which is why the schema sets no MaxLen (it counts bytes).
+	// validNamePrefix, called by parseNamePrefix, enforces.
+	namePrefixPattern = `^[^\x00-\x40\x5B-\x60\x7B-\xA9\xAB-\xB4\xB6-\xB9\xBB-\xBF][^\x00-\x2C\x2E\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\xA9\xAB-\xB4\xB6-\xB9\xBB-\xBF]{0,63}$`
 
 	// actionReturnSecret is the secret return and the PlaintextData name.
 	actionReturnSecret = "api_key"
@@ -98,13 +98,15 @@ func namePrefixRules() *configv1.StringRules {
 
 // noControlRules publishes a length limit for a free-text argument as an
 // advisory rule. Pattern counts code points, which is how the parser counts, so
-// MaxLen (bytes) is not used. The SDK compiles patterns with regexp.CompilePOSIX,
-// where ^ and $ match at every line boundary, so this cannot reject an embedded
-// newline: optionalStringArg's own rune-length and unicode control-character
-// checks remain the enforcement.
+// MaxLen (bytes) is not used. The pattern uses only \xHH escapes, so Go
+// (RE2/POSIX) and ECMAScript consumers both compile it; it matches
+// unicode.IsControl (C0, DEL, C1). The SDK compiles patterns with
+// regexp.CompilePOSIX, where ^ and $ match at every line boundary, so this
+// cannot reject an embedded newline: optionalStringArg's own rune-length and
+// unicode control-character checks remain the enforcement.
 func noControlRules(maxLen int) *configv1.StringRules {
 	return configv1.StringRules_builder{
-		Pattern: proto.String(fmt.Sprintf(`^[^[:cntrl:]]{1,%d}$`, maxLen)),
+		Pattern: proto.String(fmt.Sprintf(`^[^\x00-\x1F\x7F-\x9F]{1,%d}$`, maxLen)),
 	}.Build()
 }
 
