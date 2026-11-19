@@ -49,8 +49,9 @@ var (
 		"issue-credentials",
 		field.WithDisplayName("Issue Credentials"),
 		field.WithDescription(
-			"Enable issuing Snowflake programmatic access tokens for existing users. Independent of "+
-				"Sync Secrets: this also syncs the tokens it issues so they can be revoked, but no other secrets.",
+			"Enable the issue_programmatic_access_token action, which issues Snowflake programmatic access tokens "+
+				"for existing users. Revoking one deletes its Programmatic Access Token resource. Independent of "+
+				"Sync Secrets: this does not sync any other secrets.",
 		),
 		field.WithDefaultValue(false),
 	)
