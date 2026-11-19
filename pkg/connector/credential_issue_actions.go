@@ -68,10 +68,11 @@ const (
 	// validNamePrefix accepts. The SDK compiles patterns with regexp.CompilePOSIX,
 	// which cannot name Unicode letter, mark or digit classes and anchors ^ and $
 	// per line, so the pattern is a published hint: it treats every non-ASCII
-	// code point from U+00C0 up as a possible letter, mark or digit. The
+	// code point from U+00C0 up, and the letters U+00AA, U+00B5 and U+00BA, as a possible
+	// letter, mark or digit. The
 	// length bound is in code points, which is why the schema sets no MaxLen
 	// (it counts bytes). validNamePrefix, called by parseNamePrefix, enforces.
-	namePrefixPattern = `^[A-Za-z\x{C0}-\x{10FFFF}][-_0-9A-Za-z\x{C0}-\x{10FFFF}]{0,63}$`
+	namePrefixPattern = `^[A-Za-z\x{AA}\x{B5}\x{BA}\x{C0}-\x{10FFFF}][-_0-9A-Za-z\x{AA}\x{B5}\x{BA}\x{C0}-\x{10FFFF}]{0,63}$`
 
 	// actionReturnSecret is the secret return and the PlaintextData name.
 	actionReturnSecret = "api_key"
@@ -226,7 +227,10 @@ func (o *programmaticAccessTokenBuilder) issueProgrammaticAccessToken(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	tokenName := newIssuedTokenName(prefix)
+	tokenName, err := newIssuedTokenName(prefix)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	user, _, err := o.client.GetUser(ctx, nil, userName)
 	if err != nil {
@@ -482,6 +486,14 @@ func (o *programmaticAccessTokenBuilder) discardToken(ctx context.Context, userN
 // newIssuedTokenName names a token the issuer creates: <prefix>-<KSUID>, e.g.
 // c1-0ujsswThIGTUYm2K8FjOOfXtY1K. The KSUID is 27 base62 characters, so the name
 // is unique per call.
-func newIssuedTokenName(prefix string) string {
-	return prefix + "-" + ksuid.New().String()
+func newIssuedTokenName(prefix string) (string, error) {
+	id, err := newKSUID()
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "baton-snowflake: generate token name: %v", err)
+	}
+	return prefix + "-" + id.String(), nil
 }
+
+// newKSUID is ksuid.NewRandom, a variable so tests can inject a failure.
+// ksuid.New would panic if the system random source failed.
+var newKSUID = ksuid.NewRandom

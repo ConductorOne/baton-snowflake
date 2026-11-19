@@ -2,17 +2,20 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	configv1 "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/field"
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -292,10 +295,15 @@ func TestIssuerSecretTraitExpiryIsDefaultDays(t *testing.T) {
 }
 
 func TestNewIssuedTokenName(t *testing.T) {
-	name := newIssuedTokenName("c1")
+	name, err := newIssuedTokenName("c1")
+	require.NoError(t, err)
 	require.Regexp(t, `^c1-[0-9A-Za-z]{27}$`, name)
-	require.NotEqual(t, name, newIssuedTokenName("c1"), "unique per call")
-	require.Regexp(t, `^Team_A-ci-[0-9A-Za-z]{27}$`, newIssuedTokenName("Team_A-ci"))
+	again, err := newIssuedTokenName("c1")
+	require.NoError(t, err)
+	require.NotEqual(t, name, again, "unique per call")
+	custom, err := newIssuedTokenName("Team_A-ci")
+	require.NoError(t, err)
+	require.Regexp(t, `^Team_A-ci-[0-9A-Za-z]{27}$`, custom)
 }
 
 func withArgs(t *testing.T, kv map[string]any) *structpb.Struct {
@@ -520,6 +528,8 @@ var namePrefixCases = map[string]struct {
 	"cjk":                  {"\u65e5\u672c", true},
 	"mixed scripts":        {"\u00dcn\u00efc\u00f6d\u00e9_x-1", true},
 	"combining mark":       {"e\u0301", true},
+	"latin-1 letters":      {"\u00aa\u00b5\u00ba", true},
+	"latin-1 letter tail":  {"a\u00b5", true},
 	"mixed case":           {"Team_A-ci", true},
 	"64 cjk runes":         {strings.Repeat("\u65e5", maxNamePrefixLen), true},
 	"65 cjk runes":         {strings.Repeat("\u65e5", maxNamePrefixLen+1), false},
@@ -589,4 +599,31 @@ func TestNamePrefixPatternAcceptsEveryParserAcceptedCase(t *testing.T) {
 		}
 	}
 	require.NoError(t, field.ValidateStringRules(namePrefixRules(), "caf\u00e9", actionArgNamePrefix))
+}
+
+// Every rune the parser accepts, alone or after "a", must match the advisory
+// pattern, so the schema never turns away a valid prefix.
+func TestNamePrefixPatternSupersetOfParserForEveryRune(t *testing.T) {
+	re := regexp.MustCompilePOSIX(namePrefixPattern)
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		for _, s := range []string{string(r), "a" + string(r)} {
+			if validNamePrefix(s) && !re.MatchString(s) {
+				t.Fatalf("pattern rejects %q (U+%04X) that the parser accepts", s, r)
+			}
+		}
+	}
+}
+
+func TestNewKSUIDFailureIsInternal(t *testing.T) {
+	prev := newKSUID
+	newKSUID = func() (ksuid.KSUID, error) { return ksuid.KSUID{}, errors.New("entropy exhausted") }
+	t.Cleanup(func() { newKSUID = prev })
+
+	_, err := newIssuedTokenName("c1")
+	require.Equal(t, codes.Internal, status.Code(err))
+	require.ErrorContains(t, err, "baton-snowflake: ")
+	require.ErrorContains(t, err, "entropy exhausted")
 }
