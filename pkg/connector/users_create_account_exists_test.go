@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -142,8 +143,39 @@ func TestCreateAccountUserAlreadyExists(t *testing.T) {
 			require.True(t, ok, "expected AlreadyExistsResult, got %T", result)
 			require.Equal(t, "alice", existing.GetResource().GetDisplayName())
 			require.Zero(t, nPlaintext, "no credentials were created for a pre-existing account")
+			requireNoDescribeNulls(t, existing.GetResource(), tc.existing.email)
 		})
 	}
+}
+
+// requireNoDescribeNulls asserts that DESCRIBE USER's literal "null" did not reach the resource: unset
+// properties must read as empty, the way they do for the same user from sync.
+func requireNoDescribeNulls(t *testing.T, resource *v2.Resource, wantEmail string) {
+	t.Helper()
+	ut, err := rs.GetUserTrait(resource)
+	require.NoError(t, err)
+	profile := rs.GetProfile(resource).AsMap()
+	for _, key := range []string{"email", "first_name", "last_name", profileKeyComment} {
+		require.NotEqual(t, "null", profile[key], "profile %s must not carry DESCRIBE USER's literal null", key)
+	}
+	require.Equal(t, wantEmail, profile["email"])
+	if wantEmail == "" {
+		require.Empty(t, ut.GetEmails(), "a user with no EMAIL must not get a primary email")
+	} else {
+		require.Equal(t, wantEmail, ut.GetEmails()[0].GetAddress())
+	}
+}
+
+func TestCreateAccountNewUserHasNoDescribeNulls(t *testing.T) {
+	client, describes := mockSnowflake(t, http.StatusOK, http.StatusOK, existingUser{name: "bob", login: "BOB"})
+
+	result, _, err := createAccountFor(t, client, map[string]any{"name": "bob"}, noPasswordOpts())
+
+	require.NoError(t, err)
+	created, ok := result.(*v2.CreateAccountResponse_SuccessResult)
+	require.True(t, ok, "expected SuccessResult, got %T", result)
+	require.Equal(t, int32(1), describes.Load(), "the created user is read back with DESCRIBE USER")
+	requireNoDescribeNulls(t, created.GetResource(), "")
 }
 
 func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {

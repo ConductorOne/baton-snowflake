@@ -596,22 +596,37 @@ func (o *userBuilder) existingAccountResult(
 
 // identityMismatch names the first of email or login that the request supplied and the existing user
 // holds with a different value. Empty means no contradiction; a field missing on either side is not one.
-// existing comes from DESCRIBE USER, which renders an unset property as the literal "null", so the
-// existing values are normalized before testing them for absence.
+// existing must come from fetchUserWithSQLRetry, which clears DESCRIBE USER's literal "null" values.
 func identityMismatch(req *snowflake.CreateUserRequest, existing *snowflake.User) string {
-	existingEmail := snowflake.NormalizeNullValue(existing.Email)
-	existingLogin := snowflake.NormalizeNullValue(existing.Login)
 	switch {
-	case req.Email != "" && existingEmail != "" && !strings.EqualFold(req.Email, existingEmail):
+	case req.Email != "" && existing.Email != "" && !strings.EqualFold(req.Email, existing.Email):
 		return "email"
-	case req.LoginName != "" && existingLogin != "" && !strings.EqualFold(req.LoginName, existingLogin):
+	case req.LoginName != "" && existing.Login != "" && !strings.EqualFold(req.LoginName, existing.Login):
 		return "login"
 	}
 	return ""
 }
 
+// describeUserNull is how DESCRIBE USER renders an unset property.
+const describeUserNull = "null"
+
+// clearDescribeUserNulls empties the text properties that DESCRIBE USER returned as the literal "null",
+// so the user reads the same as it does from SHOW USERS during sync. Username is left alone: it is the
+// resource ID, and a user can legitimately be named "null". Values are not trimmed for the same reason.
+func clearDescribeUserNulls(user *snowflake.User) {
+	for _, field := range []*string{
+		&user.Login, &user.DisplayName, &user.FirstName, &user.LastName,
+		&user.Email, &user.DefaultRole, &user.Type, &user.Comment,
+	} {
+		if *field == describeUserNull {
+			*field = ""
+		}
+	}
+}
+
 // fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
 // Retries up to 5 times with exponential backoff if we get a 422 Unprocessable Entity error.
+// The returned user has DESCRIBE USER's literal "null" values cleared (see clearDescribeUserNulls).
 func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string) (*snowflake.User, error) {
 	l := ctxzap.Extract(ctx)
 	maxRetries := 5
@@ -623,6 +638,7 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),
 			)
+			clearDescribeUserNulls(user)
 			return user, nil
 		}
 
