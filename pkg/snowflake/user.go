@@ -178,6 +178,26 @@ func (r *GetUserRawResponse) GetUser() (*User, error) {
 	return user, nil
 }
 
+// ClearDescribeUserNulls empties every string field of user that DESCRIBE USER returned as the
+// literal "null", so the user reads the same as it does from SHOW USERS, where an unset property
+// arrives as "". It walks the struct rather than listing fields, so a string field added to User
+// later is covered too. Username is left alone: it is the resource ID, and a user can legitimately
+// be named "null". Values are not trimmed for the same reason.
+//
+// GetUser does not call this itself: table-grant sync and token issuance read its result as is.
+func ClearDescribeUserNulls(user *User) {
+	reflected := reflect.ValueOf(user).Elem()
+	for i := 0; i < reflected.NumField(); i++ {
+		field := reflected.Field(i)
+		if field.Kind() != reflect.String || reflected.Type().Field(i).Name == "Username" {
+			continue
+		}
+		if field.String() == rowNull {
+			field.SetString("")
+		}
+	}
+}
+
 func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bool) {
 	for _, row := range r.Data {
 		if strings.ToUpper(row[0]) == columnName {
@@ -274,6 +294,11 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 		statusCode := 0
 		if resp != nil {
 			statusCode = resp.StatusCode
+		}
+		// Join the sentinel so callers can tell a privilege denial from a transient failure. The
+		// error keeps its gRPC code, so callers that do not check for the sentinel see no change.
+		if isAccessControlDenial(resp, &apiErr) {
+			return nil, statusCode, fmt.Errorf("%w: %w", ErrInsufficientPrivileges, dedupeAPIError(err))
 		}
 		return nil, statusCode, dedupeAPIError(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -16,9 +17,12 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// existingUser is the Snowflake user the mock already holds.
+// existingUser is the Snowflake user the mock already holds. An empty userType means PERSON. masked
+// renders it the way DESCRIBE USER does for a role holding MONITOR on the user but neither ownership
+// nor MANAGE GRANTS: 200, with every property except NAME as the literal null.
 type existingUser struct {
-	name, login, email string
+	name, login, email, userType string
+	masked                       bool
 }
 
 // mockSnowflake serves POST /api/v2/users with createStatus (409 = the user exists) and answers
@@ -39,17 +43,37 @@ func mockSnowflake(t *testing.T, createStatus, describeStatus int, u existingUse
 			_, _ = w.Write([]byte(`{"code":"003001","message":"not authorized"}`))
 			return
 		}
+		// Like the real DESCRIBE USER, unset properties are rendered as the literal "null", not "".
+		login, display, email, typ, flag := describeValue(u.login), describeValue(u.name), describeValue(u.email), userType(u), "false"
+		if u.masked {
+			login, display, email, typ, flag = "null", "null", "null", "null", "null"
+		}
 		_, _ = fmt.Fprintf(w, `{"code":"090001","statementHandle":"h1",
 "resultSetMetaData":{"numRows":12,"rowType":[{"name":"property","type":"text"},{"name":"value","type":"text"}]},
-"data":[["NAME",%q],["LOGIN_NAME",%q],["DISPLAY_NAME",%q],["FIRST_NAME",""],["LAST_NAME",""],
-["EMAIL",%q],["DISABLED","false"],["SNOWFLAKE_LOCK","false"],["DEFAULT_ROLE",""],["TYPE","PERSON"],
-["HAS_MFA","false"],["COMMENT",""]]}`, u.name, u.login, u.name, u.email)
+"data":[["NAME",%q],["LOGIN_NAME",%q],["DISPLAY_NAME",%q],["FIRST_NAME","null"],["LAST_NAME","null"],
+["EMAIL",%q],["DISABLED",%q],["SNOWFLAKE_LOCK",%q],["DEFAULT_ROLE","null"],["TYPE",%q],
+["HAS_MFA",%q],["COMMENT","null"]]}`, u.name, login, display, email, flag, flag, typ, flag)
 	}))
 	t.Cleanup(srv.Close)
 
 	client, err := snowflake.New(srv.URL, snowflake.JWTConfig{}, srv.Client())
 	require.NoError(t, err)
 	return client, describes
+}
+
+func userType(u existingUser) string {
+	if u.userType == "" {
+		return "PERSON"
+	}
+	return u.userType
+}
+
+// describeValue renders a property the way DESCRIBE USER does: an unset one is the literal "null".
+func describeValue(v string) string {
+	if v == "" {
+		return "null"
+	}
+	return v
 }
 
 func noPasswordOpts() *v2.LocalCredentialOptions {
@@ -126,8 +150,39 @@ func TestCreateAccountUserAlreadyExists(t *testing.T) {
 			require.True(t, ok, "expected AlreadyExistsResult, got %T", result)
 			require.Equal(t, "alice", existing.GetResource().GetDisplayName())
 			require.Zero(t, nPlaintext, "no credentials were created for a pre-existing account")
+			requireNoDescribeNulls(t, existing.GetResource(), tc.existing.email)
 		})
 	}
+}
+
+// requireNoDescribeNulls asserts that DESCRIBE USER's literal "null" did not reach the resource: unset
+// properties must read as empty, the way they do for the same user from sync.
+func requireNoDescribeNulls(t *testing.T, resource *v2.Resource, wantEmail string) {
+	t.Helper()
+	ut, err := rs.GetUserTrait(resource)
+	require.NoError(t, err)
+	profile := rs.GetProfile(resource).AsMap()
+	for _, key := range []string{"email", "login", "display_name", "first_name", "last_name", profileKeyComment} {
+		require.NotEqual(t, "null", profile[key], "profile %s must not carry DESCRIBE USER's literal null", key)
+	}
+	require.Equal(t, wantEmail, profile["email"])
+	if wantEmail == "" {
+		require.Empty(t, ut.GetEmails(), "a user with no EMAIL must not get a primary email")
+	} else {
+		require.Equal(t, wantEmail, ut.GetEmails()[0].GetAddress())
+	}
+}
+
+func TestCreateAccountNewUserHasNoDescribeNulls(t *testing.T) {
+	client, describes := mockSnowflake(t, http.StatusOK, http.StatusOK, existingUser{name: "bob", login: "BOB"})
+
+	result, _, err := createAccountFor(t, client, map[string]any{"name": "bob"}, noPasswordOpts())
+
+	require.NoError(t, err)
+	created, ok := result.(*v2.CreateAccountResponse_SuccessResult)
+	require.True(t, ok, "expected SuccessResult, got %T", result)
+	require.Equal(t, int32(1), describes.Load(), "the created user is read back with DESCRIBE USER")
+	requireNoDescribeNulls(t, created.GetResource(), "")
 }
 
 func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
@@ -138,6 +193,7 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 		profile        map[string]any
 		createStatus   int
 		describeStatus int
+		existing       *existingUser
 		wantCode       codes.Code
 		wantMsg        string
 		wantDescribes  int32
@@ -170,6 +226,85 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 			wantDescribes:  1,
 		},
 		{
+			name:           "existing user is a SERVICE user",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "SERVICE"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is a SERVICE_AGENT user",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "SERVICE_AGENT"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is a LEGACY_SERVICE user",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "LEGACY_SERVICE"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing service user is refused even when the request email matches",
+			profile:        map[string]any{"name": "svc", "email": "svc@example.com"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", email: "svc@example.com", userType: "service"},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "is a service user",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is masked, request carries a different email",
+			profile:        map[string]any{"name": "alice", "email": "someone.else@example.com"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "alice", login: "alice", email: "alice@example.com", masked: true},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing service user is masked",
+			profile:        map[string]any{"name": "svc"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "svc", login: "SVC", userType: "SERVICE", masked: true},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
+			name:           "existing user is masked, name-only request",
+			profile:        map[string]any{"name": "alice"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusOK,
+			existing:       &existingUser{name: "alice", login: "alice", masked: true},
+			wantCode:       codes.AlreadyExists,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
+			name:           "privilege denial on the read is not retried",
+			profile:        map[string]any{"name": "alice"},
+			createStatus:   http.StatusConflict,
+			describeStatus: http.StatusUnprocessableEntity,
+			wantCode:       codes.InvalidArgument,
+			wantMsg:        "could not be read",
+			wantDescribes:  1,
+		},
+		{
 			name:           "other create failures are unchanged and never look the user up",
 			profile:        map[string]any{"name": "alice"},
 			createStatus:   http.StatusInternalServerError,
@@ -180,7 +315,11 @@ func TestCreateAccountUserAlreadyExistsNotLinked(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			client, describes := mockSnowflake(t, tc.createStatus, tc.describeStatus, alice)
+			existing := alice
+			if tc.existing != nil {
+				existing = *tc.existing
+			}
+			client, describes := mockSnowflake(t, tc.createStatus, tc.describeStatus, existing)
 
 			result, _, err := createAccountFor(t, client, tc.profile, noPasswordOpts())
 
