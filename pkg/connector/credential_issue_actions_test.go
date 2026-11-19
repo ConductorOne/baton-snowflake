@@ -1,9 +1,7 @@
 package connector
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"net/http"
 	"regexp"
 	"strings"
@@ -14,6 +12,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,7 +24,7 @@ import (
 
 const issuerTestUser = "service-user"
 
-var issuedTokenNameRE = regexp.MustCompile(`c1-\d{8}T\d{6}Z-[a-z2-7]{6}`)
+var issuedTokenNameRE = regexp.MustCompile(`c1-[0-9A-Za-z]{27}`)
 
 func issuerTestBuilder(t *testing.T, mock credentialIssueMock) (*programmaticAccessTokenBuilder, *[]string) {
 	t.Helper()
@@ -117,11 +116,12 @@ func TestIssuerSchemaShape(t *testing.T) {
 	require.Len(t, got, 5)
 	require.True(t, got[actionArgNamePrefix].HasStringField())
 	require.Contains(t, got[actionArgNamePrefix].GetDescription(), "c1")
-	require.Contains(t, got[actionArgNamePrefix].GetDescription(), "base32")
+	require.Contains(t, got[actionArgNamePrefix].GetDescription(), "KSUID")
 	prefixField := got[actionArgNamePrefix].GetStringField()
 	require.Equal(t, defaultTokenNamePrefix, prefixField.GetDefaultValue())
 	require.EqualValues(t, 1, prefixField.GetRules().GetMinLen())
-	require.EqualValues(t, maxNamePrefixLen, prefixField.GetRules().GetMaxLen())
+	require.False(t, prefixField.GetRules().HasMaxLen(), "MaxLen counts bytes and would reject 64 CJK characters")
+	require.False(t, prefixField.GetRules().GetValidateEmpty())
 	require.Equal(t, namePrefixPattern, prefixField.GetRules().GetPattern())
 	require.EqualValues(t, programmaticAccessTokenDefaultDays, got[actionArgDaysToExpiry].GetIntField().GetDefaultValue())
 	require.Equal(t, `^[^[:cntrl:]]{1,255}$`, got[actionArgRoleRestriction].GetStringField().GetRules().GetPattern())
@@ -292,17 +292,10 @@ func TestIssuerSecretTraitExpiryIsDefaultDays(t *testing.T) {
 }
 
 func TestNewIssuedTokenName(t *testing.T) {
-	now := time.Date(2026, 1, 2, 15, 4, 5, 0, time.FixedZone("x", 3600))
-	name, err := newIssuedTokenName("c1", now, bytes.NewReader([]byte{0, 0, 0, 0}))
-	require.NoError(t, err)
-	require.Equal(t, "c1-20260102T140405Z-aaaaaa", name)
-
-	again, err := newIssuedTokenName("c1", now, rand.Reader)
-	require.NoError(t, err)
-	require.Regexp(t, `^c1-\d{8}T\d{6}Z-[a-z2-7]{6}$`, again)
-
-	_, err = newIssuedTokenName("c1", now, bytes.NewReader(nil))
-	require.Error(t, err)
+	name := newIssuedTokenName("c1")
+	require.Regexp(t, `^c1-[0-9A-Za-z]{27}$`, name)
+	require.NotEqual(t, name, newIssuedTokenName("c1"), "unique per call")
+	require.Regexp(t, `^Team_A-ci-[0-9A-Za-z]{27}$`, newIssuedTokenName("Team_A-ci"))
 }
 
 func withArgs(t *testing.T, kv map[string]any) *structpb.Struct {
@@ -439,14 +432,14 @@ func TestIssuerRoleRestrictionNormalizedInStatement(t *testing.T) {
 	}
 }
 
-var customTokenNameRE = regexp.MustCompile(`"(Team_A-ci)-(\d{8}T\d{6}Z)-([a-z2-7]{6})"`)
+var customTokenNameRE = regexp.MustCompile(`"(Team_A-ci)-([0-9A-Za-z]{27})"`)
 
 func TestIssuerDefaultNamePrefix(t *testing.T) {
 	for _, kv := range []map[string]any{nil, {actionArgNamePrefix: "   "}, {actionArgNamePrefix: ""}} {
 		b, statements := issuerTestBuilder(t, serviceUserMock())
 		_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, kv))
 		require.NoError(t, err)
-		require.Regexp(t, `TOKEN "c1-\d{8}T\d{6}Z-[a-z2-7]{6}"`, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0])
+		require.Regexp(t, `TOKEN "c1-[0-9A-Za-z]{27}"`, statementsMatching(*statements, `ADD PROGRAMMATIC`)[0])
 	}
 }
 
@@ -472,7 +465,7 @@ func TestIssuerCustomNamePrefixAndDelete(t *testing.T) {
 func TestIssuerInvalidNamePrefixRefusedBeforeAnyStatement(t *testing.T) {
 	for name, prefix := range map[string]any{
 		"leading digit": "9abc", "space": "a b", "quote": `a"b`, "too long": strings.Repeat("a", 65),
-		"non-ascii": "caf\u00e9", "leading dash": "-a", "leading underscore": "_a", "semicolon": "a;b", "wrong type": float64(1),
+		"emoji": "a\U0001F642", "leading dash": "-a", "leading underscore": "_a", "semicolon": "a;b", "wrong type": float64(1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			b, statements := issuerTestBuilder(t, serviceUserMock())
@@ -485,12 +478,6 @@ func TestIssuerInvalidNamePrefixRefusedBeforeAnyStatement(t *testing.T) {
 	b, _ := issuerTestBuilder(t, serviceUserMock())
 	_, _, _, err := b.issueProgrammaticAccessToken(context.Background(), withArgs(t, map[string]any{actionArgNamePrefix: strings.Repeat("a", 64)}))
 	require.NoError(t, err)
-}
-
-func TestNewIssuedTokenNameCustomPrefix(t *testing.T) {
-	name, err := newIssuedTokenName("Team_A-ci", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), bytes.NewReader([]byte{0, 0, 0, 0}))
-	require.NoError(t, err)
-	require.Equal(t, "Team_A-ci-20260102T030405Z-aaaaaa", name)
 }
 
 // SHOW GRANTS TO USER needs privileges that creating the token does not, so a
@@ -521,35 +508,85 @@ func TestIssuerRoleCheckErrorRefusesBeforeMint(t *testing.T) {
 	require.Empty(t, statementsMatching(*statements, `PROGRAMMATIC ACCESS TOKEN`))
 }
 
+// namePrefixCases is the parser table. The advisory schema pattern must accept
+// every valid case.
+var namePrefixCases = map[string]struct {
+	prefix string
+	valid  bool
+}{
+	"default":              {"c1", true},
+	"single letter":        {"a", true},
+	"accented":             {"caf\u00e9", true},
+	"cjk":                  {"\u65e5\u672c", true},
+	"mixed scripts":        {"\u00dcn\u00efc\u00f6d\u00e9_x-1", true},
+	"combining mark":       {"e\u0301", true},
+	"mixed case":           {"Team_A-ci", true},
+	"64 cjk runes":         {strings.Repeat("\u65e5", maxNamePrefixLen), true},
+	"65 cjk runes":         {strings.Repeat("\u65e5", maxNamePrefixLen+1), false},
+	"64 ascii":             {strings.Repeat("a", maxNamePrefixLen), true},
+	"65 ascii":             {strings.Repeat("a", maxNamePrefixLen+1), false},
+	"leading digit":        {"9abc", false},
+	"leading underscore":   {"_a", false},
+	"leading dash":         {"-a", false},
+	"leading mark":         {"\u0301a", false},
+	"space":                {"a b", false},
+	"newline":              {"a\nb", false},
+	"tab":                  {"a\tb", false},
+	"dot":                  {"a.b", false},
+	"quote":                {`a"b`, false},
+	"semicolon":            {"a;b", false},
+	"emoji":                {"\U0001F642", false},
+	"trailing emoji":       {"a\U0001F642", false},
+	"control character":    {"a\x01b", false},
+	"leading newline form": {"9\na", false},
+}
+
 func TestParseNamePrefix(t *testing.T) {
-	for name, tc := range map[string]struct {
-		arg     any
-		want    string
-		invalid bool
-	}{
-		"plain":            {arg: "ci-bot_1", want: "ci-bot_1"},
-		"trimmed":          {arg: "  Ab  ", want: "Ab"},
-		"blank":            {arg: "  ", want: defaultTokenNamePrefix},
-		"empty":            {arg: "", want: defaultTokenNamePrefix},
-		"null":             {arg: nil, want: defaultTokenNamePrefix},
-		"64 accepted":      {arg: strings.Repeat("a", 64), want: strings.Repeat("a", 64)},
-		"65 rejected":      {arg: strings.Repeat("a", 65), invalid: true},
-		"leading digit":    {arg: "9abc", invalid: true},
-		"embedded newline": {arg: "a\nb", invalid: true},
-		"embedded tab":     {arg: "a\tb", invalid: true},
-		"wrong type":       {arg: float64(1), invalid: true},
-	} {
+	for name, tc := range namePrefixCases {
 		t.Run(name, func(t *testing.T) {
-			got, err := parseNamePrefix(withArgs(t, map[string]any{actionArgNamePrefix: tc.arg}))
-			if tc.invalid {
-				require.Equal(t, codes.InvalidArgument, status.Code(err))
+			got, err := parseNamePrefix(withArgs(t, map[string]any{actionArgNamePrefix: tc.prefix}))
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, tc.prefix, got)
 				return
 			}
-			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
 		})
 	}
-	got, err := parseNamePrefix(withArgs(t, map[string]any{}))
+}
+
+func TestParseNamePrefixDefaultsAndTypes(t *testing.T) {
+	for name, kv := range map[string]map[string]any{
+		"empty":      {actionArgNamePrefix: ""},
+		"whitespace": {actionArgNamePrefix: "  \t "},
+		"null":       {actionArgNamePrefix: nil},
+		"absent":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseNamePrefix(withArgs(t, kv))
+			require.NoError(t, err)
+			require.Equal(t, defaultTokenNamePrefix, got)
+		})
+	}
+	for name, v := range map[string]any{"number": float64(1), "bool": true, "list": []any{"a"}} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseNamePrefix(withArgs(t, map[string]any{actionArgNamePrefix: v}))
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+		})
+	}
+	got, err := parseNamePrefix(withArgs(t, map[string]any{actionArgNamePrefix: "  Team_A  "}))
 	require.NoError(t, err)
-	require.Equal(t, defaultTokenNamePrefix, got)
+	require.Equal(t, "Team_A", got, "trimmed, case kept")
+}
+
+// The advisory pattern is a superset of the parser: it must accept every
+// prefix the parser accepts, or the schema would turn valid input away.
+func TestNamePrefixPatternAcceptsEveryParserAcceptedCase(t *testing.T) {
+	re := regexp.MustCompilePOSIX(namePrefixPattern)
+	for name, tc := range namePrefixCases {
+		if tc.valid {
+			require.True(t, re.MatchString(tc.prefix), name)
+		}
+	}
+	require.NoError(t, field.ValidateStringRules(namePrefixRules(), "caf\u00e9", actionArgNamePrefix))
 }

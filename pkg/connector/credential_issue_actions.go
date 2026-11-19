@@ -2,10 +2,7 @@ package connector
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base32"
 	"fmt"
-	"io"
 	"math"
 	"strings"
 	"time"
@@ -17,8 +14,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
-	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"github.com/segmentio/ksuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -49,7 +46,7 @@ const (
 
 	// Optional admin-fixed arguments, one per clause of ALTER USER ... ADD
 	// PROGRAMMATIC ACCESS TOKEN. Only the name prefix is an argument; the connector
-	// always appends the timestamp and random suffix.
+	// always appends a KSUID.
 	actionArgDaysToExpiry    = "days_to_expiry"
 	actionArgRoleRestriction = "role_restriction"
 	actionArgMinsToBypass    = "mins_to_bypass_network_policy_requirement" //nolint:gosec // G101: an argument name, not a credential.
@@ -57,7 +54,8 @@ const (
 	actionArgNamePrefix      = "name_prefix"
 
 	defaultTokenNamePrefix = "c1"
-	maxNamePrefixLen       = 64
+	// maxNamePrefixLen bounds the admin-supplied prefix, in Unicode code points.
+	maxNamePrefixLen = 64
 
 	minDaysToExpiry       = 1
 	maxDaysToExpiry       = 365
@@ -66,10 +64,14 @@ const (
 	maxRoleRestrictionLen = 255
 	maxCommentLen         = 256
 
-	// namePrefixPattern is the POSIX ERE form of what parseNamePrefix accepts
-	// for a non-empty, trimmed prefix: an ASCII letter, then ASCII letters,
-	// digits, _ or -.
-	namePrefixPattern = `^[A-Za-z][A-Za-z0-9_-]*$`
+	// namePrefixPattern is an advisory POSIX ERE that accepts a superset of what
+	// validNamePrefix accepts. The SDK compiles patterns with regexp.CompilePOSIX,
+	// which cannot name Unicode letter, mark or digit classes and anchors ^ and $
+	// per line, so the pattern is a published hint: it treats every non-ASCII
+	// code point from U+00C0 up as a possible letter, mark or digit. The
+	// length bound is in code points, which is why the schema sets no MaxLen
+	// (it counts bytes). validNamePrefix, called by parseNamePrefix, enforces.
+	namePrefixPattern = `^[A-Za-z\x{C0}-\x{10FFFF}][-_0-9A-Za-z\x{C0}-\x{10FFFF}]{0,63}$`
 
 	// actionReturnSecret is the secret return and the PlaintextData name.
 	actionReturnSecret = "api_key"
@@ -79,21 +81,16 @@ const (
 	// apiKeyV2Provider is the api_key_v2 `provider` value for a Snowflake token.
 	apiKeyV2Provider = "snowflake"
 
-	// issuedTokenNameSuffixLen is the random part of an issued token name: 6
-	// base32 characters, 30 bits.
-	issuedTokenNameSuffixLen = 6
-
 	// discardTimeout bounds the best-effort removal of a token that cannot be
 	// returned.
 	discardTimeout = 30 * time.Second
 )
 
-// namePrefixRules is the one rule set for name_prefix. The schema publishes it
-// and parseNamePrefix enforces it, so the two cannot drift.
+// namePrefixRules is the advisory rule set the schema publishes for
+// name_prefix. validNamePrefix is the enforcement.
 func namePrefixRules() *configv1.StringRules {
 	return configv1.StringRules_builder{
 		MinLen:  proto.Uint64(1),
-		MaxLen:  proto.Uint64(maxNamePrefixLen),
 		Pattern: proto.String(namePrefixPattern),
 	}.Build()
 }
@@ -161,9 +158,9 @@ func programmaticAccessTokenActionSchema() *v2.BatonActionSchema {
 			configv1.Field_builder{
 				Name:        actionArgNamePrefix,
 				DisplayName: "Token name prefix",
-				Description: fmt.Sprintf("Optional. Prefix of the token name, which is <prefix>-<UTC timestamp, 20060102T150405Z>-<6 lowercase base32 characters (letters and digits 2-7)>. "+
-					"1 to %d characters: ASCII letters, digits, _ and -, starting with a letter; case is kept. Blank or omitted uses %s. "+
-					"The timestamp and random suffix are always appended.", maxNamePrefixLen, defaultTokenNamePrefix),
+				Description: fmt.Sprintf("Optional. Start of the token name, which is <prefix>-<KSUID>. "+
+					"1 to %d characters: a letter, then letters, combining marks, digits, _ or -, in any script; case is kept. "+
+					"Blank or omitted uses %s.", maxNamePrefixLen, defaultTokenNamePrefix),
 				StringField: configv1.StringField_builder{
 					DefaultValue: defaultTokenNamePrefix,
 					Rules:        namePrefixRules(),
@@ -229,10 +226,7 @@ func (o *programmaticAccessTokenBuilder) issueProgrammaticAccessToken(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	tokenName, err := newIssuedTokenName(prefix, time.Now(), rand.Reader)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	tokenName := newIssuedTokenName(prefix)
 
 	user, _, err := o.client.GetUser(ctx, nil, userName)
 	if err != nil {
@@ -401,8 +395,29 @@ func optionalStringArg(args *structpb.Struct, key string, maxLen int) (string, e
 	return s, nil
 }
 
-// parseNamePrefix validates the optional token name prefix. Blank means the
-// default. The prefix keeps its case: the token name is a double-quoted
+// validNamePrefix reports whether s is 1 to maxNamePrefixLen code points: a
+// letter, then letters, combining marks, digits, _ or -. There is no Unicode
+// normalization, so the prefix is used as given.
+func validNamePrefix(s string) bool {
+	if n := utf8.RuneCountInString(s); n < 1 || n > maxNamePrefixLen {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !unicode.IsLetter(r) {
+				return false
+			}
+			continue
+		}
+		if !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r) && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseNamePrefix validates the optional token name prefix. Absent, null or
+// blank means the default. The prefix keeps its case: the token name is a double-quoted
 // identifier, and REMOVE quotes it the same way.
 func parseNamePrefix(args *structpb.Struct) (string, error) {
 	v, ok := argPresent(args, actionArgNamePrefix)
@@ -417,12 +432,9 @@ func parseNamePrefix(args *structpb.Struct) (string, error) {
 	if prefix == "" {
 		return defaultTokenNamePrefix, nil
 	}
-	// field.ValidateStringRules compiles the pattern with regexp.CompilePOSIX,
-	// where ^ and $ match at line boundaries, so the rules alone would accept
-	// "a\nb". Refuse newlines here to keep the prefix a single line.
-	if err := field.ValidateStringRules(namePrefixRules(), prefix, actionArgNamePrefix); err != nil || strings.Contains(prefix, "\n") {
+	if !validNamePrefix(prefix) {
 		return "", status.Errorf(codes.InvalidArgument,
-			"baton-snowflake: %s must be 1 to %d characters, start with an ASCII letter and contain only ASCII letters, digits, _ and -", actionArgNamePrefix, maxNamePrefixLen)
+			"baton-snowflake: %s must be 1 to %d characters: a letter, then letters, combining marks, digits, _ or -", actionArgNamePrefix, maxNamePrefixLen)
 	}
 	return prefix, nil
 }
@@ -467,14 +479,9 @@ func (o *programmaticAccessTokenBuilder) discardToken(ctx context.Context, userN
 	}
 }
 
-// newIssuedTokenName names a token the issuer creates: <prefix>-<UTC
-// 20060102T150405Z>-<6 random lowercase>, e.g. c1-20261110T201426Z-k3x9qa. The
-// clock and randomness are arguments so tests can pin them.
-func newIssuedTokenName(prefix string, now time.Time, random io.Reader) (string, error) {
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(random, buf); err != nil {
-		return "", fmt.Errorf("baton-snowflake: generate token name: %w", err)
-	}
-	suffix := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(buf))[:issuedTokenNameSuffixLen]
-	return prefix + "-" + now.UTC().Format("20060102T150405Z") + "-" + suffix, nil
+// newIssuedTokenName names a token the issuer creates: <prefix>-<KSUID>, e.g.
+// c1-0ujsswThIGTUYm2K8FjOOfXtY1K. The KSUID is 27 base62 characters, so the name
+// is unique per call.
+func newIssuedTokenName(prefix string) string {
+	return prefix + "-" + ksuid.New().String()
 }
