@@ -51,7 +51,7 @@ The request fails in two cases, and each one needs a different fix:
 | What happened | Error | What to do |
 | :--- | :--- | :--- |
 | The profile's `email` or `login` differs from the existing user's | `user already exists but its email differs from the request` or `user already exists but its login differs from the request` | Request a different `name`, or correct that field on the existing Snowflake user, then resubmit. |
-| The connector cannot read the existing user | `user already exists but could not be read` | Grant the connector's role `MONITOR` on that user with `GRANT MONITOR ON USER <name> TO ROLE <connector-role>`, or transfer ownership of the user, then resubmit. A read that failed for any other reason clears on a resubmit. |
+| The connector cannot read the existing user | `user already exists but could not be read` | The role needs both `MONITOR` on that user and `MANAGE GRANTS` on the account. With `MONITOR` alone Snowflake answers the read but returns every value except the name as `null`. Grant them with `GRANT MONITOR ON USER <name> TO ROLE <connector-role>` and `GRANT MANAGE GRANTS ON ACCOUNT TO ROLE <connector-role>`, or transfer ownership of the user, then resubmit. A read that failed for any other reason clears on a resubmit. |
 
 If the profile carries no `email` and no `login`, the match is on `name` alone, so make sure the profile `name` identifies the requester.
 
