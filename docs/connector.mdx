@@ -42,7 +42,18 @@ With a vault on the provision policy or personal credentials for the user, C1 se
 
 ### Accounts that already exist
 
-If Snowflake reports that the user already exists, the connector links the existing account instead of failing the request, and leaves its password unchanged. The account is matched by the Snowflake user `name`. If the profile's `email` or `login` differs from the existing user's, or the connector can't read the existing user, the request fails with Snowflake's `already exists` error. Request a different `name`, or fix the existing user in Snowflake, and resubmit. If the profile has no `email` or `login`, or the existing user has none, the match is on `name` alone, so make sure the profile `name` identifies the requester.
+When Snowflake reports that the user already exists, the connector links that existing account to the requester instead of failing the request. The account is matched by the Snowflake user `name`, and the connector does not modify the existing user.
+
+**A linked account comes with no new credential.** The credential options above apply only when the connector creates an account. On a link, the requester receives nothing, so they need a credential they already hold or a non-password sign-in method such as SSO.
+
+The request fails in two cases, and each one needs a different fix:
+
+| What happened | Error | What to do |
+| :--- | :--- | :--- |
+| The profile's `email` or `login` differs from the existing user's | `user already exists but its email differs from the request` or `user already exists but its login differs from the request` | Request a different `name`, or correct that field on the existing Snowflake user, then resubmit. |
+| The connector cannot read the existing user | `user already exists but could not be read` | Grant `GRANT MONITOR USER ON ACCOUNT TO ROLE <connector-role>`, which covers every user in the account, including users created after the grant. The per-user equivalents are ownership of that user, or `MONITOR` on it together with `MANAGE GRANTS` on the account: with `MONITOR` alone Snowflake answers the read but returns every value except the name as `null`, which the connector cannot match against the request. A read that failed for any other reason clears on a resubmit. |
+
+If the profile carries no `email` and no `login`, the match is on `name` alone, so make sure the profile `name` identifies the requester.
 
 ### Issuing programmatic access tokens
 
