@@ -518,9 +518,9 @@ func (o *userBuilder) CreateAccount(
 			annos.Update(rateLimitDesc)
 		}
 		if alreadyExists {
-			// Keep retryable lookup failures retryable. If the conflicting user cannot
-			// be found, report the conflict rather than claiming it was created.
-			if status.Code(err) == codes.NotFound || status.Code(err) == codes.Unknown {
+			// Only a confirmed missing user becomes a conflict error; preserve lookup
+			// failures (including parse errors) and retryable statuses as they are.
+			if status.Code(err) == codes.NotFound {
 				return nil, nil, annos, status.Errorf(codes.AlreadyExists, "baton-snowflake: failed to fetch existing user: %v", err)
 			}
 			return nil, nil, annos, wrapError(err, "failed to fetch existing user")

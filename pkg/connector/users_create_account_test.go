@@ -137,13 +137,13 @@ func TestCreateAccountConflictAndSuccess(t *testing.T) {
 	}
 }
 
-func TestCreateAccountConflictWithoutUser(t *testing.T) {
+func TestCreateAccountConflictLookupFailures(t *testing.T) {
 	for _, tc := range []struct {
 		lookupStatus int
 		wantCode     codes.Code
 	}{
 		{lookupStatus: http.StatusNotFound, wantCode: codes.AlreadyExists},
-		{lookupStatus: http.StatusOK, wantCode: codes.AlreadyExists},
+		{lookupStatus: http.StatusOK, wantCode: codes.Unknown},
 		{lookupStatus: http.StatusTooManyRequests, wantCode: codes.Unavailable},
 		{lookupStatus: http.StatusInternalServerError, wantCode: codes.Unavailable},
 	} {
@@ -154,6 +154,9 @@ func TestCreateAccountConflictWithoutUser(t *testing.T) {
 			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
 			require.ErrorContains(t, err, "failed to fetch existing user")
 			require.Equal(t, tc.wantCode, status.Code(err))
+			if tc.lookupStatus == http.StatusOK {
+				require.ErrorContains(t, err, "column NAME not found")
+			}
 			require.Nil(t, result)
 			require.Empty(t, plaintext)
 			require.NotEmpty(t, annos)
