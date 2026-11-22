@@ -493,7 +493,9 @@ func (o *userBuilder) CreateAccount(
 
 	// Create user via REST API
 	_, rateLimitDesc, err := o.client.CreateUserREST(ctx, createReq)
-	if err != nil {
+	// uhttp maps HTTP 409 to AlreadyExists; wrapped errors retain that status.
+	alreadyExists := status.Code(err) == codes.AlreadyExists
+	if err != nil && !alreadyExists {
 		l.Error("failed to create user",
 			zap.String("user_name", userName),
 			zap.Error(err),
@@ -507,7 +509,7 @@ func (o *userBuilder) CreateAccount(
 
 	user, err := o.fetchUserWithSQLRetry(ctx, userName)
 	if err != nil {
-		l.Error("failed to fetch user after creation",
+		l.Error("failed to fetch user after create request",
 			zap.String("user_name", userName),
 			zap.Error(err),
 		)
@@ -515,24 +517,37 @@ func (o *userBuilder) CreateAccount(
 		if rateLimitDesc != nil {
 			annos.Update(rateLimitDesc)
 		}
+		if alreadyExists {
+			// Only a confirmed missing user becomes a conflict error; preserve lookup
+			// failures (including parse errors) and retryable statuses as they are.
+			if status.Code(err) == codes.NotFound {
+				return nil, nil, annos, status.Errorf(codes.AlreadyExists, "baton-snowflake: failed to fetch existing user: %v", err)
+			}
+			return nil, nil, annos, wrapError(err, "failed to fetch existing user")
+		}
 		return nil, nil, annos, wrapError(err, "failed to fetch user after creation")
 	}
 
-	// Build resource for the new user
+	// Build the resource from the fetched user, not the requested profile.
 	resource, err := userResource(ctx, user, o.secrets)
 	if err != nil {
 		return nil, nil, nil, wrapError(err, "failed to create user resource")
 	}
-
-	l.Debug("user created successfully",
-		zap.String("user_name", user.Username),
-	)
 
 	// Build annotations with rate limit information
 	var annos annotations.Annotations
 	if rateLimitDesc != nil {
 		annos = annotations.New(rateLimitDesc)
 	}
+
+	if alreadyExists {
+		// The create did not set the generated password on this account.
+		return &v2.CreateAccountResponse_AlreadyExistsResult{Resource: resource}, nil, annos, nil
+	}
+
+	l.Debug("user created successfully",
+		zap.String("user_name", user.Username),
+	)
 
 	// Return success result with plaintext data (password)
 	result := &v2.CreateAccountResponse_SuccessResult{

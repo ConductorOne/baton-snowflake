@@ -6,12 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -73,4 +78,178 @@ func TestCreateAccountCapabilityDetailsIncludesNoPassword(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, d.SupportedCredentialOptions, v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD)
 	require.Equal(t, v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD, d.PreferredCredentialOption)
+}
+
+func TestCreateAccountConflictAndSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		username     string
+		createStatus int
+		disabled     bool
+		locked       bool
+	}{
+		{name: "conflict", username: "alice", createStatus: http.StatusConflict},
+		{name: "mixed case", username: "Alice", createStatus: http.StatusConflict},
+		{name: "embedded quote", username: `al"ice`, createStatus: http.StatusConflict},
+		{name: "literal surrounding quotes", username: `"Alice"`, createStatus: http.StatusConflict},
+		{name: "disabled", username: "alice", createStatus: http.StatusConflict, disabled: true},
+		{name: "locked", username: "alice", createStatus: http.StatusConflict, locked: true},
+		{name: "created", username: "alice", createStatus: http.StatusOK},
+		{name: "accepted", username: "Alice", createStatus: http.StatusAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := &snowflake.User{
+				Username: tc.username, Login: "existing-login", DisplayName: "Existing User",
+				FirstName: "Existing", LastName: "User", Email: "existing@example.com",
+				Comment: "existing comment", Type: "PERSON", HasMfa: true,
+				Disabled: tc.disabled, Locked: tc.locked,
+			}
+			builder, calls := createAccountFixture(t, tc.username, tc.createStatus, http.StatusOK, user)
+			profile, err := structpb.NewStruct(map[string]any{
+				"name": tc.username, "email": "requested@example.com", "disabled": false,
+			})
+			require.NoError(t, err)
+			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, &v2.LocalCredentialOptions{
+				Options: &v2.LocalCredentialOptions_RandomPassword_{RandomPassword: &v2.LocalCredentialOptions_RandomPassword{Length: 16}},
+			})
+			require.NoError(t, err)
+			expected, err := userResource(context.Background(), user, builder.secrets)
+			require.NoError(t, err)
+			if tc.createStatus == http.StatusConflict {
+				existing, ok := result.(*v2.CreateAccountResponse_AlreadyExistsResult)
+				require.True(t, ok, "expected already-exists result, got %T", result)
+				require.True(t, proto.Equal(expected, existing.Resource), "resource must match the fetched user, not the request")
+				require.Empty(t, plaintext, "a generated password was not set on the existing user")
+			} else {
+				created, ok := result.(*v2.CreateAccountResponse_SuccessResult)
+				require.True(t, ok, "expected success result, got %T", result)
+				require.True(t, proto.Equal(expected, created.Resource))
+				require.Len(t, plaintext, 1)
+				require.Len(t, plaintext[0].Bytes, 16)
+			}
+			rateLimit := &v2.RateLimitDescription{}
+			found, err := annos.Pick(rateLimit)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.EqualValues(t, 100, rateLimit.GetLimit())
+			require.Equal(t, []string{"create", "describe"}, *calls, "no updates to existing users are allowed")
+		})
+	}
+}
+
+func TestCreateAccountConflictLookupFailures(t *testing.T) {
+	for _, tc := range []struct {
+		lookupStatus int
+		wantCode     codes.Code
+	}{
+		{lookupStatus: http.StatusNotFound, wantCode: codes.AlreadyExists},
+		{lookupStatus: http.StatusOK, wantCode: codes.Unknown},
+		{lookupStatus: http.StatusTooManyRequests, wantCode: codes.Unavailable},
+		{lookupStatus: http.StatusInternalServerError, wantCode: codes.Unavailable},
+	} {
+		t.Run(strconv.Itoa(tc.lookupStatus), func(t *testing.T) {
+			builder, calls := createAccountFixture(t, "alice", http.StatusConflict, tc.lookupStatus, nil)
+			profile, err := structpb.NewStruct(map[string]any{"name": "alice"})
+			require.NoError(t, err)
+			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+			require.ErrorContains(t, err, "failed to fetch existing user")
+			require.Equal(t, tc.wantCode, status.Code(err))
+			if tc.lookupStatus == http.StatusOK {
+				require.ErrorContains(t, err, "column NAME not found")
+			}
+			require.Nil(t, result)
+			require.Empty(t, plaintext)
+			require.NotEmpty(t, annos)
+			require.Equal(t, []string{"create", "describe"}, *calls)
+		})
+	}
+}
+
+func TestCreateAccountOtherErrors(t *testing.T) {
+	for _, statusCode := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError, http.StatusTooManyRequests} {
+		t.Run(strconv.Itoa(statusCode), func(t *testing.T) {
+			builder, calls := createAccountFixture(t, "alice", statusCode, 0, nil)
+			profile, err := structpb.NewStruct(map[string]any{"name": "alice"})
+			require.NoError(t, err)
+			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+			require.Error(t, err)
+			require.NotEqual(t, codes.AlreadyExists, status.Code(err), "error message alone must not be treated as a conflict")
+			require.Nil(t, result)
+			require.Empty(t, plaintext)
+			require.Equal(t, []string{"create"}, *calls)
+			rateLimit := &v2.RateLimitDescription{}
+			found, pickErr := annos.Pick(rateLimit)
+			require.NoError(t, pickErr)
+			require.True(t, found)
+			require.EqualValues(t, 100, rateLimit.GetLimit())
+			if statusCode == http.StatusTooManyRequests {
+				require.Equal(t, codes.Unavailable, status.Code(err))
+				var detail *v2.RateLimitDescription
+				for _, d := range status.Convert(err).Details() {
+					if rl, ok := d.(*v2.RateLimitDescription); ok {
+						detail = rl
+					}
+				}
+				require.NotNil(t, detail, "retry/backoff must retain rate-limit error details")
+				require.EqualValues(t, 0, detail.GetRemaining())
+			}
+		})
+	}
+}
+
+func createAccountFixture(t *testing.T, username string, createStatus, lookupStatus int, user *snowflake.User) (*userBuilder, *[]string) {
+	t.Helper()
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v2/users":
+			calls = append(calls, "create")
+			var body snowflake.CreateUserRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode create request: %v", err)
+			}
+			assert.Equal(t, quoteSnowflakeIdentifier(username), body.Name)
+			w.Header().Set("X-Ratelimit-Limit", "100")
+			w.Header().Set("X-Ratelimit-Remaining", "0")
+			w.Header().Set("X-Ratelimit-Reset", "2000000000")
+			w.WriteHeader(createStatus)
+			_, _ = w.Write([]byte(`{"code":"002002","message":"object already exists"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v2/statements":
+			calls = append(calls, "describe")
+			var body struct {
+				Statement string `json:"statement"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode SQL request: %v", err)
+			}
+			assert.Equal(t, "DESCRIBE USER "+quoteSnowflakeIdentifier(username)+";", body.Statement)
+			w.WriteHeader(lookupStatus)
+			if lookupStatus != http.StatusOK {
+				_, _ = w.Write([]byte(`{"code":"002003","message":"user not found"}`))
+				return
+			}
+			if user == nil {
+				_, _ = w.Write([]byte(`{"data":[]}`))
+				return
+			}
+			data := [][]string{
+				{"NAME", user.Username}, {"LOGIN_NAME", user.Login}, {"DISPLAY_NAME", user.DisplayName},
+				{"FIRST_NAME", user.FirstName}, {"LAST_NAME", user.LastName}, {"EMAIL", user.Email},
+				{"DISABLED", strconv.FormatBool(user.Disabled)}, {"SNOWFLAKE_LOCK", strconv.FormatBool(user.Locked)},
+				{"DEFAULT_ROLE", user.DefaultRole}, {"TYPE", user.Type}, {"HAS_MFA", strconv.FormatBool(user.HasMfa)},
+				{"COMMENT", user.Comment},
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
+				t.Errorf("encode describe response: %v", err)
+			}
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
+	require.NoError(t, err)
+	return newUserBuilder(client, secretOptions{syncSecrets: true}), &calls
 }
