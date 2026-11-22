@@ -40,6 +40,8 @@ C1 selects one of the supported options each time it creates an account. There i
 
 With a vault on the provision policy or personal credentials for the user, C1 sets a random password. Without either, it creates the user with no password.
 
+If Snowflake reports that the account already exists, the connector returns the existing user with the exact requested name. It does not change the user's attributes, enabled state, or password, and it does not return a password for that user.
+
 ### Issuing programmatic access tokens
 
 Enable **Issue credentials** to let the connector issue a Snowflake [programmatic access token](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens) for an existing user, and revoke one it has issued. Issued tokens appear as **Programmatic access token** resources alongside the user they belong to once that resource type is enabled (see the note below).
