@@ -42,11 +42,21 @@ With a vault on the provision policy or personal credentials for the user, C1 se
 
 ### Accounts that already exist
 
-If Snowflake reports that the account already exists, the connector looks up the existing user with the exact requested `name`. Before linking it, the connector compares the profile's `email` and `login` to the existing user's email and login name, case-insensitively. Each field is compared only when both sides have a non-empty value. A mismatch fails the request with an `AlreadyExists` error naming the field, without exposing either value. Request a different `name`, or correct the profile or existing user, and resubmit.
+When Snowflake reports that the user already exists, the connector looks up the exact requested `name` and links that existing person account to the requester unless one of the checks below fails. The connector does not modify the existing user: fields in the request, such as `email`, `login`, `display_name`, or enabled state, are not applied to the linked account. If the existing user needs them, set them in Snowflake.
 
-When neither field can be compared (including when the profile has no `email` and no `login`), matching falls back to `name` alone. Make sure the profile `name` identifies the requester; a shared display name is not a unique identity. If one field is missing on either side, the other field is still checked when available.
+**A linked account comes with no new credential.** The credential options above apply only when the connector creates an account. On a link, the requester receives no password or other credential, so they need a credential they already hold or a non-password sign-in method such as SSO.
 
-The connector does not change the existing user's attributes, enabled state, or password, and does not return a password. If the user cannot be read, the request fails: a confirmed missing user returns `AlreadyExists`, while other lookup failures retain their error codes.
+Failures need different fixes:
+
+| What happened | Error | What to do |
+| :--- | :--- | :--- |
+| The user with the exact requested name is confirmed missing after a create conflict | `failed to fetch existing user` (`AlreadyExists`) | Verify the user and requested `name` in Snowflake, then resubmit. |
+| The connector's role cannot read the existing user's properties (a masked read) | `user already exists but its properties could not be read` (`AlreadyExists`) | Grant `MONITOR USER ON ACCOUNT` to the connector's role, or use ownership of that user, or `MONITOR` on it together with `MANAGE GRANTS` on the account. `MONITOR` alone can return only the name; the connector refuses that masked read. |
+| The existing user is a Snowflake service user (`SERVICE`, `SERVICE_AGENT`, or `LEGACY_SERVICE`) | `user already exists but is a service user, not a person` (`AlreadyExists`) | Request a different `name`. The connector creates person users; it does not link a service account to the requester. |
+| The profile's `email` or `login` differs from the existing user's | `user already exists but its email differs from the request` or `user already exists but its login differs from the request` (`AlreadyExists`) | Request a different `name`, or correct that field in the profile or on the existing Snowflake user, then resubmit. The error names only the field, not either value. |
+| The existing-user lookup fails for another reason | `failed to fetch existing user` (retains the lookup error code) | Correct the lookup failure before resubmitting; retryable failures retain their retry behavior. For a permission failure, use the read privileges above. |
+
+Email is checked first, then login, case-insensitively. Each is compared only when both the profile and existing user have a non-empty value. Snowflake's literal `null` for an unset property is treated as empty, not as an email address. An existing user without email can still link when the login does not conflict. If the profile carries no `email` and no `login`, or neither field can be compared, the match is on `name` alone, but the existing user's login must still be readable. Make sure the profile `name` identifies the requester; a shared display name is not a unique identity.
 
 ### Issuing programmatic access tokens
 

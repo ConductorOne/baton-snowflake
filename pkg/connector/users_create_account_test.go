@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/conductorone/baton-snowflake/pkg/snowflake"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,6 +146,7 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 		existingEmail string
 		existingLogin string
 		wantMismatch  string
+		unreadable    bool
 	}{
 		{name: "different email refuses", email: "requested@example.com", existingEmail: "existing@example.com", wantMismatch: "email"},
 		{name: "different login refuses", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
@@ -168,17 +170,20 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 		{name: "existing email missing checks matching login", email: "alice@example.com", login: "ALICE", existingLogin: "alice"},
 		{name: "existing email missing checks conflicting login", email: "alice@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
 		{name: "request login missing checks email", email: "ALICE@example.com", existingEmail: "alice@example.com", existingLogin: "alice"},
-		{name: "existing login missing checks email", email: "ALICE@example.com", login: "alice", existingEmail: "alice@example.com"},
+		{name: "existing login missing refuses despite matching email", email: "ALICE@example.com", login: "alice", existingEmail: "alice@example.com", unreadable: true},
 		{name: "name only profile", existingEmail: "alice@example.com", existingLogin: "alice"},
 		{name: "existing email missing falls back to name", email: "alice@example.com", existingLogin: "alice"},
 		{name: "request email missing falls back to name", existingEmail: "alice@example.com"},
-		{name: "existing login missing falls back to name", login: "alice", existingEmail: "alice@example.com"},
+		{name: "existing login missing refuses name fallback", login: "alice", existingEmail: "alice@example.com", unreadable: true},
 		{name: "no identity fields"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			user := &snowflake.User{
 				Username: "alice", DisplayName: "Existing User", Type: "PERSON",
 				Email: tc.existingEmail, Login: tc.existingLogin,
+			}
+			if !tc.unreadable && user.Login == "" {
+				user.Login = "alice" // Snowflake defaults the mandatory login to the name.
 			}
 			builder, calls := createAccountFixture(t, "alice", http.StatusConflict, http.StatusOK, user)
 			profile, err := structpb.NewStruct(map[string]any{
@@ -188,12 +193,18 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, &v2.LocalCredentialOptions{
 				Options: &v2.LocalCredentialOptions_RandomPassword_{RandomPassword: &v2.LocalCredentialOptions_RandomPassword{Length: 16}},
 			})
-			if tc.wantMismatch != "" {
+			switch {
+			case tc.unreadable:
+				require.Error(t, err)
+				require.Equal(t, codes.AlreadyExists, status.Code(err))
+				require.Equal(t, "baton-snowflake: user already exists but its properties could not be read", status.Convert(err).Message())
+				require.Nil(t, result)
+			case tc.wantMismatch != "":
 				require.Error(t, err)
 				require.Equal(t, codes.AlreadyExists, status.Code(err))
 				require.Equal(t, "baton-snowflake: user already exists but its "+tc.wantMismatch+" differs from the request", status.Convert(err).Message())
 				require.Nil(t, result, "must not link a different identity")
-			} else {
+			default:
 				require.NoError(t, err)
 				existing, ok := result.(*v2.CreateAccountResponse_AlreadyExistsResult)
 				require.True(t, ok, "expected already-exists result, got %T", result)
@@ -208,6 +219,80 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 			require.True(t, found)
 			require.EqualValues(t, 100, rateLimit.GetLimit())
 			require.Equal(t, []string{"create", "describe"}, *calls, "no updates to existing users are allowed")
+		})
+	}
+}
+
+func TestCreateAccountConflictServiceUsers(t *testing.T) {
+	for _, userType := range []string{"SERVICE", "SERVICE_AGENT", "LEGACY_SERVICE", " service ", "service_agent", "legacy_service"} {
+		t.Run(userType, func(t *testing.T) {
+			user := &snowflake.User{Username: "alice", Login: "alice", Email: "alice@example.com", Type: userType}
+			builder, calls := createAccountFixture(t, "alice", http.StatusConflict, http.StatusOK, user)
+			profile, err := structpb.NewStruct(map[string]any{"name": "alice", "email": user.Email, "login": user.Login})
+			require.NoError(t, err)
+			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+			require.Error(t, err)
+			require.Equal(t, codes.AlreadyExists, status.Code(err))
+			require.Equal(t, "baton-snowflake: user already exists but is a service user, not a person", status.Convert(err).Message())
+			require.Nil(t, result, "even matching identifiers must not link a service user")
+			require.Empty(t, plaintext)
+			require.NotEmpty(t, annos)
+			require.Equal(t, []string{"create", "describe"}, *calls)
+		})
+	}
+}
+
+func TestCreateAccountConflictMaskedUser(t *testing.T) {
+	for _, requestedEmail := range []string{"", "requester@example.com"} {
+		t.Run(requestedEmail, func(t *testing.T) {
+			user := &snowflake.User{Username: "alice", Login: "null", Email: "null", DisplayName: "null", Type: "null"}
+			builder, calls := createAccountFixture(t, "alice", http.StatusConflict, http.StatusOK, user)
+			profile, err := structpb.NewStruct(map[string]any{"name": "alice", "email": requestedEmail})
+			require.NoError(t, err)
+			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+			require.Error(t, err)
+			require.Equal(t, codes.AlreadyExists, status.Code(err))
+			require.ErrorContains(t, err, "its properties could not be read")
+			require.Nil(t, result)
+			require.Empty(t, plaintext)
+			require.NotEmpty(t, annos)
+			require.Equal(t, []string{"create", "describe"}, *calls)
+		})
+	}
+}
+
+func TestCreateAccountDescribeNulls(t *testing.T) {
+	for _, createStatus := range []int{http.StatusOK, http.StatusConflict} {
+		t.Run(strconv.Itoa(createStatus), func(t *testing.T) {
+			// NAME may legitimately be "null"; optional unset properties must not
+			// reach the returned resource as an email or profile value of "null".
+			user := &snowflake.User{Username: "null", Login: "null-login", Type: "PERSON"}
+			builder, calls := createAccountFixture(t, user.Username, createStatus, http.StatusOK, user)
+			profile, err := structpb.NewStruct(map[string]any{"name": user.Username, "email": "requester@example.com"})
+			require.NoError(t, err)
+			result, plaintext, _, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+			require.NoError(t, err)
+			var resource *v2.Resource
+			if createStatus == http.StatusConflict {
+				existing, ok := result.(*v2.CreateAccountResponse_AlreadyExistsResult)
+				require.True(t, ok)
+				resource = existing.Resource
+			} else {
+				created, ok := result.(*v2.CreateAccountResponse_SuccessResult)
+				require.True(t, ok)
+				resource = created.Resource
+			}
+			require.Equal(t, "null", resource.GetId().GetResource())
+			trait, traitErr := rs.GetUserTrait(resource)
+			require.NoError(t, traitErr)
+			require.Empty(t, trait.GetEmails(), "an unset EMAIL is not a primary email of null")
+			returnedProfile := rs.GetProfile(resource).AsMap()
+			for _, key := range []string{"email", "display_name", "first_name", "last_name", profileKeyComment} {
+				require.Empty(t, returnedProfile[key], "unset profile %s", key)
+			}
+			require.Equal(t, "null-login", returnedProfile["login"])
+			require.Empty(t, plaintext)
+			require.Equal(t, []string{"create", "describe"}, *calls)
 		})
 	}
 }
@@ -314,6 +399,12 @@ func createAccountFixture(t *testing.T, username string, createStatus, lookupSta
 				{"DISABLED", strconv.FormatBool(user.Disabled)}, {"SNOWFLAKE_LOCK", strconv.FormatBool(user.Locked)},
 				{"DEFAULT_ROLE", user.DefaultRole}, {"TYPE", user.Type}, {"HAS_MFA", strconv.FormatBool(user.HasMfa)},
 				{"COMMENT", user.Comment},
+			}
+			// DESCRIBE USER returns unset properties as literal text, not empty strings.
+			for _, row := range data {
+				if row[0] != "NAME" && row[1] == "" {
+					row[1] = "null"
+				}
 			}
 			if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
 				t.Errorf("encode describe response: %v", err)
