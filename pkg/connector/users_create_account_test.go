@@ -147,6 +147,7 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 		existingLogin string
 		wantMismatch  string
 		unreadable    bool
+		wantNoMatch   bool
 	}{
 		{name: "different email refuses", email: "requested@example.com", existingEmail: "existing@example.com", wantMismatch: "email"},
 		{name: "different login refuses", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
@@ -171,11 +172,11 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 		{name: "existing email missing checks conflicting login", email: "alice@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
 		{name: "request login missing checks email", email: "ALICE@example.com", existingEmail: "alice@example.com", existingLogin: "alice"},
 		{name: "existing login missing refuses despite matching email", email: "ALICE@example.com", login: "alice", existingEmail: "alice@example.com", unreadable: true},
-		{name: "name only profile", existingEmail: "alice@example.com", existingLogin: "alice"},
-		{name: "existing email missing falls back to name", email: "alice@example.com", existingLogin: "alice"},
-		{name: "request email missing falls back to name", existingEmail: "alice@example.com"},
+		{name: "name only profile refuses", existingEmail: "alice@example.com", existingLogin: "alice", wantNoMatch: true},
+		{name: "existing email missing and no requested login refuses", email: "alice@example.com", existingLogin: "alice", wantNoMatch: true},
+		{name: "no requested identifiers refuses", existingEmail: "alice@example.com", wantNoMatch: true},
 		{name: "existing login missing refuses name fallback", login: "alice", existingEmail: "alice@example.com", unreadable: true},
-		{name: "no identity fields"},
+		{name: "no comparable identity fields refuses", wantNoMatch: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			user := &snowflake.User{
@@ -207,6 +208,13 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 				require.Equal(t, codes.AlreadyExists, status.Code(err))
 				require.Equal(t, "baton-snowflake: user already exists but its "+tc.wantMismatch+" differs from the request", status.Convert(err).Message())
 				require.Nil(t, result, "must not link a different identity")
+			case tc.wantNoMatch:
+				require.Error(t, err)
+				require.Equal(t, codes.AlreadyExists, status.Code(err))
+				require.Equal(t,
+					"baton-snowflake: a user with that name already exists but no email or login matched; link the account manually",
+					status.Convert(err).Message())
+				require.Nil(t, result, "a name alone must never link an existing account")
 			default:
 				require.NoError(t, err)
 				existing, ok := result.(*v2.CreateAccountResponse_AlreadyExistsResult)
@@ -271,7 +279,7 @@ func TestCreateAccountDescribeNulls(t *testing.T) {
 			// reach the returned resource as an email or profile value of "null".
 			user := &snowflake.User{Username: "null", Login: "null-login", Type: "PERSON"}
 			builder, calls := createAccountFixture(t, user.Username, createStatus, http.StatusOK, user)
-			profile, err := structpb.NewStruct(map[string]any{"name": user.Username, "email": "requester@example.com"})
+			profile, err := structpb.NewStruct(map[string]any{"name": user.Username, "email": "requester@example.com", "login": user.Login})
 			require.NoError(t, err)
 			result, plaintext, _, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
 			require.NoError(t, err)
@@ -445,6 +453,40 @@ func TestCreateAccountLiteralNullLogin(t *testing.T) {
 			require.Equal(t, "null", rs.GetProfile(resource).AsMap()["login"])
 			require.Empty(t, plaintext)
 			require.Equal(t, []string{"create", "describe"}, *calls)
+		})
+	}
+}
+
+func TestIdentityMatches(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		request  snowflake.CreateUserRequest
+		existing snowflake.User
+		want     bool
+	}{
+		{
+			name:    "email matches with no logins",
+			request: snowflake.CreateUserRequest{Email: "Alice@Example.COM"}, existing: snowflake.User{Email: "alice@example.com"}, want: true,
+		},
+		{
+			name:    "login matches with no emails",
+			request: snowflake.CreateUserRequest{LoginName: "ALICE"}, existing: snowflake.User{Login: "alice"}, want: true,
+		},
+		{
+			name:     "both identifiers match",
+			request:  snowflake.CreateUserRequest{Email: "alice@example.com", LoginName: "alice"},
+			existing: snowflake.User{Email: "ALICE@example.com", Login: "ALICE"}, want: true,
+		},
+		{name: "request has neither identifier", existing: snowflake.User{Email: "alice@example.com", Login: "alice"}},
+		{name: "existing has neither identifier", request: snowflake.CreateUserRequest{Email: "alice@example.com", LoginName: "alice"}},
+		{name: "both empty is not a positive match"},
+		{
+			name:    "no comparable pairs",
+			request: snowflake.CreateUserRequest{Email: "alice@example.com"}, existing: snowflake.User{Login: "alice"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, identityMatches(&tc.request, &tc.existing))
 		})
 	}
 }
