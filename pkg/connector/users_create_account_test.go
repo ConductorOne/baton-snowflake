@@ -106,7 +106,7 @@ func TestCreateAccountConflictAndSuccess(t *testing.T) {
 			}
 			builder, calls := createAccountFixture(t, tc.username, tc.createStatus, http.StatusOK, user)
 			profile, err := structpb.NewStruct(map[string]any{
-				"name": tc.username, "email": "requested@example.com", "disabled": false,
+				"name": tc.username, "email": user.Email, "disabled": false,
 			})
 			require.NoError(t, err)
 			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, &v2.LocalCredentialOptions{
@@ -130,6 +130,72 @@ func TestCreateAccountConflictAndSuccess(t *testing.T) {
 			rateLimit := &v2.RateLimitDescription{}
 			found, err := annos.Pick(rateLimit)
 			require.NoError(t, err)
+			require.True(t, found)
+			require.EqualValues(t, 100, rateLimit.GetLimit())
+			require.Equal(t, []string{"create", "describe"}, *calls, "no updates to existing users are allowed")
+		})
+	}
+}
+
+func TestCreateAccountConflictIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		email         string
+		login         string
+		existingEmail string
+		existingLogin string
+		wantMismatch  string
+	}{
+		{name: "different email refuses", email: "requested@example.com", existingEmail: "existing@example.com", wantMismatch: "email"},
+		{name: "different login refuses", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
+		{name: "matching identity", email: "alice@example.com", login: "alice", existingEmail: "alice@example.com", existingLogin: "alice"},
+		{name: "email case insensitive", email: "Alice@Example.COM", existingEmail: "alice@example.com"},
+		{name: "login case insensitive", login: "ALICE", existingLogin: "alice"},
+		{name: "matching email does not override login mismatch", email: "alice@example.com", existingEmail: "alice@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
+		{name: "matching login does not override email mismatch", email: "requested@example.com", existingEmail: "existing@example.com", login: "alice", existingLogin: "alice", wantMismatch: "email"},
+		{name: "email mismatch reported first", email: "requested@example.com", existingEmail: "existing@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "email"},
+		{name: "request email missing checks matching login", login: "ALICE", existingEmail: "alice@example.com", existingLogin: "alice"},
+		{name: "request email missing checks conflicting login", login: "requested-login", existingEmail: "alice@example.com", existingLogin: "existing-login", wantMismatch: "login"},
+		{name: "existing email missing checks matching login", email: "alice@example.com", login: "ALICE", existingLogin: "alice"},
+		{name: "existing email missing checks conflicting login", email: "alice@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
+		{name: "request login missing checks email", email: "ALICE@example.com", existingEmail: "alice@example.com", existingLogin: "alice"},
+		{name: "existing login missing checks email", email: "ALICE@example.com", login: "alice", existingEmail: "alice@example.com"},
+		{name: "name only profile", existingEmail: "alice@example.com", existingLogin: "alice"},
+		{name: "existing email missing falls back to name", email: "alice@example.com", existingLogin: "alice"},
+		{name: "request email missing falls back to name", existingEmail: "alice@example.com"},
+		{name: "existing login missing falls back to name", login: "alice", existingEmail: "alice@example.com"},
+		{name: "no identity fields"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := &snowflake.User{
+				Username: "alice", DisplayName: "Existing User", Type: "PERSON",
+				Email: tc.existingEmail, Login: tc.existingLogin,
+			}
+			builder, calls := createAccountFixture(t, "alice", http.StatusConflict, http.StatusOK, user)
+			profile, err := structpb.NewStruct(map[string]any{
+				"name": "alice", "email": tc.email, "login": tc.login,
+			})
+			require.NoError(t, err)
+			result, plaintext, annos, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, &v2.LocalCredentialOptions{
+				Options: &v2.LocalCredentialOptions_RandomPassword_{RandomPassword: &v2.LocalCredentialOptions_RandomPassword{Length: 16}},
+			})
+			if tc.wantMismatch != "" {
+				require.Error(t, err)
+				require.Equal(t, codes.AlreadyExists, status.Code(err))
+				require.Equal(t, "baton-snowflake: user already exists but its "+tc.wantMismatch+" differs from the request", status.Convert(err).Message())
+				require.Nil(t, result, "must not link a different identity")
+			} else {
+				require.NoError(t, err)
+				existing, ok := result.(*v2.CreateAccountResponse_AlreadyExistsResult)
+				require.True(t, ok, "expected already-exists result, got %T", result)
+				expected, resourceErr := userResource(context.Background(), user, builder.secrets)
+				require.NoError(t, resourceErr)
+				require.True(t, proto.Equal(expected, existing.Resource))
+			}
+			require.Empty(t, plaintext, "no password was set on the existing account")
+			rateLimit := &v2.RateLimitDescription{}
+			found, pickErr := annos.Pick(rateLimit)
+			require.NoError(t, pickErr)
 			require.True(t, found)
 			require.EqualValues(t, 100, rateLimit.GetLimit())
 			require.Equal(t, []string{"create", "describe"}, *calls, "no updates to existing users are allowed")

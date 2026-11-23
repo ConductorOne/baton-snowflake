@@ -40,7 +40,13 @@ C1 selects one of the supported options each time it creates an account. There i
 
 With a vault on the provision policy or personal credentials for the user, C1 sets a random password. Without either, it creates the user with no password.
 
-If Snowflake reports that the account already exists, the connector returns the existing user with the exact requested name. It does not change the user's attributes, enabled state, or password, and it does not return a password for that user.
+### Accounts that already exist
+
+If Snowflake reports that the account already exists, the connector looks up the existing user with the exact requested `name`. Before linking it, the connector compares the profile's `email` and `login` to the existing user's email and login name, case-insensitively. Each field is compared only when both sides have a non-empty value. A mismatch fails the request with an `AlreadyExists` error naming the field, without exposing either value. Request a different `name`, or correct the profile or existing user, and resubmit.
+
+When neither field can be compared (including when the profile has no `email` and no `login`), matching falls back to `name` alone. Make sure the profile `name` identifies the requester; a shared display name is not a unique identity. If one field is missing on either side, the other field is still checked when available.
+
+The connector does not change the existing user's attributes, enabled state, or password, and does not return a password. If the user cannot be read, the request fails: a confirmed missing user returns `AlreadyExists`, while other lookup failures retain their error codes.
 
 ### Issuing programmatic access tokens
 

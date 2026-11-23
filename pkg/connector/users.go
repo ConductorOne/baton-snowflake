@@ -541,6 +541,10 @@ func (o *userBuilder) CreateAccount(
 	}
 
 	if alreadyExists {
+		// A name match alone must not override contradictory identity fields.
+		if mismatch := identityMismatch(createReq, user); mismatch != "" {
+			return nil, nil, annos, status.Errorf(codes.AlreadyExists, "baton-snowflake: user already exists but its %s differs from the request", mismatch)
+		}
 		// The create did not set the generated password on this account.
 		return &v2.CreateAccountResponse_AlreadyExistsResult{Resource: resource}, nil, annos, nil
 	}
@@ -555,6 +559,18 @@ func (o *userBuilder) CreateAccount(
 	}
 
 	return result, plaintextData, annos, nil
+}
+
+// identityMismatch names the first conflicting email or login, compared case-insensitively.
+// A field missing on either side is not a contradiction; without comparable fields, matching is on name alone.
+func identityMismatch(req *snowflake.CreateUserRequest, existing *snowflake.User) string {
+	switch {
+	case req.Email != "" && existing.Email != "" && !strings.EqualFold(req.Email, existing.Email):
+		return "email"
+	case req.LoginName != "" && existing.Login != "" && !strings.EqualFold(req.LoginName, existing.Login):
+		return "login"
+	}
+	return ""
 }
 
 // fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
