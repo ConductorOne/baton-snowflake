@@ -3,6 +3,7 @@ package snowflake
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,5 +72,47 @@ func TestSetUserDisabled_RendersBooleanValue(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, capturedSQL)
 		})
+	}
+}
+
+func TestClearDescribeUserNulls(t *testing.T) {
+	user := &User{Disabled: true, HasMfa: true}
+	reflected := reflect.ValueOf(user).Elem()
+	for i := range reflected.NumField() {
+		if reflected.Field(i).Kind() == reflect.String {
+			reflected.Field(i).SetString("null")
+		}
+	}
+
+	ClearDescribeUserNulls(user)
+
+	for i := range reflected.NumField() {
+		field := reflected.Type().Field(i)
+		if field.Type.Kind() != reflect.String {
+			continue
+		}
+		if field.Name == "Username" {
+			assert.Equal(t, "null", reflected.Field(i).String(), "preserve the resource ID")
+		} else {
+			assert.Empty(t, reflected.Field(i).String(), "clear field %s", field.Name)
+		}
+	}
+	assert.True(t, user.Disabled)
+	assert.True(t, user.HasMfa)
+
+	kept := &User{Email: "alice@example.com", Comment: " null ", Login: "NULL"}
+	ClearDescribeUserNulls(kept)
+	assert.Equal(t, "alice@example.com", kept.Email)
+	assert.Equal(t, " null ", kept.Comment, "do not trim values")
+	assert.Equal(t, "NULL", kept.Login, "only the exact lowercase literal is unset")
+	ClearDescribeUserNulls(nil)
+}
+
+func TestClearDescribeUserNullsPreservesReadableLiteralNullLogin(t *testing.T) {
+	for _, userType := range []string{"PERSON", "SERVICE", "SERVICE_AGENT", "LEGACY_SERVICE"} {
+		user := &User{Username: "alice", Login: "null", Type: userType, Email: "null"}
+		ClearDescribeUserNulls(user)
+		assert.Equal(t, "null", user.Login, "populated TYPE proves properties were not fully masked")
+		assert.Empty(t, user.Email)
 	}
 }

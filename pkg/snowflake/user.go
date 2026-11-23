@@ -178,6 +178,29 @@ func (r *GetUserRawResponse) GetUser() (*User, error) {
 	return user, nil
 }
 
+// ClearDescribeUserNulls clears DESCRIBE USER's literal "null" string properties.
+// Username is the resource ID and may legitimately be "null", so it is preserved.
+// LOGIN_NAME is mandatory: a literal "null" login is preserved when a populated
+// TYPE independently shows the properties are readable, rather than fully masked.
+// Callers opt in: other GetUser consumers keep their existing behavior.
+func ClearDescribeUserNulls(user *User) {
+	if user == nil {
+		return
+	}
+	readableType := user.Type != "" && user.Type != rowNull
+	reflected := reflect.ValueOf(user).Elem()
+	for i := range reflected.NumField() {
+		field := reflected.Field(i)
+		name := reflected.Type().Field(i).Name
+		if name == "Username" || (name == "Login" && readableType) {
+			continue
+		}
+		if field.Kind() == reflect.String && field.CanSet() && field.String() == rowNull {
+			field.SetString("")
+		}
+	}
+}
+
 func (r *GetUserRawResponse) GetValueByColumnName(columnName string) (string, bool) {
 	for _, row := range r.Data {
 		if strings.ToUpper(row[0]) == columnName {

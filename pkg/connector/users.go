@@ -528,16 +528,37 @@ func (o *userBuilder) CreateAccount(
 		return nil, nil, annos, wrapError(err, "failed to fetch user after creation")
 	}
 
-	// Build the resource from the fetched user, not the requested profile.
-	resource, err := userResource(ctx, user, o.secrets)
-	if err != nil {
-		return nil, nil, nil, wrapError(err, "failed to create user resource")
-	}
-
 	// Build annotations with rate limit information
 	var annos annotations.Annotations
 	if rateLimitDesc != nil {
 		annos = annotations.New(rateLimitDesc)
+	}
+
+	if alreadyExists {
+		// LOGIN_NAME is mandatory in Snowflake. A missing value means the role's
+		// read is masked, not that this is an account with no identity fields.
+		if user.Login == "" {
+			return nil, nil, annos, status.Error(codes.AlreadyExists, "baton-snowflake: user already exists but its properties could not be read")
+		}
+		// Account creation creates person users; do not bind a service account
+		// (and its standing credentials) to a person on a name collision.
+		if isServiceUserType(user.Type) {
+			return nil, nil, annos, status.Error(codes.AlreadyExists, "baton-snowflake: user already exists but is a service user, not a person")
+		}
+		// A name match alone must not override contradictory identity fields.
+		if mismatch := identityMismatch(createReq, user); mismatch != "" {
+			return nil, nil, annos, status.Errorf(codes.AlreadyExists, "baton-snowflake: user already exists but its %s differs from the request", mismatch)
+		}
+		if !identityMatches(createReq, user) {
+			return nil, nil, annos, status.Error(codes.AlreadyExists,
+				"baton-snowflake: a user with that name already exists but no email or login matched; link the account manually")
+		}
+	}
+
+	// Build the resource from the fetched user, not the requested profile.
+	resource, err := userResource(ctx, user, o.secrets)
+	if err != nil {
+		return nil, nil, nil, wrapError(err, "failed to create user resource")
 	}
 
 	if alreadyExists {
@@ -557,6 +578,26 @@ func (o *userBuilder) CreateAccount(
 	return result, plaintextData, annos, nil
 }
 
+// identityMismatch names the first conflicting email or login, compared case-insensitively.
+// A field missing on either side is not a contradiction; identityMatches separately requires a positive match.
+// The existing user must have normalized DESCRIBE USER properties and a readable login.
+func identityMismatch(req *snowflake.CreateUserRequest, existing *snowflake.User) string {
+	switch {
+	case req.Email != "" && existing.Email != "" && !strings.EqualFold(req.Email, existing.Email):
+		return "email"
+	case req.LoginName != "" && existing.Login != "" && !strings.EqualFold(req.LoginName, existing.Login):
+		return "login"
+	}
+	return ""
+}
+
+// identityMatches requires at least one non-empty identifier pair to match.
+// It does not override contradictions or the caller's readability and user-type checks.
+func identityMatches(req *snowflake.CreateUserRequest, existing *snowflake.User) bool {
+	return (req.Email != "" && existing.Email != "" && strings.EqualFold(req.Email, existing.Email)) ||
+		(req.LoginName != "" && existing.Login != "" && strings.EqualFold(req.LoginName, existing.Login))
+}
+
 // fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
 // Retries up to 5 times with exponential backoff if we get a 422 Unprocessable Entity error.
 func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string) (*snowflake.User, error) {
@@ -570,6 +611,7 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 			l.Debug("user fetched successfully via SQL API",
 				zap.String("user_name", userName),
 			)
+			snowflake.ClearDescribeUserNulls(user)
 			return user, nil
 		}
 
