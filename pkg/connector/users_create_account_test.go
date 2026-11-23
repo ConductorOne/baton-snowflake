@@ -151,9 +151,18 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 		{name: "matching identity", email: "alice@example.com", login: "alice", existingEmail: "alice@example.com", existingLogin: "alice"},
 		{name: "email case insensitive", email: "Alice@Example.COM", existingEmail: "alice@example.com"},
 		{name: "login case insensitive", login: "ALICE", existingLogin: "alice"},
-		{name: "matching email does not override login mismatch", email: "alice@example.com", existingEmail: "alice@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "login"},
-		{name: "matching login does not override email mismatch", email: "requested@example.com", existingEmail: "existing@example.com", login: "alice", existingLogin: "alice", wantMismatch: "email"},
-		{name: "email mismatch reported first", email: "requested@example.com", existingEmail: "existing@example.com", login: "requested-login", existingLogin: "existing-login", wantMismatch: "email"},
+		{
+			name: "matching email does not override login mismatch", email: "alice@example.com", existingEmail: "alice@example.com",
+			login: "requested-login", existingLogin: "existing-login", wantMismatch: "login",
+		},
+		{
+			name: "matching login does not override email mismatch", email: "requested@example.com", existingEmail: "existing@example.com",
+			login: "alice", existingLogin: "alice", wantMismatch: "email",
+		},
+		{
+			name: "email mismatch reported first", email: "requested@example.com", existingEmail: "existing@example.com",
+			login: "requested-login", existingLogin: "existing-login", wantMismatch: "email",
+		},
 		{name: "request email missing checks matching login", login: "ALICE", existingEmail: "alice@example.com", existingLogin: "alice"},
 		{name: "request email missing checks conflicting login", login: "requested-login", existingEmail: "alice@example.com", existingLogin: "existing-login", wantMismatch: "login"},
 		{name: "existing email missing checks matching login", email: "alice@example.com", login: "ALICE", existingLogin: "alice"},
