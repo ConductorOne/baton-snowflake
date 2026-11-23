@@ -182,6 +182,9 @@ func TestCreateAccountConflictIdentity(t *testing.T) {
 				Username: "alice", DisplayName: "Existing User", Type: "PERSON",
 				Email: tc.existingEmail, Login: tc.existingLogin,
 			}
+			if tc.unreadable {
+				user.Type = "null" // A masked read has no independent readable type.
+			}
 			if !tc.unreadable && user.Login == "" {
 				user.Login = "alice" // Snowflake defaults the mandatory login to the name.
 			}
@@ -418,4 +421,30 @@ func createAccountFixture(t *testing.T, username string, createStatus, lookupSta
 	client, err := snowflake.New(server.URL, snowflake.JWTConfig{}, server.Client())
 	require.NoError(t, err)
 	return newUserBuilder(client, secretOptions{syncSecrets: true}), &calls
+}
+
+func TestCreateAccountLiteralNullLogin(t *testing.T) {
+	for _, createStatus := range []int{http.StatusOK, http.StatusConflict} {
+		t.Run(strconv.Itoa(createStatus), func(t *testing.T) {
+			user := &snowflake.User{Username: "alice", Login: "null", Email: "alice@example.com", Type: "PERSON"}
+			builder, calls := createAccountFixture(t, user.Username, createStatus, http.StatusOK, user)
+			profile, err := structpb.NewStruct(map[string]any{"name": user.Username, "email": user.Email, "login": user.Login})
+			require.NoError(t, err)
+			result, plaintext, _, err := builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+			require.NoError(t, err)
+			var resource *v2.Resource
+			if createStatus == http.StatusConflict {
+				existing, ok := result.(*v2.CreateAccountResponse_AlreadyExistsResult)
+				require.True(t, ok)
+				resource = existing.Resource
+			} else {
+				created, ok := result.(*v2.CreateAccountResponse_SuccessResult)
+				require.True(t, ok)
+				resource = created.Resource
+			}
+			require.Equal(t, "null", rs.GetProfile(resource).AsMap()["login"])
+			require.Empty(t, plaintext)
+			require.Equal(t, []string{"create", "describe"}, *calls)
+		})
+	}
 }

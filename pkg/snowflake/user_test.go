@@ -107,3 +107,12 @@ func TestClearDescribeUserNulls(t *testing.T) {
 	assert.Equal(t, "NULL", kept.Login, "only the exact lowercase literal is unset")
 	ClearDescribeUserNulls(nil)
 }
+
+func TestClearDescribeUserNullsPreservesReadableLiteralNullLogin(t *testing.T) {
+	for _, userType := range []string{"PERSON", "SERVICE", "SERVICE_AGENT", "LEGACY_SERVICE"} {
+		user := &User{Username: "alice", Login: "null", Type: userType, Email: "null"}
+		ClearDescribeUserNulls(user)
+		assert.Equal(t, "null", user.Login, "populated TYPE proves properties were not fully masked")
+		assert.Empty(t, user.Email)
+	}
+}
