@@ -298,6 +298,11 @@ func (c *Client) GetUser(ctx context.Context, ss sessions.SessionStore, username
 		if resp != nil {
 			statusCode = resp.StatusCode
 		}
+		// Join the sentinel so callers can tell a privilege denial from a transient failure. The
+		// error keeps its gRPC code, so callers that do not check for the sentinel see no change.
+		if isAccessControlDenial(resp, &apiErr) {
+			return nil, statusCode, fmt.Errorf("%w: %w", ErrInsufficientPrivileges, dedupeAPIError(err))
+		}
 		return nil, statusCode, dedupeAPIError(err)
 	}
 

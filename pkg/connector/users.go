@@ -600,6 +600,7 @@ func identityMatches(req *snowflake.CreateUserRequest, existing *snowflake.User)
 
 // fetchUserWithSQLRetry attempts to fetch a user using the SQL API with retry logic for 422 errors.
 // Retries up to 5 times with exponential backoff if we get a 422 Unprocessable Entity error.
+// A privilege denial is returned at once: it does not clear on a retry.
 func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string) (*snowflake.User, error) {
 	l := ctxzap.Extract(ctx)
 	maxRetries := 5
@@ -613,6 +614,10 @@ func (o *userBuilder) fetchUserWithSQLRetry(ctx context.Context, userName string
 			)
 			snowflake.ClearDescribeUserNulls(user)
 			return user, nil
+		}
+
+		if snowflake.IsInsufficientPrivileges(err) {
+			return nil, err
 		}
 
 		// Check if we got a 422 error

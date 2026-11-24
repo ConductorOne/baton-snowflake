@@ -2,12 +2,16 @@ package snowflake
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestListUsers_EscapesCursor verifies that the pagination cursor - the bare name of the
@@ -114,5 +118,37 @@ func TestClearDescribeUserNullsPreservesReadableLiteralNullLogin(t *testing.T) {
 		ClearDescribeUserNulls(user)
 		assert.Equal(t, "null", user.Login, "populated TYPE proves properties were not fully masked")
 		assert.Empty(t, user.Email)
+	}
+}
+
+// TestGetUser_AccessControlDenialIsClassified verifies that a 422/003001 from DESCRIBE USER is
+// recognisable as a privilege denial while keeping the error's original gRPC code.
+func TestGetUser_AccessControlDenialIsClassified(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		wantPriv bool
+	}{
+		{name: "access control denial", code: "003001", wantPriv: true},
+		{name: "user does not exist", code: "002003", wantPriv: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = fmt.Fprintf(w, `{"code":%q,"message":"denied"}`, tc.code)
+			}))
+			defer srv.Close()
+			client, err := New(srv.URL, JWTConfig{}, srv.Client())
+			require.NoError(t, err)
+
+			_, statusCode, err := client.GetUser(context.Background(), nil, "alice")
+
+			require.Error(t, err)
+			assert.Equal(t, http.StatusUnprocessableEntity, statusCode)
+			assert.Equal(t, tc.wantPriv, IsInsufficientPrivileges(err))
+			assert.NotEqual(t, codes.Unknown, status.Code(err), "the original gRPC code must survive the join")
+		})
 	}
 }
