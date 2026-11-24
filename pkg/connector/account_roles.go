@@ -209,6 +209,8 @@ func (o *accountRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, 
 			zap.String("account_role", entitlement.Resource.Id.Resource),
 			zap.String("user", principal.Id.Resource),
 		)
+
+		return nil, err
 	}
 
 	return nil, nil
@@ -238,6 +240,8 @@ func (o *accountRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annot
 			zap.String("account_role", grant.Entitlement.Resource.Id.Resource),
 			zap.String("user", grant.Principal.Id.Resource),
 		)
+
+		return nil, err
 	}
 
 	return nil, nil
