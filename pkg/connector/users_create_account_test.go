@@ -317,6 +317,8 @@ func TestCreateAccountConflictLookupFailures(t *testing.T) {
 		{lookupStatus: http.StatusOK, wantCode: codes.Unknown},
 		{lookupStatus: http.StatusTooManyRequests, wantCode: codes.Unavailable},
 		{lookupStatus: http.StatusInternalServerError, wantCode: codes.Unavailable},
+		// A privilege denial is not retried: exactly one describe call.
+		{lookupStatus: http.StatusUnprocessableEntity, wantCode: codes.InvalidArgument},
 	} {
 		t.Run(strconv.Itoa(tc.lookupStatus), func(t *testing.T) {
 			builder, calls := createAccountFixture(t, "alice", http.StatusConflict, tc.lookupStatus, nil)
@@ -396,6 +398,11 @@ func createAccountFixture(t *testing.T, username string, createStatus, lookupSta
 			}
 			assert.Equal(t, "DESCRIBE USER "+quoteSnowflakeIdentifier(username)+";", body.Statement)
 			w.WriteHeader(lookupStatus)
+			if lookupStatus == http.StatusUnprocessableEntity {
+				// Snowflake's access-control denial: the connector role cannot read the user.
+				_, _ = w.Write([]byte(`{"code":"003001","message":"Insufficient privileges to operate on user"}`))
+				return
+			}
 			if lookupStatus != http.StatusOK {
 				_, _ = w.Write([]byte(`{"code":"002003","message":"user not found"}`))
 				return
