@@ -214,10 +214,10 @@ BATON_EXCLUDED_DATABASES="MY_INTERNAL_DB,ANOTHER_DB" baton-snowflake
 
 brew install conductorone/baton/baton conductorone/baton/baton-snowflake
 
-BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com
-BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123
-BATON_USER_IDENTIFIER=user1
-BATON_PRIVATE_KEY_PATH=./my-private-key.pem
+BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com \
+BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 \
+BATON_USER_IDENTIFIER=user1 \
+BATON_PRIVATE_KEY_PATH=./my-private-key.pem \
 baton-snowflake
 
 baton resources
@@ -250,6 +250,7 @@ BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com \
 BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 \
 BATON_USER_IDENTIFIER=user1 \
 BATON_PRIVATE_KEY_PATH=./my-private-key.pem \
+baton-snowflake
 
 baton resources
 
