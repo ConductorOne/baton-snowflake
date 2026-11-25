@@ -68,9 +68,9 @@ snow --config-file ./config.toml sql -q "SHOW DATABASES"
 
 #### 2. Execute script
 
-Will generate a key pair and assign it to a Snowflake user. The script will create rsa_key.p8 and rsa_key.pub if they do
-not exist, then print the public key fingerprint so you can compare it with the one Snowflake reports for
-the user.
+Will generate a key pair and assign it to a Snowflake user. The script creates rsa_key.p8 and rsa_key.pub if they do
+not exist, then compares the local public key fingerprint against the one Snowflake reports for the user and
+exits non-zero if the two differ.
 
 ```bash
 ./scripts/setup.sh YOUR_USER
@@ -228,8 +228,13 @@ baton resources
 
 ```
 
-docker run --rm
--v $(pwd):/out -e BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 BATON_USER_IDENTIFIER=user1 BATON_PRIVATE_KEY_PATH=./my-private-key.pem public.ecr.aws/conductorone/baton-snowflake:latest -f "/out/sync.c1z"
+docker run --rm \
+-v $(pwd):/out \
+-e BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com \
+-e BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 \
+-e BATON_USER_IDENTIFIER=user1 \
+-e BATON_PRIVATE_KEY_PATH=/out/my-private-key.pem \
+public.ecr.aws/conductorone/baton-snowflake:latest -f "/out/sync.c1z"
 docker run --rm -v $(pwd):/out ghcr.io/conductorone/baton:latest -f "/out/sync.c1z" resources
 
 ```
