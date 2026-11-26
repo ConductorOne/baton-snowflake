@@ -100,9 +100,7 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 			patOptIn := true
 			for _, capability := range response.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
 				gotTypes = append(gotTypes, capability.GetResourceType().GetId())
-				if capability.GetResourceType().GetId() == userResourceType.Id && capability.GetCredentialIssue() != nil {
-					gotIssuer = true
-				}
+				require.Nil(t, capability.GetCredentialIssue(), "the legacy credential issuer is gone")
 				if capability.GetResourceType().GetId() == programmaticAccessTokenResourceType.Id {
 					// C1 keeps non-opted-in types out of the sync, which is what
 					// protects revocation handles from a flag toggle now that the
@@ -113,7 +111,11 @@ func TestSecretFlagsGateIndependently(t *testing.T) {
 			sort.Strings(gotTypes)
 			require.True(t, patOptIn, "programmatic_access_token must be opt-in in every flag combination")
 			require.Equal(t, tc.wantTypes, gotTypes)
-			require.Equal(t, tc.wantIssuer, gotIssuer, "credential issuance advertised")
+			schemas, _, err := newIssuerActionManager(t, &Connector{IssueCredentials: tc.issueCredentials}).
+				ListActionSchemas(context.Background(), programmaticAccessTokenResourceType.Id)
+			require.NoError(t, err)
+			gotIssuer = len(schemas) == 1
+			require.Equal(t, tc.wantIssuer, gotIssuer, "issuer action registered")
 
 			// The child annotations have to move with the resource types, or a synced
 			// type is registered but never walked per user.

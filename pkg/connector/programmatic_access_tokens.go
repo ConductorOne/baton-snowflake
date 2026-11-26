@@ -15,6 +15,8 @@ import (
 
 type programmaticAccessTokenBuilder struct {
 	client *snowflake.Client
+	// issueCredentials registers the issue_programmatic_access_token action.
+	issueCredentials bool
 }
 
 func newProgrammaticAccessTokenBuilder(client *snowflake.Client) *programmaticAccessTokenBuilder {
