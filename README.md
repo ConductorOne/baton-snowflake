@@ -68,8 +68,9 @@ snow --config-file ./config.toml sql -q "SHOW DATABASES"
 
 #### 2. Execute script
 
-Will generate a key pair and assign it to a Snowflake user. The script will create rsa_key.p8 and rsa_key.pub if they do
-not exist then output the public key fingerprint.
+Will generate a key pair and assign it to a Snowflake user. The script creates rsa_key.p8 and rsa_key.pub if they do
+not exist, then compares the local public key fingerprint against the one Snowflake reports for the user and
+exits non-zero if the two differ.
 
 ```bash
 ./scripts/setup.sh YOUR_USER
@@ -101,7 +102,7 @@ snow --config-file ./config.toml sql -q "SHOW DATABASES"
 
 ---
 
-### 2. Generate an unencrypted
+### 2. Generate an unencrypted private key
 
 Use the following command
 
@@ -113,7 +114,8 @@ openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
 
 ### 3. Generate the public key by referencing the private key.
 
-The following command assumes the private key is encrypted and contained in the file named rsa_key.p8.
+The following command assumes the private key is unencrypted and contained in the file named rsa_key.p8,
+which is what the command in step 2 produces.
 
 ```
 openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
@@ -133,7 +135,7 @@ ALTER USER <SNOWFLAKEUSER> SET RSA_PUBLIC_KEY='MIIBIj...';
 
 ---
 
-### 5 Retrieve the user’s public key fingerprint:
+### 5 Verify the public key landed on the Snowflake user
 
 ```
 DESC USER <SNOWFLAKEUSER>;
@@ -141,7 +143,7 @@ SELECT SUBSTR((SELECT "value" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
   WHERE "property" = 'RSA_PUBLIC_KEY_FP'), LEN('SHA256:') + 1);
 ```
 
-Run the following command on the command line: writing RSA key
+Then compute the fingerprint locally from the public key file:
 
 ```
 
@@ -150,6 +152,8 @@ openssl rsa -pubin -in rsa_key.pub -outform DER | openssl dgst -sha256 -binary |
 ```
 
 Compare both outputs. If both outputs match, the user correctly configured their public key.
+
+The connector computes this fingerprint from the private key itself and sends it in the JWT it signs, so it is not part of the connector's configuration.
 
 ### Sync Secrets
 
@@ -210,11 +214,10 @@ BATON_EXCLUDED_DATABASES="MY_INTERNAL_DB,ANOTHER_DB" baton-snowflake
 
 brew install conductorone/baton/baton conductorone/baton/baton-snowflake
 
-BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com
-BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123
-BATON_USER_IDENTIFIER=user1
-BATON_PUBLIC_KEY_FINGERPRINT=s98YHSRV+12124142124124124c=
-BATON_PRIVATE_KEY_PATH=./my-private-key.pem
+BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com \
+BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 \
+BATON_USER_IDENTIFIER=user1 \
+BATON_PRIVATE_KEY_PATH=./my-private-key.pem \
 baton-snowflake
 
 baton resources
@@ -225,8 +228,13 @@ baton resources
 
 ```
 
-docker run --rm
--v $(pwd):/out -e BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 BATON_USER_IDENTIFIER=user1 BATON_PUBLIC_KEY_FINGERPRINT=s98YHSRV+12124142124124124c= BATON_PRIVATE_KEY_PATH=./my-private-key.pem public.ecr.aws/conductorone/baton-snowflake:latest -f "/out/sync.c1z"
+docker run --rm \
+-v $(pwd):/out \
+-e BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com \
+-e BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 \
+-e BATON_USER_IDENTIFIER=user1 \
+-e BATON_PRIVATE_KEY_PATH=/out/my-private-key.pem \
+public.ecr.aws/conductorone/baton-snowflake:latest -f "/out/sync.c1z"
 docker run --rm -v $(pwd):/out ghcr.io/conductorone/baton:latest -f "/out/sync.c1z" resources
 
 ```
@@ -241,8 +249,8 @@ go install github.com/conductorone/baton-snowflake/cmd/baton-snowflake@main
 BATON_ACCOUNT_URL=https://abcdsa-abcdsa123.snowflakecomputing.com \
 BATON_ACCOUNT_IDENTIFIER=abcdsa-abcdsa123 \
 BATON_USER_IDENTIFIER=user1 \
-BATON_PUBLIC_KEY_FINGERPRINT=s98YHSRV+12124142124124124c= \
 BATON_PRIVATE_KEY_PATH=./my-private-key.pem \
+baton-snowflake
 
 baton resources
 
